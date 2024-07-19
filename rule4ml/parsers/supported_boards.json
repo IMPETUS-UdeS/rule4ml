@@ -1,0 +1,26 @@
+{
+    "pynq-z2": {
+        "part": "xc7z020clg400-1",
+        "max_bram": 280,
+        "max_dsp": 220,
+        "max_ff": 106400,
+        "max_lut": 53200,
+        "max_uram": 0
+    },
+    "zcu102": {
+        "part": "xczu9eg-ffvb1156-2-e",
+        "max_bram": 1824,
+        "max_dsp": 2520,
+        "max_ff": 548160,
+        "max_lut": 274080,
+        "max_uram": 0
+    },
+    "alveo-u200": {
+        "part": "xcu200-fsgd2104-2-e",
+        "max_bram": 4320,
+        "max_dsp": 6840,
+        "max_ff": 2364480,
+        "max_lut": 1182240,
+        "max_uram": 960
+    }
+}

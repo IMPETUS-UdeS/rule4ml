@@ -1,0 +1,6 @@
+*
+!.gitignore
+
+# Used in the tutorial
+!best_*_config.json
+!best_*.weights.h5

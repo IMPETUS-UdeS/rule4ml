@@ -1,0 +1,7 @@
+include rule4ml/parsers/supported_boards.json
+graft rule4ml/models/weights
+
+prune data_gen
+prune datasets
+prune notebooks
+prune tests
