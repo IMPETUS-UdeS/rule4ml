@@ -1,6 +1,7 @@
 from collections import OrderedDict
 
 import numpy as np
+import tensorflow as tf
 
 from rule4ml.parsers.utils import get_closest_reuse_factor
 
@@ -26,6 +27,18 @@ def config_from_keras_model(model, reuse_factor):
     Returns:
         _type_: _description_
     """
+
+    if hasattr(model, "_build_input_shape") and model._build_input_shape is not None:  # Keras 2
+        model_input_shape = model._build_input_shape
+    elif hasattr(model, "_build_shapes_dict") and model._build_shapes_dict is not None:  # Keras 3
+        model_input_shape = list(model._build_shapes_dict.values())[0]
+    else:
+        raise AttributeError(
+            "Could not get model input shape. Make sure model.build() was called previously."
+        )
+
+    dummy_input = tf.random.uniform((1, *model_input_shape[1:]))
+    _ = model(dummy_input)
 
     layers_data = []
     for layer in model.layers:
@@ -54,7 +67,7 @@ def config_from_keras_model(model, reuse_factor):
 
         else:
             raise AttributeError(
-                f"Could not get the input shape for layer {layer.name}. Make sure model.build() was called before."
+                f"Could not get the input shape for layer {layer.name}. Make sure model.build() was called previously."
             )
 
         input_shape = tuple(input_shape)
@@ -101,7 +114,10 @@ def config_from_keras_model(model, reuse_factor):
             else:
                 nested_activation = True
 
-        layer_dict["dtype"] = layer_config["dtype"]
+        dtype = layer_config["dtype"]
+        if isinstance(dtype, dict):
+            dtype = dtype["config"]["name"]
+        layer_dict["dtype"] = dtype
 
         layer_dict["reuse_factor"] = reuse_factor
         if class_name in ["Dense", "Conv2D"]:

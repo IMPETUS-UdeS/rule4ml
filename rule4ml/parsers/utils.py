@@ -74,7 +74,7 @@ def fixed_precision_to_bit_width(precision: str):
     return total_bits, fractional_bits
 
 
-# from hls4ml repo: https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L198
+# https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L198
 def _validate_reuse_factor(n_in, n_out, rf):
     multfactor = min(n_in, rf)
     multiplier_limit = int(math.ceil((n_in * n_out) / float(multfactor)))

@@ -1,0 +1,106 @@
+name: GitHub release of Python dist and PyPI publishing
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  run-tests:
+    name: Test before release
+    uses: ./.github/workflows/run-tests.yml
+
+  build:
+    name: Build distribution
+    needs: run-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build and dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install build --user
+          python3 -m pip install .[dev]
+
+      - name: Build distribution
+        run: python3 -m build
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: rule4ml-package-dist
+          path: dist/
+
+  git-release:
+    name: Upload the distribution to GitHub
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # mandatory for making GitHub Releases
+      id-token: write  # mandatory for sigstore
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: rule4ml-package-dist
+        path: dist/
+
+    - name: Sign the dists with Sigstore
+      uses: sigstore/gh-action-sigstore-python@v3.0.0
+      with:
+        inputs: >-
+          ./dist/*.tar.gz
+          ./dist/*.whl
+
+    - name: Create GitHub Release
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: >-
+        gh release create
+        '${{ github.ref_name }}'
+        --repo '${{ github.repository }}'
+        --notes ""
+
+    - name: Upload to GitHub Release
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: >-
+        gh release upload
+        '${{ github.ref_name }}' dist/**
+        --repo '${{ github.repository }}'
+
+  pypi-release:
+    name: Upload the distribution to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: release
+      url: https://pypi.org/p/rule4ml
+    permissions:
+      id-token: write  # mandatory for trusted publishing
+
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: rule4ml-package-dist
+        path: dist/
+    - name: Publish distribution to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1

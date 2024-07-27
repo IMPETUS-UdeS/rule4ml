@@ -34,12 +34,13 @@ profile_default/
 ipython_config.py
 
 # Custom
-.ruff*
+.*_cache
 *cleanup*.sh
 notebooks/**
 !notebooks/models
 !notebooks/*.ipynb
 **/hls4ml_prj*
+*.log
 
 format.py
 

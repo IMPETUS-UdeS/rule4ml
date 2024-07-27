@@ -299,15 +299,19 @@ class MultiModelEstimator:
         for key, estimator_model in self._models.items():
             estimator_predictions = estimator_model.predict(
                 models_to_predict, hls_configs, verbose=verbose
-            )
+            ).astype(float)
 
             target_labels = key.split("-")
+            for idx, label in enumerate(target_labels):
+                if "cycles" not in label.lower():
+                    target_labels[idx] = f"{label} (%)"
+
             for idx, model_predictions in enumerate(estimator_predictions):
                 outputs[idx].update(
                     {target_labels[k]: model_predictions[k] for k in range(len(model_predictions))}
                 )
 
-        outputs_df = pd.DataFrame(outputs)
+        outputs_df = pd.DataFrame(outputs).round(2)
         if not outputs_df.empty:
             sorted_boards = sorted(
                 outputs_df["Board"].unique(), key=lambda x: self._default_boards.index(x)
@@ -369,9 +373,10 @@ class ModelWrapper:
         verbose=0,
         reset=True,
     ):
-        assert isinstance(
-            categorical_maps, dict
-        ), "categorical_maps expects a dictionary of ordinal mappings for categorical inputs."
+        if not isinstance(categorical_maps, dict):
+            raise TypeError(
+                "categorical_maps expects a dictionary of ordinal mappings for categorical inputs."
+            )
 
         if reset:
             self.reset()
@@ -446,13 +451,15 @@ class ModelWrapper:
         verbose=0,
         reset=True,
     ):
-        assert isinstance(
-            global_categorical_maps, dict
-        ), "global_categorical_maps expects a dictionary of ordinal mappings for global categorical inputs."
+        if not isinstance(global_categorical_maps, dict):
+            raise TypeError(
+                "global_categorical_maps expects a dictionary of ordinal mappings for global categorical inputs."
+            )
 
-        assert isinstance(
-            sequential_categorical_maps, dict
-        ), "sequential_categorical_maps expects a dictionary of ordinal mappings for layer-wise categorical inputs."
+        if not isinstance(sequential_categorical_maps, dict):
+            raise TypeError(
+                "sequential_categorical_maps expects a dictionary of ordinal mappings for layer-wise categorical inputs."
+            )
 
         if reset:
             self.reset()
@@ -594,9 +601,8 @@ class ModelWrapper:
         shuffle=True,
         verbose=0,
     ):
-        assert (
-            self.model is not None
-        ), "A model needs to be built before creating a Tensorflow dataset."
+        if self.model is None:
+            raise Exception("A model needs to be built before creating a Tensorflow dataset.")
 
         input_dict = self.build_inputs(inputs_df)
 
@@ -677,7 +683,8 @@ class ModelWrapper:
         return input_dict
 
     def fit(self, train_settings: TrainSettings, callbacks=[], verbose=0):
-        assert self.dataset is not None, "A dataset needs to be built before training the model."
+        if self.dataset is None:
+            raise Exception("A dataset needs to be built before training the model.")
 
         self.model.compile(
             optimizer=train_settings.optimizer(learning_rate=train_settings.learning_rate),
@@ -695,12 +702,11 @@ class ModelWrapper:
         )
 
     def predict(self, models_to_predict, hls_configs, verbose=0):
-        assert isinstance(
-            models_to_predict, (tuple, list)
-        ), "models_to_predict expects a list of keras, torch and onnx models."
-        assert isinstance(
-            hls_configs, (tuple, list)
-        ), "hls_configs expects a list of HLS configuration dictionaries."
+        if not isinstance(models_to_predict, (tuple, list)):
+            raise TypeError("models_to_predict expects a list of keras, torch or onnx models.")
+
+        if not isinstance(hls_configs, (tuple, list)):
+            raise TypeError("hls_configs expects a list of HLS configuration dictionaries.")
 
         global_inputs = []
         sequential_inputs = []
@@ -821,11 +827,16 @@ class ModelWrapper:
             config_path (_type_): _description_
             weights_path (_type_): _description_
         """
-        assert config_path.endswith(".json"), "Config file name must end with .json"
-        assert os.path.isfile(config_path), f"Config file does not exist: {config_path}"
 
-        assert weights_path.endswith(".weights.h5"), "Weights file name must end with .weights.h5"
-        assert os.path.isfile(weights_path), f"Weights file does not exist: {weights_path}"
+        if not config_path.endswith(".json"):
+            raise ValueError("Config file name must end with .json")
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"Config file does not exist: {config_path}")
+
+        if not weights_path.endswith(".weights.h5"):
+            raise ValueError("Weights file name must end with .weights.h5")
+        if not os.path.isfile(weights_path):
+            raise FileNotFoundError(f"Weights file does not exist: {weights_path}")
 
         self.reset()
 
