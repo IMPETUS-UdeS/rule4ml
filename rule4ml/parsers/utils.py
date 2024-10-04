@@ -66,12 +66,14 @@ def fixed_precision_to_bit_width(precision: str):
         Tuple[int, int]: _description_
     """
 
-    match = re.match(r"ap_fixed<(\d+),\s*(\d+)>", precision.lower())
+    match = re.match(r"(ap_)?fixed<(\d+),\s*(\d+)>", precision.lower())
     if not match:
         raise ValueError(f"Invalid format: {precision}, expecting \"ap_fixed<a, b>\"")
 
-    total_bits, fractional_bits = map(int, match.groups())
-    return total_bits, fractional_bits
+    groups = match.groups()[1:]
+
+    total_bits, integer_bits = map(str, groups)
+    return int(total_bits), int(integer_bits)
 
 
 # https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L198

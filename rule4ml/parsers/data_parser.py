@@ -30,12 +30,30 @@ default_layer_type_map = {
 }
 default_precision_map = {
     'ap_fixed<2, 1>': 1,
-    'ap_fixed<8, 3>': 2,
-    'ap_fixed<8, 4>': 3,
-    'ap_fixed<16, 6>': 4,
+    'ap_fixed<6, 1>': 2,
+    'ap_fixed<8, 3>': 3,
+    'ap_fixed<8, 4>': 4,
+    'ap_fixed<16, 6>': 5,
 }
 default_strategy_map = {"latency": 1, "resource": 2}
 
+
+def get_board_from_part(part):
+    """
+    _summary_
+
+    Args:
+        part (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    for key, value in boards_data.items():
+        if value["part"].lower() == part.lower():
+            return key
+
+    raise ValueError(f"Board not found for part: {part}")
 
 @dataclass
 class ParsedDataFilter:
@@ -231,9 +249,11 @@ def get_global_data(parsed_data):
         model_config = model_data["model_config"]
         hls_config = model_data["hls_config"]
 
+        target_board = get_board_from_part(model_data["target_part"])
+
         meta.append(model_data["meta_data"])
-        global_inputs.append(get_global_inputs(model_config, hls_config))
-        targets.append(get_prediction_targets(model_data, norm_board=hls_config["board"]))
+        global_inputs.append(get_global_inputs(model_config, hls_config, target_board))
+        targets.append(get_prediction_targets(model_data, norm_board=None))
 
     return (meta, global_inputs, targets)
 
@@ -282,8 +302,13 @@ def get_layers_data(model_config):
     layers_data = []
     for layer_config in model_config:
         layer_type = layer_config["class_name"]
+        if layer_type.lower().startswith("q"):
+            layer_type = layer_type[1:]
+
         if layer_type == "Activation":
             layer_type = layer_config["activation"]
+            if layer_type == "linear":
+                continue
 
         input_shape = layer_config["input_shape"]
         if layer_type in ["Add", "Concatenate"]:
@@ -309,7 +334,7 @@ def get_layers_data(model_config):
     return layers_data
 
 
-def get_global_inputs(model_config, hls_config):
+def get_global_inputs(model_config, hls_config, board):
     """
     _summary_
 
@@ -323,6 +348,13 @@ def get_global_inputs(model_config, hls_config):
 
     features_to_extract = {
         "dense": {
+            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "reuse": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "count": 0,
+        },
+        "qdense": {
             "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
             "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
             "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
@@ -406,6 +438,9 @@ def get_global_inputs(model_config, hls_config):
 
     for idx, layer in enumerate(model_config):
         layer_class = layer["class_name"].lower()
+        if layer_class.startswith("q"):
+            layer_class = layer_class[1:]
+
         if layer_class == "activation":
             layer_class = layer["activation"]
 
@@ -420,6 +455,10 @@ def get_global_inputs(model_config, hls_config):
                         features_to_extract[layer_class][feature_key], layer[layer_key]
                     )
 
+    for key in features_to_extract.copy():
+        if key.startswith("q"):
+            features_to_extract.pop(key, None)
+
     adjusted_features = adjust_feature_values(
         features_to_extract, keys=["inputs", "outputs", "parameters", "reuse"]
     )
@@ -427,25 +466,46 @@ def get_global_inputs(model_config, hls_config):
 
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
 
-    precision = hls_config["model"]["precision"]
-    total_bits, fractional_bits = fixed_precision_to_bit_width(precision)
+    model_precision = hls_config["Model"]["Precision"]
+    if model_precision.startswith("fixed"):
+        model_precision = "ap_" + model_precision.lower()
+    model_total_bits, model_integer_bits = fixed_precision_to_bit_width(model_precision)
 
-    strategy = hls_config["model"]["strategy"]
-    board = hls_config["board"]
+    weight_total_bits = []
+    weight_integer_bits = []
+    weight_fractional_bits = []
+    for key, value in hls_config["LayerName"].items():
+        layer_precision = value["Precision"]
+        if "weight" in layer_precision:
+            weight_precision = layer_precision["weight"]
+            total_bits, integer_bits = fixed_precision_to_bit_width(weight_precision)
+
+            weight_total_bits.append(total_bits)
+            weight_integer_bits.append(integer_bits)
+            weight_fractional_bits.append(total_bits - integer_bits)
+
+    weight_total_bits = np.mean(weight_total_bits)
+    weight_integer_bits = np.mean(weight_integer_bits)
+    weight_fractional_bits = np.mean(weight_fractional_bits)
+
+    strategy = hls_config["Model"]["Strategy"]
 
     inputs = {
         "strategy": strategy.lower(),
         "board": board.lower(),
-        "precision": precision.lower(),
-        "bit_width": total_bits,
-        "integer_bits": total_bits - fractional_bits,
-        "fractional_bits": fractional_bits,
-        "global_reuse": hls_config["model"]["reuse_factor"],
+        "model_precision": model_precision.lower(),
+        "model_total_bits": model_total_bits,
+        "model_integer_bits": model_integer_bits,
+        "model_fractional_bits": model_total_bits - model_integer_bits,
+        "global_reuse": hls_config["Model"]["ReuseFactor"],
         "reuse_mean": reuse_factor_mean,
+        "weight_total_bits": weight_total_bits,
+        "weight_integer_bits": weight_integer_bits,
+        "weight_fractional_bits": weight_fractional_bits,
     }
     inputs.update(extracted_features)
 
-    fixed_ops = get_network_fixed_ops(model_config, precision)
+    fixed_ops = get_network_fixed_ops(model_config, model_precision)
     inputs.update(fixed_ops)
 
     return inputs
@@ -466,10 +526,10 @@ def get_prediction_targets(model_data, norm_board=None):
     resource_report = model_data["resource_report"]
     latency_report = model_data["latency_report"]
 
-    bram = resource_report["bram"]
-    dsp = resource_report["dsp"]
-    ff = resource_report["ff"]
-    lut = resource_report["lut"]
+    bram = float(resource_report["bram"])
+    dsp = float(resource_report["dsp"])
+    ff = float(resource_report["ff"])
+    lut = float(resource_report["lut"])
 
     if norm_board is None:
         targets = {
@@ -492,8 +552,8 @@ def get_prediction_targets(model_data, norm_board=None):
             "lut": max(1 / max_lut, min(lut / max_lut, 2.0)) * 100,
         }
 
-    cycles_min = latency_report["cycles_min"]
-    cycles_max = latency_report["cycles_max"]
+    cycles_min = float(latency_report["cycles_min"])
+    cycles_max = float(latency_report["cycles_max"])
     targets.update({"cycles": (cycles_min + cycles_max) / 2.0})
 
     return targets
@@ -527,7 +587,7 @@ def get_network_fixed_ops(model_json, precision):
         elif layer_json["class_name"] == "Concatenate":
             pass
 
-        elif layer_json["class_name"] == "Conv2D":
+        elif layer_json["class_name"] in ["Conv2D", "QConv2D"]:
             # Assuming "channel-last" format
             input_size = np.prod([x for x in layer_json["input_shape"][:-1] if x is not None])
             use_bias = layer_json["use_bias"]
@@ -542,9 +602,26 @@ def get_network_fixed_ops(model_json, precision):
 
         else:
             input_size = np.prod([x for x in flat_input_shape if x is not None])
-            if layer_json["class_name"] == "Dense":
-                neurons = layer_json["neurons"]
-                use_bias = layer_json["use_bias"]
+            if layer_json["class_name"] in ["Dense", "QDense"]:
+                if "neurons" in layer_json:
+                    neurons = layer_json["neurons"]
+                else:
+                    neurons = np.prod(
+                        [x for x in np.asarray(layer_json["output_shape"]).flatten()
+                        if x is not None]
+                    )
+                if "use_bias" in layer_json:
+                    use_bias = layer_json["use_bias"]
+                else:
+                    input_total = np.prod(
+                        [x for x in np.asarray(layer_json["input_shape"]).flatten()
+                        if x is not None]
+                    )
+                    output_total = np.prod(
+                        [x for x in np.asarray(layer_json["output_shape"]).flatten()
+                        if x is not None]
+                    )
+                    use_bias = input_total * output_total != layer_json["parameters"]
                 total_mult += (input_size + int(use_bias)) * neurons
                 total_add += (input_size + int(use_bias)) * (neurons - 1)
 

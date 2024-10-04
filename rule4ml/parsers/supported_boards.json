@@ -22,5 +22,13 @@
         "max_ff": 2364480,
         "max_lut": 1182240,
         "max_uram": 960
+    },
+    "alveo-u250": {
+        "part": "xcu250-figd2104-2L-e",
+        "max_bram": 5376,
+        "max_dsp": 12288,
+        "max_ff": 3456000,
+        "max_lut": 1728000,
+        "max_uram": 1280
     }
 }

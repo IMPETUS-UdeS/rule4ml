@@ -3,6 +3,7 @@ from datetime import datetime
 import keras_tuner as kt
 
 from rule4ml.models.estimators import MLPSettings, TrainSettings
+from rule4ml.models.metrics import parametric_r2, parametric_smape
 
 
 class Searcher:
@@ -28,16 +29,23 @@ class Searcher:
                     hp.Choice(name=f"units_{idx}", values=[16, 32, 64, 128, 256])
                     for idx in range(hp.Int("dense_count", 1, 8))
                 ],
-                dense_dropouts=[
-                    hp.Choice(name=f"dropout_{idx}", values=[0.0, 0.1, 0.25, 0.5])
-                    for idx in range(hp.Int("dropout_count", 1, 8))
-                ],
+                # dense_dropouts=[
+                #     hp.Choice(name=f"dropout_{idx}", values=[0.0, 0.1, 0.25, 0.5])
+                #     for idx in range(hp.Int("dropout_count", 1, 8))
+                # ],
+                dense_dropouts=[0 for _ in range(hp.Int("dropout_count", 1, 8))],
             )
 
+            smape = parametric_smape(0, "-".join([x.upper() for x in targets_df.columns]))
+            r2 = parametric_r2(0, "-".join([x.upper() for x in targets_df.columns]))
+
             self.train_settings = TrainSettings(
-                num_epochs=50,
+                num_epochs=20,
                 batch_size=hp.Choice(name="batch_size", values=[32, 64, 128, 256]),
                 learning_rate=hp.Choice(name="learning_rate", values=[1e-4, 1e-3, 1e-2]),
+                # loss_function=hp.Choice(name="loss_function", values=["msle", "mae"]),
+                loss_function="msle",
+                metrics=[smape, r2],
             )
 
             input_shape = (None, len(inputs_df.columns))
@@ -78,11 +86,13 @@ class Searcher:
     ):
         model_builder = self.mlp_model_builder_generator(inputs_df, targets_df, categorical_maps)
 
+        target = "-".join([x.upper() for x in targets_df.columns])
+
         start_time = datetime.now().strftime('%Y%m%d-%H%M%S')
         self.tuner = kt.Hyperband(
             hypermodel=model_builder,
-            objective="val_loss",
-            max_epochs=50,
+            objective=kt.Objective(f"val_r2_{target}", direction="max"),
+            max_epochs=20,
             factor=3,
             hyperband_iterations=1,
             directory=directory,
@@ -101,10 +111,12 @@ class Searcher:
     def load_tuner(self, inputs_df, targets_df, categorical_maps, directory, project_name):
         model_builder = self.mlp_model_builder_generator(inputs_df, targets_df, categorical_maps)
 
+        target = "-".join([x.upper() for x in targets_df.columns])
+
         self.tuner = kt.Hyperband(
             hypermodel=model_builder,
-            objective="val_loss",
-            max_epochs=50,
+            objective=kt.Objective(f"val_r2_{target}", direction="max"),
+            max_epochs=20,
             factor=3,
             hyperband_iterations=1,
             directory=directory,
@@ -112,6 +124,6 @@ class Searcher:
             overwrite=False,
         )
 
-        best_hp = self.tuner.get_best_hyperparameters(1)[0]
+        best_hp = self.tuner.get_best_hyperparameters(10)[0]
         model_builder = self.mlp_model_builder_generator(inputs_df, targets_df, categorical_maps)
         model_builder(best_hp)
