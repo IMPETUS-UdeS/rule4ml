@@ -1,5 +1,6 @@
 from collections import OrderedDict
 
+import keras
 import numpy as np
 import tensorflow as tf
 
@@ -16,13 +17,13 @@ except ImportError:
     onnx = None
 
 
-def config_from_keras_model(model, reuse_factor):
+def config_from_keras_model(model, hls_config):
     """
     _summary_
 
     Args:
         model (_type_): _description_
-        reuse_factor (_type_): _description_
+        hls_config (_type_): _description_
 
     Returns:
         _type_: _description_
@@ -45,11 +46,14 @@ def config_from_keras_model(model, reuse_factor):
         nested_activation = False
 
         class_name = layer.__class__.__name__
+        layer_name = layer.name
+
         layer_config = layer.get_config()
         layer_weights = layer.get_weights()
 
         layer_dict = {}
         layer_dict["class_name"] = class_name
+        layer_dict["name"] = layer_name
 
         if hasattr(
             layer, "input_shape"
@@ -70,6 +74,7 @@ def config_from_keras_model(model, reuse_factor):
                 f"Could not get the input shape for layer {layer.name}. Make sure model.build() was called previously."
             )
 
+        input_shape = np.asarray(input_shape).flatten()
         input_shape = tuple(input_shape)
         layer_dict["input_shape"] = input_shape
 
@@ -82,6 +87,15 @@ def config_from_keras_model(model, reuse_factor):
 
         output_shape = tuple(output_shape)
         layer_dict["output_shape"] = tuple(output_shape)
+
+        inbound_nodes = layer.inbound_nodes
+        inbound_layers = []
+        for node in inbound_nodes:
+            if not isinstance(node.inbound_layers, (list, tuple)):
+                inbound_layers.append(node.inbound_layers)
+            else:
+                inbound_layers += node.inbound_layers
+        layer_dict["inbound_layers"] = [layer.name for layer in inbound_layers]
 
         parameter_count = 0
         for weight_group in layer_weights:
@@ -97,18 +111,21 @@ def config_from_keras_model(model, reuse_factor):
         trainable_parameter_count = int(trainable_parameter_count)
         layer_dict["trainable_parameters"] = trainable_parameter_count
 
-        if class_name == "Dense":
+        if class_name in ["Dense", "QDense"]:
             layer_dict["neurons"] = int(layer_config["units"])
             layer_dict["use_bias"] = layer_config["use_bias"]
 
-        elif class_name == "Conv2D":
+        elif class_name in ["Conv2D", "QConv2D"]:
             layer_dict["n_channel"] = int(input_shape[-1])
             layer_dict["n_filter"] = int(layer_config["filters"])
             layer_dict["kernel_size"] = tuple([int(x) for x in layer_config["kernel_size"]])
             layer_dict["padding"] = layer_config["padding"]
             layer_dict["use_bias"] = layer_config["use_bias"]
 
-        if "activation" in layer_config:
+        elif class_name == "Dropout":
+            layer_dict["dropout_rate"] = layer_config["rate"]
+
+        if "activation" in layer_config and layer_config["activation"] != "linear":
             if class_name == "Activation":
                 layer_dict["activation"] = layer_config["activation"]
             else:
@@ -119,13 +136,26 @@ def config_from_keras_model(model, reuse_factor):
             dtype = dtype["config"]["name"]
         layer_dict["dtype"] = dtype
 
+        reuse_factor = hls_config["Model"]["ReuseFactor"]
+        if "LayerType" in hls_config and class_name in hls_config["LayerType"]:
+            reuse_factor = hls_config["LayerType"][class_name].get("ReuseFactor", reuse_factor)
+        if "LayerName" in hls_config and layer.name in hls_config["LayerName"]:
+            reuse_factor = hls_config["LayerName"][layer.name].get("ReuseFactor", reuse_factor)
+
         layer_dict["reuse_factor"] = reuse_factor
-        if class_name in ["Dense", "Conv2D"]:
-            layer_dict["reuse_factor"] = get_closest_reuse_factor(
-                np.prod([x for x in input_shape if x is not None]),
-                np.prod([x for x in output_shape if x is not None]),
-                reuse_factor,
-            )
+        if class_name in ["Dense", "QDense", "Conv2D", "QConv2D"]:
+            if class_name in ["Dense", "QDense"]:
+                n_in = np.prod([x for x in input_shape if x is not None])
+                n_out = np.prod([x for x in output_shape if x is not None])
+            if class_name == ["Conv2D", "QConv2D"]:
+                n_in = (
+                    layer_dict["n_channel"]
+                    * layer_dict["kernel_size"][0]
+                    * layer_dict["kernel_size"][1]
+                )
+                n_out = layer_dict["n_filter"]
+
+            layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
 
         layers_data.append(layer_dict)
 
@@ -151,13 +181,57 @@ def config_from_keras_model(model, reuse_factor):
     return layers_data
 
 
-def config_from_torch_model(model, reuse_factor):
+def keras_model_from_config(model_config):
+    model_layers = []
+    for layer_config in model_config:
+        class_name = layer_config["class_name"]
+        input_shape = layer_config.get("input_shape", [])[1:]
+
+        if class_name == "InputLayer":
+            model_layers.append(keras.layers.InputLayer(input_shape=input_shape))
+
+        elif class_name == "Dense":
+            model_layers.append(
+                keras.layers.Dense(
+                    units=layer_config["neurons"],
+                    use_bias=layer_config["use_bias"],
+                    dtype=layer_config["dtype"],
+                )
+            )
+
+        elif class_name == "Activation":
+            activation = layer_config["activation"]
+            model_layers.append(keras.layers.Activation(activation))
+
+        elif class_name == "Dropout":
+            dropout_rate = layer_config["dropout_rate"]
+            model_layers.append(keras.layers.Dropout(dropout_rate))
+
+        elif class_name in ["Add", "Concatenate"]:
+            inbound_names = layer_config["inbound_layers"]
+            inbound_layers = []
+            for layer in model_layers:
+                if layer.name in inbound_names:
+                    inbound_layers.append(layer)
+
+            keras_layer = getattr(keras.layers, class_name)
+            model_layers.append(keras_layer(inbound_layers))
+
+        else:
+            keras_layer = getattr(keras.layers, class_name)
+            model_layers.append(keras_layer())
+
+    model = keras.Sequential(model_layers)
+    return model
+
+
+def config_from_torch_model(model, hls_config):
     """
     _summary_
 
     Args:
         model (_type_): _description_
-        reuse_factor (_type_): _description_
+        hls_config (_type_): _description_
 
     Returns:
         _type_: _description_
@@ -187,6 +261,13 @@ def config_from_torch_model(model, reuse_factor):
 
         if node.op == "placeholder":
             class_name = "InputLayer"
+
+            reuse_factor = hls_config["Model"]["ReuseFactor"]
+            if "LayerType" in hls_config and class_name in hls_config["LayerType"]:
+                reuse_factor = hls_config["LayerType"][class_name].get("ReuseFactor", reuse_factor)
+            if "LayerName" in hls_config and node.name in hls_config["LayerName"]:
+                reuse_factor = hls_config["LayerName"][node.name].get("ReuseFactor", reuse_factor)
+
             layer_dict = {
                 "class_name": class_name,
                 "input_shape": (None,),
@@ -201,9 +282,10 @@ def config_from_torch_model(model, reuse_factor):
             layer = model_layers[module_count]
 
             class_name = layer.__class__.__name__
-            layer_dict["class_name"] = class_name
+            mapped_class_name = torch_layer_mapping.get(class_name, class_name)
+            layer_dict["class_name"] = mapped_class_name
 
-            if class_name in ["Linear"]:
+            if mapped_class_name in ["Dense"]:
                 layer_dict["input_shape"] = (None, layer.in_features)
                 layer_dict["output_shape"] = (None, layer.out_features)
 
@@ -222,7 +304,7 @@ def config_from_torch_model(model, reuse_factor):
                 layer_dict["input_shape"] = layers_data_values[idx - 1]["output_shape"]
                 layer_dict["output_shape"] = layer_dict["input_shape"]
 
-                if class_name in ["BatchNorm1d", "BatchNorm2d"]:
+                if mapped_class_name in ["BatchNormalization"]:
                     input_size = np.prod([x for x in layer_dict["input_shape"] if x is not None])
                     layer_dict["parameters"] = 4 * input_size
                     layer_dict["trainable_parameters"] = 2 * input_size
@@ -235,13 +317,20 @@ def config_from_torch_model(model, reuse_factor):
             else:
                 raise TypeError(f"Model has unexpected first layer of type {class_name}.")
 
-            layer_dict["reuse_factor"] = reuse_factor
-            if class_name in ["Linear"]:
-                layer_dict["reuse_factor"] = get_closest_reuse_factor(
-                    np.prod([x for x in layer_dict["input_shape"] if x is not None]),
-                    np.prod([x for x in layer_dict["output_shape"] if x is not None]),
-                    reuse_factor,
+            reuse_factor = hls_config["Model"]["ReuseFactor"]
+            if "LayerType" in hls_config and mapped_class_name in hls_config["LayerType"]:
+                reuse_factor = hls_config["LayerType"][mapped_class_name].get(
+                    "ReuseFactor", reuse_factor
                 )
+            if "LayerName" in hls_config and node.name in hls_config["LayerName"]:
+                reuse_factor = hls_config["LayerName"][node.name].get("ReuseFactor", reuse_factor)
+
+            layer_dict["reuse_factor"] = reuse_factor
+            if mapped_class_name in ["Dense"]:
+                n_in = np.prod([x for x in layer_dict["input_shape"] if x is not None])
+                n_out = np.prod([x for x in layer_dict["output_shape"] if x is not None])
+
+                layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
 
             module_count += 1
 
@@ -274,7 +363,8 @@ def config_from_torch_model(model, reuse_factor):
             layer_dict["dtype"] = layers_data_values[idx - 1]["dtype"]
             layer_dict["reuse_factor"] = reuse_factor
 
-        layer_dict["class_name"] = torch_layer_mapping.get(class_name, class_name)
+            layer_dict["class_name"] = torch_layer_mapping.get(class_name, class_name)
+
         layers_data[node.name] = layer_dict
 
     layers_data = list(layers_data.values())
@@ -287,12 +377,12 @@ def config_from_torch_model(model, reuse_factor):
     return layers_data
 
 
-def config_from_onnx_model(model, reuse_factor):
+def config_from_onnx_model(model, hls_config):
     """_summary_
 
     Args:
         model (_type_): _description_
-        reuse_factor (_type_): _description_
+        hls_config (_type_): _description_
 
     Raises:
         ImportError: _description_

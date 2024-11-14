@@ -81,7 +81,9 @@ class ParsedDataFilter:
     max_softmax_count: int = 0
     output_softmax_only: bool = False
 
-    # Exclude models that contains specific layers
+    # Only include models that contain specific layers
+    include_layers: list = field(default_factory=lambda: [])
+    # Exclude models that contain specific layers
     exclude_layers: list = field(default_factory=lambda: [])
 
     strategies: list = field(default_factory=lambda: ["Resource", "Latency"])
@@ -130,6 +132,8 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
     ):
         return False
 
+    include_layers = data_filter.include_layers.copy()
+
     softmax_count = 0
     for idx, layer_data in enumerate(parsed_data["model_config"]):
         reuse_factor = layer_data["reuse_factor"]
@@ -142,15 +146,25 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
         if layer_class in data_filter.exclude_layers:
             return False
 
+        if include_layers and layer_class in include_layers:
+            include_layers.remove(layer_class)
+
         if layer_class == "Activation":
-            if layer_data["activation"].lower() == "softmax":
+            activation = layer_data["activation"]
+            if activation.lower() == "softmax":
                 if data_filter.output_softmax_only and idx != (n_layers - 1):
                     return False
                 softmax_count += 1
                 if data_filter.output_softmax_only and idx < n_layers - 1:
                     return False
-            if layer_data["activation"] in data_filter.exclude_layers:
+            if activation in data_filter.exclude_layers:
                 return False
+
+            if include_layers and activation in include_layers:
+                include_layers.remove(activation)
+
+    if len(include_layers) > 0:
+        return False
 
     if (data_filter.min_softmax_count > 0 and softmax_count < data_filter.min_softmax_count) or (
         data_filter.max_softmax_count > 0 and softmax_count > data_filter.max_softmax_count
@@ -158,17 +172,21 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
         return False
 
     hls_config = parsed_data["hls_config"]
-    strategy = hls_config["model"]["strategy"]
-    if strategy not in data_filter.strategies:
-        return False
 
-    precision = hls_config["model"]["precision"]
-    if precision not in data_filter.precisions:
-        return False
+    if data_filter.strategies:
+        strategy = hls_config["Model"]["Strategy"]
+        if strategy not in data_filter.strategies:
+            return False
 
-    board = hls_config["board"]
-    if board not in data_filter.boards:
-        return False
+    if data_filter.precisions:
+        precision = hls_config["Model"]["Precision"]
+        if precision not in data_filter.precisions:
+            return False
+
+    if data_filter.boards:
+        board = hls_config["board"]
+        if board not in data_filter.boards:
+            return False
 
     return True
 
@@ -427,10 +445,10 @@ def get_global_inputs(model_config, hls_config):
 
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
 
-    precision = hls_config["model"]["precision"]
+    precision = hls_config["Model"]["Precision"]
     total_bits, fractional_bits = fixed_precision_to_bit_width(precision)
 
-    strategy = hls_config["model"]["strategy"]
+    strategy = hls_config["Model"]["Strategy"]
     board = hls_config["board"]
 
     inputs = {
@@ -440,7 +458,7 @@ def get_global_inputs(model_config, hls_config):
         "bit_width": total_bits,
         "integer_bits": total_bits - fractional_bits,
         "fractional_bits": fractional_bits,
-        "global_reuse": hls_config["model"]["reuse_factor"],
+        "global_reuse": hls_config["Model"]["ReuseFactor"],
         "reuse_mean": reuse_factor_mean,
     }
     inputs.update(extracted_features)

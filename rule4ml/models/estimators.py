@@ -713,20 +713,11 @@ class ModelWrapper:
 
         for model_to_predict, hls_config in itertools.product(models_to_predict, hls_configs):
             if isinstance(model_to_predict, keras.Model):
-                model_config = config_from_keras_model(
-                    model_to_predict, hls_config["model"]["reuse_factor"]
-                )
-
+                model_config = config_from_keras_model(model_to_predict, hls_config)
             elif torch is not None and isinstance(model_to_predict, torch.nn.Module):
-                model_config = config_from_torch_model(
-                    model_to_predict, hls_config["model"]["reuse_factor"]
-                )
-
+                model_config = config_from_torch_model(model_to_predict, hls_config)
             elif onnx is not None and isinstance(model_to_predict, onnx.ModelProto):
-                model_config = config_from_onnx_model(
-                    model_to_predict, hls_config["model"]["reuse_factor"]
-                )
-
+                model_config = config_from_onnx_model(model_to_predict, hls_config)
             else:
                 if torch is not None:
                     if onnx is not None:

@@ -10,7 +10,15 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.9', '3.10', '3.11']
+        tf-version: ['2.15.1', '2.16.2', '2.17.0']
+        include:
+          - os: ubuntu-latest
+            python-version: '3.12'
+            tf-version: '2.16.2'
+          - os: ubuntu-latest
+            python-version: '3.12'
+            tf-version: '2.17.0'
 
     steps:
     - uses: actions/checkout@v4
@@ -28,17 +36,18 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install .[dev]
+        python -m pip install tensorflow==${{ matrix.tf-version }}
 
     - name: Run tests
       run: |
-        python -m pytest > tests/test_results-${{ matrix.python-version }}-${{ matrix.os }}.log
+        python -m pytest > tests/test_results-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.tf-version }}.log
 
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test_results-${{ matrix.python-version }}-${{ matrix.os }}
-        path: tests/test_results-${{ matrix.python-version }}-${{ matrix.os }}.log
+        name: test_results-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.tf-version }}
+        path: tests/test_results-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.tf-version }}.log
 
     - name: Report failed tests
       if: failure()

@@ -42,6 +42,7 @@ notebooks/**
 **/hls4ml_prj*
 *.log
 
+_version.py
 format.py
 
 # pyenv
