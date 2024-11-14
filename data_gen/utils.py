@@ -12,22 +12,24 @@ class IntRange:
     _summary_
 
     Args:
-        min_int (int):
-        max_int (int):
+        min_int (int): _description_
+        max_int (int): _description_
+        step (int, optional): _description_. Defaults to 1.
     """
 
-    def __init__(self, min_int: int, max_int: int):
+    def __init__(self, min_int: int, max_int: int, step: int = 1):
         self.min = min(min_int, max_int)
         self.max = max_int
+        self.step = step
 
     def random_in_range(self, rng=None, size=None, endpoint=True):
         if rng is None:
             rng = np.random.default_rng()
 
-        return rng.integers(self.min, high=self.max, size=size, endpoint=endpoint)
+        return rng.choice(self.to_list(endpoint), size=size)
 
     def to_list(self, endpoint=True):
-        return list(range(self.min, self.max + int(endpoint)))
+        return list(range(self.min, self.max + int(endpoint), self.step))
 
 
 class Power2Range:
@@ -142,31 +144,28 @@ def data_from_report(path):
     return resource_dict, latency_dict
 
 
-def data_from_synthesis(synth_dict: dict):
-    """
-    HLS4ML build method also returns a dictionary with synthesis results (parsing the .rpt file already)
-    Gets results from the synthesis returned dictionary.
-
-    Args:
-        synth_dict (dict): _description_
-
-    Returns:
-        _type_: _description_
-    """
-
+def data_from_synthesis(synth_dict: dict, vsynth):
     resource_dict = {}
-    res_keys = ["BRAM_18K", "DSP", "FF", "LUT", "URAM"]
-    for key in res_keys:
-        used = float(synth_dict["CSynthesisReport"][key])
-        key = key.split("_")[0].lower()
-        resource_dict[key] = used
+    res_keys = ["BRAM", "DSP", "FF", "LUT", "URAM"]
+    target_report = "VivadoSynthReport" if vsynth else "CSynthesisReport"
 
-    latency_dict = {
-        "cycles_min": float(synth_dict["CSynthesisReport"]["BestLatency"]),
-        "cycles_max": float(synth_dict["CSynthesisReport"]["WorstLatency"]),
-        "target_clock": float(synth_dict["CSynthesisReport"]["TargetClockPeriod"]),
-        "estimated_clock": float(synth_dict["CSynthesisReport"]["EstimatedClockPeriod"]),
-    }
+    for k1 in res_keys:
+        for k2 in synth_dict[target_report]:
+            if k2.startswith(k1):
+                resource_dict[k1] = str(float(synth_dict[target_report][k2]))
+
+    latency_dict = {}
+    if "CSynthesisReport" in synth_dict:
+        latency_dict.update(
+            {
+                "cycles_min": str(float(synth_dict["CSynthesisReport"]["BestLatency"])),
+                "cycles_max": str(float(synth_dict["CSynthesisReport"]["WorstLatency"])),
+                "target_clock": str(float(synth_dict["CSynthesisReport"]["TargetClockPeriod"])),
+                "estimated_clock": str(
+                    float(synth_dict["CSynthesisReport"]["EstimatedClockPeriod"])
+                ),
+            }
+        )
 
     return resource_dict, latency_dict
 
@@ -235,3 +234,38 @@ def get_cpu_info():
         "logical_count": count_logical,
         "physical_count": count_physical,
     }
+
+
+def model_name_from_config(model, model_config, hls_config):
+    """
+    _summary_
+
+    Args:
+        model (_type_): _description_
+        model_config (_type_): _description_
+        hls_config (_type_): _description_
+
+    Returns:
+        str: _description_
+    """
+
+    model_name = ""
+    if hasattr(model, "name"):
+        model_name += f"{model.name}_"
+
+    for idx, layer in enumerate(model_config):
+        class_name = layer["class_name"]
+        if class_name not in ["InputLayer", "Flatten", "Activation"]:
+            input_shape = np.asarray(layer["input_shape"]).flatten()
+            input_size = np.prod([x for x in input_shape if x is not None])
+            model_name += f"""{class_name}_{input_size}in_"""
+
+    output_shape = np.asarray(model_config[-1]["output_shape"]).flatten()
+    output_size = np.prod([x for x in output_shape if x is not None])
+    model_name += f"{output_size}out_"
+
+    hls_model_config = hls_config["Model"]
+    model_name += f"""{hls_model_config["Precision"]}_{hls_model_config["ReuseFactor"]}rf_"""
+    model_name += f"""{hls_model_config["Strategy"][0].upper()}"""
+
+    return model_name

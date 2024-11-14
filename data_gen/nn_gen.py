@@ -135,10 +135,11 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
     if rng is None:
         rng = np.random.default_rng()
 
-    input_list = []  # keeps track of NN layers
+    layer_list = []  # keeps track of NN layers
+
     input_shape = (settings.input_range.random_in_range(rng),)
     input_layer = Input(shape=input_shape)
-    input_list.append(input_layer)
+    layer_list.append(input_layer)
 
     # Network-level decisions
     model_bias = rng.random() < settings.global_bias_probability
@@ -149,7 +150,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
     # Layers generation
     n_layers = settings.layer_range.random_in_range(rng)
     for i in range(n_layers):
-        x = input_list[-1]  # Get the previous layer
+        x = layer_list[-1]  # Get the previous layer
 
         use_bias = model_bias and rng.random() < settings.bias_probability_func(
             i + 1
@@ -174,7 +175,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
         if (
             model_skip and i > 0 and rng.random() < settings.skip_probability_func(i + 1)
         ):  # Same for skip connections
-            skip_inputs = input_list[rng.integers(0, high=len(input_list) - 1)]
+            skip_inputs = layer_list[rng.integers(0, high=len(layer_list) - 1)]
 
         unit_range = settings.neuron_range if i < n_layers - 1 else settings.output_range
         range_class_name = unit_range.__class__.__name__
@@ -203,7 +204,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                 range_class = globals()[unit_range.__class__.__name__]
                 units = range_class(settings.neuron_range.min, max_units).random_in_range(
                     rng
-                )  # Forcing down units to a range that respects parameter_limit
+                )  # Forcing down units to a range within parameter_limit
 
         activation_choices = settings.activations
         if (
@@ -215,11 +216,11 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
         activation = rng.choice(activation_choices)  # Random activation
 
         # Layer gen
-        input_list += generate_fc_layer(
+        layer_list += generate_fc_layer(
             x, units, activation, use_bias, use_bn, dropout_rate, skip_inputs
         )
 
-    model = Model(inputs=input_layer, outputs=input_list[-1])
+    model = Model(inputs=input_layer, outputs=layer_list[-1])
     model.build([None] + list(input_shape))
 
     if verbose > 0:
