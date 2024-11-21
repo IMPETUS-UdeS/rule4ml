@@ -55,6 +55,7 @@ def get_board_from_part(part):
 
     raise ValueError(f"Board not found for part: {part}")
 
+
 @dataclass
 class ParsedDataFilter:
     """
@@ -215,6 +216,9 @@ def read_from_json(file_patterns, data_filter: ParsedDataFilter = None):
     else:
         json_files = glob(file_patterns)
 
+    if len(json_files) == 0:
+        raise FileNotFoundError(f"No matches found for: {file_patterns}")
+
     for filename in json_files:
         with open(filename) as json_file:
             json_data += json.load(json_file)
@@ -252,7 +256,20 @@ def get_global_data(parsed_data):
         target_board = get_board_from_part(model_data["target_part"])
 
         meta.append(model_data["meta_data"])
-        global_inputs.append(get_global_inputs(model_config, hls_config, target_board))
+
+        g_in = get_global_inputs(model_config, hls_config, target_board)
+        clock_period = model_data["latency_report"]["target_clock"]
+        hls4ml_version = model_data["hls4ml_version"]
+        vivado_version = model_data["vivado_version"]
+        g_in.update(
+            {
+                "clock_period": float(clock_period),
+                "hls4ml_version": hls4ml_version,
+                "vivado_version": vivado_version,
+            }
+        )
+
+        global_inputs.append(g_in)
         targets.append(get_prediction_targets(model_data, norm_board=None))
 
     return (meta, global_inputs, targets)
@@ -607,19 +624,28 @@ def get_network_fixed_ops(model_json, precision):
                     neurons = layer_json["neurons"]
                 else:
                     neurons = np.prod(
-                        [x for x in np.asarray(layer_json["output_shape"]).flatten()
-                        if x is not None]
+                        [
+                            x
+                            for x in np.asarray(layer_json["output_shape"]).flatten()
+                            if x is not None
+                        ]
                     )
                 if "use_bias" in layer_json:
                     use_bias = layer_json["use_bias"]
                 else:
                     input_total = np.prod(
-                        [x for x in np.asarray(layer_json["input_shape"]).flatten()
-                        if x is not None]
+                        [
+                            x
+                            for x in np.asarray(layer_json["input_shape"]).flatten()
+                            if x is not None
+                        ]
                     )
                     output_total = np.prod(
-                        [x for x in np.asarray(layer_json["output_shape"]).flatten()
-                        if x is not None]
+                        [
+                            x
+                            for x in np.asarray(layer_json["output_shape"]).flatten()
+                            if x is not None
+                        ]
                     )
                     use_bias = input_total * output_total != layer_json["parameters"]
                 total_mult += (input_size + int(use_bias)) * neurons

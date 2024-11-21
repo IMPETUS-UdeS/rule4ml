@@ -1,6 +1,7 @@
 import itertools
 import json
 import os
+import time
 from dataclasses import dataclass, field
 
 import keras
@@ -21,6 +22,7 @@ from keras.layers import (
 from keras.losses import Loss
 from keras.optimizers import Adam, Optimizer
 from packaging import version
+from sklearn.metrics import r2_score
 
 try:
     import torch
@@ -32,6 +34,7 @@ try:
 except ImportError:
     onnx = None
 
+from rule4ml.models.metrics import rmse, smape
 from rule4ml.parsers.data_parser import (
     boards_data,
     get_global_inputs,
@@ -750,7 +753,7 @@ class ModelWrapper:
 
         return self.predict_from_df(inputs_df, verbose=verbose)
 
-    def predict_from_df(self, inputs_df, verbose=0):
+    def predict_from_df(self, inputs_df, targets=None, verbose=0):
         feature_labels = list(self.global_numerical_labels) + list(
             self.global_categorical_maps.keys()
         )
@@ -766,7 +769,23 @@ class ModelWrapper:
         inputs_df = inputs_df[feature_labels]
         inputs = self.build_inputs(inputs_df)
 
+        start_time = time.time()
         prediction = self.model.predict(inputs, 0, verbose=verbose)
+        total_time = time.time() - start_time
+        avg_inference_time = total_time / len(inputs_df)
+
+        if verbose > 1:
+            r2 = r2_score(targets, prediction)
+            smape_value = smape(targets, prediction)
+            rmse_value = rmse(targets, prediction)
+
+            print(f"R2 Score: {r2:.2f}")
+            print(f"SMAPE: {smape_value:.2f}%")
+            print(f"RMSE: {rmse_value:.2f}")
+            print(f"Average Inference Time: {avg_inference_time:.2E} seconds")
+
+            return prediction, r2, smape_value, rmse_value, avg_inference_time
+
         return prediction
 
     def to_config(self):

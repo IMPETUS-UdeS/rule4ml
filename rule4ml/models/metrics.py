@@ -9,6 +9,14 @@ else:
     kops = None
 
 
+def smape(y_true, y_pred):
+    return 200 * np.mean(np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1))
+
+
+def rmse(y_true, y_pred):
+    np.sqrt(np.mean((y_true - y_pred) ** 2))
+
+
 def parametric_mape(y_index, name="", eps=1e-6):
     def mape(y_true, y_pred):
         y_true = y_true[..., y_index]
