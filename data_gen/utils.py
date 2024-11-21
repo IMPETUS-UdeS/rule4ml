@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -170,6 +171,41 @@ def data_from_synthesis(synth_dict: dict, vsynth):
     return resource_dict, latency_dict
 
 
+def model_name_from_config(model, model_config, hls_config):
+    """
+    _summary_
+
+    Args:
+        model (_type_): _description_
+        model_config (_type_): _description_
+        hls_config (_type_): _description_
+
+    Returns:
+        str: _description_
+    """
+
+    model_name = ""
+    if hasattr(model, "name"):
+        model_name += f"{model.name}_"
+
+    for idx, layer in enumerate(model_config):
+        class_name = layer["class_name"]
+        if class_name not in ["InputLayer", "Flatten", "Activation"]:
+            input_shape = np.asarray(layer["input_shape"]).flatten()
+            input_size = np.prod([x for x in input_shape if x is not None])
+            model_name += f"""{class_name}_{input_size}in_"""
+
+    output_shape = np.asarray(model_config[-1]["output_shape"]).flatten()
+    output_size = np.prod([x for x in output_shape if x is not None])
+    model_name += f"{output_size}out_"
+
+    hls_model_config = hls_config["Model"]
+    model_name += f"""{hls_model_config["Precision"]}_{hls_model_config["ReuseFactor"]}rf_"""
+    model_name += f"""{hls_model_config["Strategy"][0].upper()}"""
+
+    return model_name
+
+
 def print_hls_config(d, indent=0):
     """
     _summary_
@@ -211,6 +247,23 @@ def save_to_json(data, file_path="./dataset.json", indent=2):
             )
 
 
+def md5_hash_dict(d):
+    """
+    _summary_
+
+    Args:
+        d (dict): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    dict_string = json.dumps(d, sort_keys=True)
+    md5_hash = hashlib.md5(dict_string.encode()).hexdigest()
+
+    return md5_hash
+
+
 def get_cpu_info():
     """
     _summary_
@@ -234,38 +287,3 @@ def get_cpu_info():
         "logical_count": count_logical,
         "physical_count": count_physical,
     }
-
-
-def model_name_from_config(model, model_config, hls_config):
-    """
-    _summary_
-
-    Args:
-        model (_type_): _description_
-        model_config (_type_): _description_
-        hls_config (_type_): _description_
-
-    Returns:
-        str: _description_
-    """
-
-    model_name = ""
-    if hasattr(model, "name"):
-        model_name += f"{model.name}_"
-
-    for idx, layer in enumerate(model_config):
-        class_name = layer["class_name"]
-        if class_name not in ["InputLayer", "Flatten", "Activation"]:
-            input_shape = np.asarray(layer["input_shape"]).flatten()
-            input_size = np.prod([x for x in input_shape if x is not None])
-            model_name += f"""{class_name}_{input_size}in_"""
-
-    output_shape = np.asarray(model_config[-1]["output_shape"]).flatten()
-    output_size = np.prod([x for x in output_shape if x is not None])
-    model_name += f"{output_size}out_"
-
-    hls_model_config = hls_config["Model"]
-    model_name += f"""{hls_model_config["Precision"]}_{hls_model_config["ReuseFactor"]}rf_"""
-    model_name += f"""{hls_model_config["Strategy"][0].upper()}"""
-
-    return model_name

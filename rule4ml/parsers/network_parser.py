@@ -182,46 +182,53 @@ def config_from_keras_model(model, hls_config):
 
 
 def keras_model_from_config(model_config):
-    model_layers = []
+    layer_dict = {}
+
+    x = inputs = None
     for layer_config in model_config:
         class_name = layer_config["class_name"]
         input_shape = layer_config.get("input_shape", [])[1:]
 
         if class_name == "InputLayer":
-            model_layers.append(keras.layers.InputLayer(input_shape=input_shape))
+            x = inputs = keras.layers.Input(shape=input_shape)
 
         elif class_name == "Dense":
-            model_layers.append(
-                keras.layers.Dense(
-                    units=layer_config["neurons"],
-                    use_bias=layer_config["use_bias"],
-                    dtype=layer_config["dtype"],
-                )
+            dense_layer = keras.layers.Dense(
+                units=layer_config["neurons"],
+                use_bias=layer_config["use_bias"],
+                dtype=layer_config["dtype"],
             )
+            layer_dict[dense_layer.name] = dense_layer
+            x = dense_layer(x)
 
         elif class_name == "Activation":
             activation = layer_config["activation"]
-            model_layers.append(keras.layers.Activation(activation))
+            activation_layer = keras.layers.Activation(activation)
+            layer_dict[activation_layer.name] = activation_layer
+            x = activation_layer(x)
 
         elif class_name == "Dropout":
-            dropout_rate = layer_config["dropout_rate"]
-            model_layers.append(keras.layers.Dropout(dropout_rate))
+            dropout_rate = layer_config.get(
+                "dropout_rate", np.random.default_rng().uniform(0.1, 0.8)
+            )
+            dropout_layer = keras.layers.Dropout(dropout_rate)
+            layer_dict[dropout_layer.name] = dropout_layer
+            x = dropout_layer(x)
 
         elif class_name in ["Add", "Concatenate"]:
             inbound_names = layer_config["inbound_layers"]
-            inbound_layers = []
-            for layer in model_layers:
-                if layer.name in inbound_names:
-                    inbound_layers.append(layer)
+            inbound_layers = [layer_dict[name] for name in inbound_names]
 
-            keras_layer = getattr(keras.layers, class_name)
-            model_layers.append(keras_layer(inbound_layers))
+            skip_layer = getattr(keras.layers, class_name)()
+            layer_dict[skip_layer.name] = skip_layer
+            x = skip_layer(inbound_layers)
 
         else:
-            keras_layer = getattr(keras.layers, class_name)
-            model_layers.append(keras_layer())
+            keras_layer = getattr(keras.layers, class_name)()
+            layer_dict[keras_layer.name] = keras_layer
+            x = keras_layer(x)
 
-    model = keras.Sequential(model_layers)
+    model = keras.Model(inputs=inputs, outputs=x)
     return model
 
 

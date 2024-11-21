@@ -1,27 +1,37 @@
+import glob
 import inspect
 import os
 import shutil
 import tarfile
-import uuid
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from multiprocessing import Manager, Pool
+from pathlib import Path
 
 import hls4ml
 import numpy as np
 import tensorflow as tf
 from hls4ml.backends.backend import get_available_backends, get_backend
 from nn_gen import GeneratorSettings, generate_fc_network
+from tqdm import tqdm
 from utils import (
     IntRange,
     Power2Range,
     data_from_synthesis,
     get_cpu_info,
+    md5_hash_dict,
     model_name_from_config,
     print_hls_config,
     save_to_json,
 )
 
-from rule4ml.parsers.network_parser import config_from_keras_model, config_from_torch_model
+from rule4ml.parsers.data_parser import read_from_json
+from rule4ml.parsers.network_parser import (
+    config_from_keras_model,
+    config_from_torch_model,
+    keras_model_from_config,
+)
 from rule4ml.parsers.utils import get_board_from_part, get_part_from_board
 
 base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -201,7 +211,7 @@ def synthesize_keras_model(
     backend,
     backend_version,
     xilinx_path,
-    model_uuid=None,
+    model_id=None,
     model_name="",
     verbose=0,
     **kwargs,
@@ -219,7 +229,7 @@ def synthesize_keras_model(
         backend (_type_): _description_
         backend_version (_type_): _description_
         xilinx_path (str, optional): _description_. Defaults to "/opt/Xilinx".
-        model_uuid (_type_, optional): _description_. Defaults to None.
+        model_id (_type_, optional): _description_. Defaults to None.
         model_name (str, optional): _description_. Defaults to "".
         verbose (int, optional): _description_. Defaults to 0.
 
@@ -231,19 +241,19 @@ def synthesize_keras_model(
 
     model_config = config_from_keras_model(model, hls_config)
 
-    if model_uuid is None:
-        model_uuid = uuid.uuid4()
+    if model_id is None:
+        model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
 
     if not model_name:
         model_name = model_name_from_config(model, model_config, hls_config)
 
     meta_data = {
-        "uuid": str(model_uuid),
+        "model_id": str(model_id),
         "model_name": model_name,
-        "artifacts_file": f"{model_uuid}.tar.gz",
+        "artifacts_file": f"{model_id}.tar.gz",
     }
 
-    project_dir = os.path.join(output_dir, "projects", str(model_uuid))
+    project_dir = os.path.join(output_dir, "projects", str(model_id))
     hls_model = keras_to_hls4ml(
         model,
         project_dir,
@@ -306,7 +316,7 @@ def synthesize_torch_model(
     backend,
     backend_version,
     xilinx_path,
-    model_uuid=None,
+    model_id=None,
     model_name="",
     verbose=0,
     **kwargs,
@@ -324,7 +334,7 @@ def synthesize_torch_model(
         backend (_type_): _description_
         backend_version (_type_): _description_
         xilinx_path (str, optional): _description_. Defaults to "/opt/Xilinx".
-        model_uuid (_type_, optional): _description_. Defaults to None.
+        model_id (_type_, optional): _description_. Defaults to None.
         model_name (str, optional): _description_. Defaults to "".
         verbose (int, optional): _description_. Defaults to 0.
 
@@ -337,19 +347,19 @@ def synthesize_torch_model(
     model_config = config_from_torch_model(model, hls_config)
     input_shape = model_config[0]["input_shape"]
 
-    if model_uuid is None:
-        model_uuid = uuid.uuid4()
+    if model_id is None:
+        model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
 
     if not model_name:
         model_name = model_name_from_config(model, model_config, hls_config)
 
     meta_data = {
-        "uuid": str(model_uuid),
+        "model_id": str(model_id),
         "model_name": model_name,
-        "artifacts_file": f"{model_uuid}.tar.gz",
+        "artifacts_file": f"{model_id}.tar.gz",
     }
 
-    project_dir = os.path.join(output_dir, "projects", str(model_uuid))
+    project_dir = os.path.join(output_dir, "projects", str(model_id))
     hls_model = torch_to_hls4ml(
         model,
         input_shape,
@@ -442,7 +452,6 @@ def parallel_synthesis(args):
                     for io_type in io_types:
                         for backend, backend_version in zip(backends, backend_versions):
                             try:
-                                model_uuid = uuid.uuid4()
                                 synth_result = synth_function(
                                     model,
                                     output_dir,
@@ -453,29 +462,29 @@ def parallel_synthesis(args):
                                     backend,
                                     backend_version,
                                     xilinx_path=xilinx_path,
-                                    model_uuid=model_uuid,
                                     verbose=synth_verbose,
                                     **build_args,
                                 )
 
-                                json_file = json_filename if json_filename else f"{model_uuid}.json"
+                                model_id = synth_result["meta_data"]["model_id"]
+                                json_file = json_filename if json_filename else f"{model_id}.json"
                                 save_to_json(
                                     synth_result, os.path.join(output_dir, json_file), indent=2
                                 )
 
                                 if prj_compress:
                                     project_dir = os.path.join(output_dir, "projects")
-                                    os.remove(os.path.join(project_dir, f"{model_uuid}.tar.gz"))
+                                    os.remove(os.path.join(project_dir, f"{model_id}.tar.gz"))
 
                                     with tarfile.open(
-                                        os.path.join(project_dir, f"{model_uuid}.tar.gz"), "w:gz"
+                                        os.path.join(project_dir, f"{model_id}.tar.gz"), "w:gz"
                                     ) as tar:
                                         tar.add(
-                                            os.path.join(project_dir, str(model_uuid)),
-                                            arcname=str(model_uuid),
+                                            os.path.join(project_dir, str(model_id)),
+                                            arcname=str(model_id),
                                         )
 
-                                    shutil.rmtree(os.path.join(project_dir, str(model_uuid)))
+                                    shutil.rmtree(os.path.join(project_dir, str(model_id)))
 
                             except Exception as e:
                                 print(e)
@@ -580,6 +589,45 @@ def parallel_rnd_synthesis(args):
             print(e)
 
 
+def synth_from_json(args):
+    json_data = args["json_data"]
+    skip_ids = args.get("skip_ids", [])
+
+    progress_counter = args.get("progress_counter", None)
+    progress_lock = args.get("progress_lock", None)
+
+    for model_entry in json_data:
+        model_config = model_entry["model_config"]
+        hls_config = model_entry["hls_config"]
+        new_model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
+
+        already_synthesized = new_model_id in skip_ids
+        if not already_synthesized:
+            model = keras_model_from_config(model_config)
+
+            clock_period = str(int(model_entry["latency_report"]["target_clock"]))
+            part_number = get_part_from_board(hls_config["board"])
+            io_type = hls_config.get("io_type", "io_parallel")
+            backend = model_entry.get("backend", "VivadoAccelerator")
+            backend_version = model_entry.get("backend_version", "2019.1")
+
+            args["models"] = [model]
+            args["hls_configs"] = [hls_config]
+            args["parts"] = [part_number]
+            args["clock_periods"] = [clock_period]
+            args["io_types"] = [io_type]
+            args["backends"] = [backend]
+            args["backend_versions"] = [backend_version]
+
+            parallel_synthesis(args)
+        else:
+            print(f"Model with id \"{new_model_id}\" already synthesized. Skipping...")
+
+        if progress_counter is not None and progress_lock is not None:
+            with progress_lock:
+                progress_counter.value += 1
+
+
 if __name__ == "__main__":
     gen_settings = GeneratorSettings(
         input_range=Power2Range(16, 32),
@@ -626,8 +674,6 @@ if __name__ == "__main__":
     #     p.terminate()
     #     p.join()
 
-    from rule4ml.parsers.data_parser import read_from_json
-
     # add_data = read_from_json(json_path, ParsedDataFilter(include_layers=["Add"], exclude_layers=["Concatenate"]))
     # concat_data = read_from_json(json_path, ParsedDataFilter(include_layers=["Concatenate"], exclude_layers=["Add"]))
     # add_concat_data = read_from_json(json_path, ParsedDataFilter(include_layers=["Add", "Concatenate"]))
@@ -642,20 +688,58 @@ if __name__ == "__main__":
     #     with open(file_path, "w") as json_file:
     #         json.dump(data.tolist(), json_file, indent=2)
 
-    json_path = os.path.join(base_path, "datasets", "fcnn_dataset_15000.json")
-    json_data = read_from_json(
-        [
-            os.path.join(base_path, "datasets", "fcnn_dataset-1.json"),
-            os.path.join(base_path, "datasets", "fcnn_dataset-2.json"),
-            os.path.join(base_path, "datasets", "fcnn_dataset-3.json"),
-            os.path.join(base_path, "datasets", "fcnn_dataset-4.json"),
-            os.path.join(base_path, "datasets", "fcnn_skip_dataset.json"),
-        ]
-    )
-    print(len(json_data))
+    n_workers = 35
 
-    # for model_entry in json_data[:1]:
-    #     model_config = model_entry["model_config"]
+    json_path = os.path.join(base_path, "datasets", "fcnn_dataset-1.json")
+    json_data = read_from_json(json_path)
+    json_splits = np.array_split(json_data, n_workers)
+
+    synthesized_ids = [
+        Path(f).stem for f in glob.glob(os.path.join(base_path, "datasets", "vsynth", "*.json"))
+    ]
+
+    with Manager() as manager:
+        progress_counter = manager.Value("i", 0)
+        progress_lock = manager.Lock()
+
+        with tqdm(total=len(json_data), desc="Synthesis Loop") as pbar:
+            with Pool(n_workers) as p:
+                result = p.map_async(
+                    synth_from_json,
+                    [
+                        {
+                            "output_dir": os.path.join(base_path, "datasets", "vsynth"),
+                            "json_data": data_split,
+                            "skip_ids": synthesized_ids,
+                            "prj_compress": True,
+                            "xilinx_path": "/tools/Xilinx",
+                            "build_args": {
+                                "reset": False,
+                                "csim": False,
+                                "cosim": False,
+                                "synth": True,
+                                "vsynth": False,
+                                "validation": False,
+                                "export": False,
+                                "fifo_opt": False,
+                                "bitfile": False,
+                            },
+                            "progress_counter": progress_counter,
+                            "progress_lock": progress_lock
+                        }
+                        for idx, data_split in enumerate(json_splits)
+                    ],
+                )
+
+                while not result.ready():
+                    pbar.n = progress_counter.value
+                    pbar.refresh()
+                    time.sleep(1)
+
+                result = result.get()
+                p.terminate()
+                p.join()
+
     #     hls_config = model_entry["hls_config"]
     #     clock_period = str(int(model_entry["latency_report"]["target_clock"]))
     #     part_number = get_part_from_board(hls_config["board"])
@@ -663,7 +747,6 @@ if __name__ == "__main__":
     #     backend = model_entry.get("backend", "VivadoAccelerator")
     #     backend_version = model_entry.get("backend_version", "2019.1")
 
-    #     model = keras_model_from_config(model_config)
     #     synth_result = synthesize_keras_model(
     #         model,
     #         os.path.join(base_path, "datasets", "vsynth"),
