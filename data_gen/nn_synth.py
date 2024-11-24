@@ -424,6 +424,11 @@ def parallel_synthesis(args):
 
     models = args["models"]
     hls_configs = args["hls_configs"]
+
+    model_ids = args.get("model_ids", None)
+    if len(model_ids) != len(models) * len(hls_configs):
+        raise ValueError("Number of model_ids should be equal to the number of models * hls_configs")
+
     parts = args["parts"]
     clock_periods = args["clock_periods"]
     io_types = args["io_types"]
@@ -445,8 +450,11 @@ def parallel_synthesis(args):
         else:
             backend_versions += [backend_versions[-1]] * (len(backends) - len(backend_versions))
 
-    for model in models:
-        for hls_config in hls_configs:
+    for model_idx, model in enumerate(models):
+        for hls_idx, hls_config in enumerate(hls_configs):
+            model_id = None
+            if model_ids:
+                model_id = model_ids[model_idx * len(hls_configs) + hls_idx]
             for part_number in parts:
                 for clock_period in clock_periods:
                     for io_type in io_types:
@@ -462,6 +470,7 @@ def parallel_synthesis(args):
                                     backend,
                                     backend_version,
                                     xilinx_path=xilinx_path,
+                                    model_id=model_id,
                                     verbose=synth_verbose,
                                     **build_args,
                                 )
@@ -591,7 +600,6 @@ def parallel_rnd_synthesis(args):
 
 def synth_from_json(args):
     json_data = args["json_data"]
-    skip_ids = args.get("skip_ids", [])
 
     progress_counter = args.get("progress_counter", None)
     progress_lock = args.get("progress_lock", None)
@@ -599,29 +607,26 @@ def synth_from_json(args):
     for model_entry in json_data:
         model_config = model_entry["model_config"]
         hls_config = model_entry["hls_config"]
-        new_model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
+        model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
 
-        already_synthesized = new_model_id in skip_ids
-        if not already_synthesized:
-            model = keras_model_from_config(model_config)
+        model = keras_model_from_config(model_config)
 
-            clock_period = str(int(model_entry["latency_report"]["target_clock"]))
-            part_number = get_part_from_board(hls_config["board"])
-            io_type = hls_config.get("io_type", "io_parallel")
-            backend = model_entry.get("backend", "VivadoAccelerator")
-            backend_version = model_entry.get("backend_version", "2019.1")
+        clock_period = str(int(model_entry["latency_report"]["target_clock"]))
+        part_number = get_part_from_board(hls_config["board"])
+        io_type = hls_config.get("io_type", "io_parallel")
+        backend = model_entry.get("backend", "VivadoAccelerator")
+        backend_version = model_entry.get("backend_version", "2019.1")
 
-            args["models"] = [model]
-            args["hls_configs"] = [hls_config]
-            args["parts"] = [part_number]
-            args["clock_periods"] = [clock_period]
-            args["io_types"] = [io_type]
-            args["backends"] = [backend]
-            args["backend_versions"] = [backend_version]
+        args["models"] = [model]
+        args["hls_configs"] = [hls_config]
+        args["model_ids"] = [model_id]
+        args["parts"] = [part_number]
+        args["clock_periods"] = [clock_period]
+        args["io_types"] = [io_type]
+        args["backends"] = [backend]
+        args["backend_versions"] = [backend_version]
 
-            parallel_synthesis(args)
-        else:
-            print(f"Model with id \"{new_model_id}\" already synthesized. Skipping...")
+        parallel_synthesis(args)
 
         if progress_counter is not None and progress_lock is not None:
             with progress_lock:
@@ -692,17 +697,29 @@ if __name__ == "__main__":
 
     json_path = os.path.join(base_path, "datasets", "fcnn_dataset-1.json")
     json_data = read_from_json(json_path)
-    json_splits = np.array_split(json_data, n_workers)
 
     synthesized_ids = [
-        Path(f).stem for f in glob.glob(os.path.join(base_path, "datasets", "vsynth", "*.json"))
+        Path(f).stem for f in glob.glob(
+            os.path.join(base_path, "datasets", "vsynth", "*.json")
+        )
     ]
+
+    data_left_to_synthesize = []
+    for model_entry in json_data:
+        model_id = md5_hash_dict({
+            "model_config": model_entry["model_config"],
+            "hls_config": model_entry["hls_config"]
+        })
+        if model_id not in synthesized_ids:
+            data_left_to_synthesize.append(model_entry)
+
+    data_splits = np.array_split(data_left_to_synthesize, n_workers)
 
     with Manager() as manager:
         progress_counter = manager.Value("i", 0)
         progress_lock = manager.Lock()
 
-        with tqdm(total=len(json_data), desc="Synthesis Loop") as pbar:
+        with tqdm(total=len(data_left_to_synthesize), desc="Synthesis Loop") as pbar:
             with Pool(n_workers) as p:
                 result = p.map_async(
                     synth_from_json,
@@ -710,7 +727,6 @@ if __name__ == "__main__":
                         {
                             "output_dir": os.path.join(base_path, "datasets", "vsynth"),
                             "json_data": data_split,
-                            "skip_ids": synthesized_ids,
                             "prj_compress": True,
                             "xilinx_path": "/tools/Xilinx",
                             "build_args": {
@@ -727,7 +743,7 @@ if __name__ == "__main__":
                             "progress_counter": progress_counter,
                             "progress_lock": progress_lock
                         }
-                        for idx, data_split in enumerate(json_splits)
+                        for idx, data_split in enumerate(data_splits)
                     ],
                 )
 
