@@ -41,6 +41,7 @@ notebooks/**
 !notebooks/*.ipynb
 **/hls4ml_prj*
 *.log
+*.out
 
 _version.py
 format.py

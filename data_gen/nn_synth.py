@@ -1,4 +1,3 @@
-import glob
 import inspect
 import os
 import shutil
@@ -7,7 +6,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from multiprocessing import Manager, Pool
-from pathlib import Path
 
 import hls4ml
 import numpy as np
@@ -241,16 +239,17 @@ def synthesize_keras_model(
 
     model_config = config_from_keras_model(model, hls_config)
 
+    updated_model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
     if model_id is None:
-        model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
+        model_id = updated_model_id
 
     if not model_name:
         model_name = model_name_from_config(model, model_config, hls_config)
 
     meta_data = {
-        "model_id": str(model_id),
+        "model_id": str(updated_model_id),
         "model_name": model_name,
-        "artifacts_file": f"{model_id}.tar.gz",
+        "artifacts_file": f"{updated_model_id}.tar.gz",
     }
 
     project_dir = os.path.join(output_dir, "projects", str(model_id))
@@ -277,16 +276,16 @@ def synthesize_keras_model(
     synth_result = hls_model.build(**build_kwargs)
     end_time = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    meta_data.update(
+    meta_data["synthesis_info"] = [
         {
-            "synthesis_start": start_time,
-            "synthesis_end": end_time,
+            "start_time": start_time,
+            "end_time": end_time,
             "cpu": get_cpu_info(),
+            "build_args": build_kwargs,
         }
-    )
+    ]
 
-    vsynth = build_kwargs.get("vsynth", False)
-    resource_report, latency_report = data_from_synthesis(synth_result, vsynth)
+    resource_report, latency_report = data_from_synthesis(synth_result)
 
     del model
     del hls_model
@@ -347,16 +346,17 @@ def synthesize_torch_model(
     model_config = config_from_torch_model(model, hls_config)
     input_shape = model_config[0]["input_shape"]
 
+    updated_model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
     if model_id is None:
-        model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
+        model_id = updated_model_id
 
     if not model_name:
         model_name = model_name_from_config(model, model_config, hls_config)
 
     meta_data = {
-        "model_id": str(model_id),
+        "model_id": str(updated_model_id),
         "model_name": model_name,
-        "artifacts_file": f"{model_id}.tar.gz",
+        "artifacts_file": f"{updated_model_id}.tar.gz",
     }
 
     project_dir = os.path.join(output_dir, "projects", str(model_id))
@@ -384,16 +384,16 @@ def synthesize_torch_model(
     synth_result = hls_model.build(**build_kwargs)
     end_time = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    meta_data.update(
+    meta_data["synthesis_info"] = [
         {
-            "synthesis_start": start_time,
-            "synthesis_end": end_time,
+            "start_time": start_time,
+            "end_time": end_time,
             "cpu": get_cpu_info(),
+            "build_args": build_kwargs,
         }
-    )
+    ]
 
-    vsynth = build_kwargs.get("vsynth", False)
-    resource_report, latency_report = data_from_synthesis(synth_result, vsynth)
+    resource_report, latency_report = data_from_synthesis(synth_result)
 
     del model
     del hls_model
@@ -422,12 +422,20 @@ def parallel_synthesis(args):
 
     output_dir = args.get("output_dir", os.path.join(base_path, "datasets"))
 
+    meta_data = args.get("meta_data", None)
     models = args["models"]
     hls_configs = args["hls_configs"]
 
+    if meta_data and len(meta_data) != len(models) * len(hls_configs):
+        raise ValueError(
+            "Number of meta_data should be equal to the number of models * hls_configs"
+        )
+
     model_ids = args.get("model_ids", None)
-    if len(model_ids) != len(models) * len(hls_configs):
-        raise ValueError("Number of model_ids should be equal to the number of models * hls_configs")
+    if model_ids and len(model_ids) != len(models) * len(hls_configs):
+        raise ValueError(
+            "Number of model_ids should be equal to the number of models * hls_configs"
+        )
 
     parts = args["parts"]
     clock_periods = args["clock_periods"]
@@ -452,51 +460,79 @@ def parallel_synthesis(args):
 
     for model_idx, model in enumerate(models):
         for hls_idx, hls_config in enumerate(hls_configs):
+            meta_entry = None
+            if meta_data:
+                meta_entry = meta_data[model_idx * len(hls_configs) + hls_idx]
+
             model_id = None
             if model_ids:
                 model_id = model_ids[model_idx * len(hls_configs) + hls_idx]
+
             for part_number in parts:
                 for clock_period in clock_periods:
                     for io_type in io_types:
                         for backend, backend_version in zip(backends, backend_versions):
-                            try:
-                                synth_result = synth_function(
-                                    model,
-                                    output_dir,
-                                    hls_config,
-                                    clock_period,
-                                    part_number,
-                                    io_type,
-                                    backend,
-                                    backend_version,
-                                    xilinx_path=xilinx_path,
-                                    model_id=model_id,
-                                    verbose=synth_verbose,
-                                    **build_args,
+                            # try:
+                            synth_result = synth_function(
+                                model,
+                                output_dir,
+                                hls_config,
+                                clock_period,
+                                part_number,
+                                io_type,
+                                backend,
+                                backend_version,
+                                xilinx_path=xilinx_path,
+                                model_id=model_id,
+                                verbose=synth_verbose,
+                                **build_args,
+                            )
+
+                            if meta_entry:
+                                meta_entry["synthesis_info"] += synth_result["meta_data"][
+                                    "synthesis_info"
+                                ]
+                                synth_result["meta_data"]["synthesis_info"] = meta_entry[
+                                    "synthesis_info"
+                                ]
+
+                            updated_model_id = synth_result["meta_data"]["model_id"]
+                            if model_id is None:
+                                model_id = updated_model_id
+
+                            json_file = json_filename if json_filename else f"{model_id}.json"
+                            json_path = os.path.join(output_dir, json_file)
+
+                            if os.path.isfile(json_path):
+                                os.remove(json_path)
+                            save_to_json(
+                                synth_result,
+                                os.path.join(output_dir, f"{updated_model_id}.json"),
+                                indent=2,
+                            )
+
+                            project_dir = os.path.join(output_dir, "projects")
+                            if model_id != updated_model_id:
+                                os.rename(
+                                    os.path.join(project_dir, model_id),
+                                    os.path.join(project_dir, updated_model_id),
                                 )
 
-                                model_id = synth_result["meta_data"]["model_id"]
-                                json_file = json_filename if json_filename else f"{model_id}.json"
-                                save_to_json(
-                                    synth_result, os.path.join(output_dir, json_file), indent=2
-                                )
+                            if prj_compress:
+                                os.remove(os.path.join(project_dir, f"{model_id}.tar.gz"))
 
-                                if prj_compress:
-                                    project_dir = os.path.join(output_dir, "projects")
-                                    os.remove(os.path.join(project_dir, f"{model_id}.tar.gz"))
+                                with tarfile.open(
+                                    os.path.join(project_dir, f"{updated_model_id}.tar.gz"), "w:gz"
+                                ) as tar:
+                                    tar.add(
+                                        os.path.join(project_dir, str(updated_model_id)),
+                                        arcname=str(updated_model_id),
+                                    )
 
-                                    with tarfile.open(
-                                        os.path.join(project_dir, f"{model_id}.tar.gz"), "w:gz"
-                                    ) as tar:
-                                        tar.add(
-                                            os.path.join(project_dir, str(model_id)),
-                                            arcname=str(model_id),
-                                        )
+                                shutil.rmtree(os.path.join(project_dir, str(updated_model_id)))
 
-                                    shutil.rmtree(os.path.join(project_dir, str(model_id)))
-
-                            except Exception as e:
-                                print(e)
+                            # except Exception as e:
+                            # print(e)
 
 
 def parallel_rnd_synthesis(args):
@@ -518,6 +554,8 @@ def parallel_rnd_synthesis(args):
     gen_function = args.get("gen_function", generate_fc_network)
     gen_settings = args.get("gen_settings", GeneratorSettings())
     gen_verbose = args.get("gen_verbose", 0)
+
+    synth_settings = args.get("synth_settings", SynthSettings())
 
     granularity = args.get("granularity", "model")
     if granularity not in ["model", "name", "type"]:
@@ -604,19 +642,29 @@ def synth_from_json(args):
     progress_counter = args.get("progress_counter", None)
     progress_lock = args.get("progress_lock", None)
 
+    prj_decompress = args.get("prj_decompress", False)
+
     for model_entry in json_data:
+        meta_data = model_entry["meta_data"]
         model_config = model_entry["model_config"]
         hls_config = model_entry["hls_config"]
-        model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
+        model_id = meta_data["model_id"]
+
+        if prj_decompress:
+            project_dir = os.path.join(args["output_dir"], "projects")
+            tar_path = os.path.join(args["output_dir"], "projects", f"{model_id}.tar.gz")
+            with tarfile.open(tar_path, "r:gz") as tar:
+                tar.extractall(project_dir)
 
         model = keras_model_from_config(model_config)
 
-        clock_period = str(int(model_entry["latency_report"]["target_clock"]))
+        clock_period = str(int(float(model_entry["latency_report"]["target_clock"])))
         part_number = get_part_from_board(hls_config["board"])
         io_type = hls_config.get("io_type", "io_parallel")
         backend = model_entry.get("backend", "VivadoAccelerator")
         backend_version = model_entry.get("backend_version", "2019.1")
 
+        args["meta_data"] = [meta_data]
         args["models"] = [model]
         args["hls_configs"] = [hls_config]
         args["model_ids"] = [model_id]
@@ -634,18 +682,18 @@ def synth_from_json(args):
 
 
 if __name__ == "__main__":
-    gen_settings = GeneratorSettings(
-        input_range=Power2Range(16, 32),
-        layer_range=IntRange(2, 3),
-        neuron_range=Power2Range(16, 32),
-        output_range=IntRange(1, 20),
-        activations=["relu"],
-    )
-    synth_settings = SynthSettings(
-        reuse_range=Power2Range(32, 64),
-        precisions=["ap_fixed<2, 1>", "ap_fixed<8, 3>"],
-        strategies=["Resource"],
-    )
+    # gen_settings = GeneratorSettings(
+    #     input_range=Power2Range(16, 32),
+    #     layer_range=IntRange(2, 3),
+    #     neuron_range=Power2Range(16, 32),
+    #     output_range=IntRange(1, 20),
+    #     activations=["relu"],
+    # )
+    # synth_settings = SynthSettings(
+    #     reuse_range=Power2Range(32, 64),
+    #     precisions=["ap_fixed<2, 1>", "ap_fixed<8, 3>"],
+    #     strategies=["Resource"],
+    # )
 
     # n_procs = 3
     # with Pool(n_procs) as p:
@@ -693,24 +741,43 @@ if __name__ == "__main__":
     #     with open(file_path, "w") as json_file:
     #         json.dump(data.tolist(), json_file, indent=2)
 
-    n_workers = 35
+    n_workers = 1
 
-    json_path = os.path.join(base_path, "datasets", "fcnn_dataset-1.json")
+    json_path = os.path.join(base_path, "datasets", "vsynth", "*.json")
     json_data = read_from_json(json_path)
 
-    synthesized_ids = [
-        Path(f).stem for f in glob.glob(
-            os.path.join(base_path, "datasets", "vsynth", "*.json")
-        )
+    build_args = {
+        "reset": False,
+        "csim": False,
+        "cosim": False,
+        "synth": False,
+        "vsynth": True,
+        "validation": False,
+        "export": False,
+        "fifo_opt": False,
+        "bitfile": False,
+    }
+
+    skip_ids = [
+        # Path(f).stem for f in glob.glob(
+        #     os.path.join(base_path, "datasets", "vsynth", "*.json")
+        # )
     ]
 
     data_left_to_synthesize = []
     for model_entry in json_data:
-        model_id = md5_hash_dict({
-            "model_config": model_entry["model_config"],
-            "hls_config": model_entry["hls_config"]
-        })
-        if model_id not in synthesized_ids:
+        model_id = md5_hash_dict(
+            {"model_config": model_entry["model_config"], "hls_config": model_entry["hls_config"]}
+        )
+
+        res_report = model_entry["resource_report"]
+        target_reports = []
+        if build_args["synth"]:
+            target_reports.append("CSynthesisReport")
+        if build_args["vsynth"]:
+            target_reports.append("VivadoSynthReport")
+
+        if model_id not in skip_ids and not all(report in res_report for report in target_reports):
             data_left_to_synthesize.append(model_entry)
 
     data_splits = np.array_split(data_left_to_synthesize, n_workers)
@@ -728,20 +795,11 @@ if __name__ == "__main__":
                             "output_dir": os.path.join(base_path, "datasets", "vsynth"),
                             "json_data": data_split,
                             "prj_compress": True,
-                            "xilinx_path": "/tools/Xilinx",
-                            "build_args": {
-                                "reset": False,
-                                "csim": False,
-                                "cosim": False,
-                                "synth": True,
-                                "vsynth": False,
-                                "validation": False,
-                                "export": False,
-                                "fifo_opt": False,
-                                "bitfile": False,
-                            },
+                            "prj_decompress": True,
+                            "xilinx_path": "/opt/Xilinx",
+                            "build_args": build_args,
                             "progress_counter": progress_counter,
-                            "progress_lock": progress_lock
+                            "progress_lock": progress_lock,
                         }
                         for idx, data_split in enumerate(data_splits)
                     ],
@@ -757,7 +815,7 @@ if __name__ == "__main__":
                 p.join()
 
     #     hls_config = model_entry["hls_config"]
-    #     clock_period = str(int(model_entry["latency_report"]["target_clock"]))
+    #     clock_period = str(int(float(model_entry["latency_report"]["target_clock"])))
     #     part_number = get_part_from_board(hls_config["board"])
     #     io_type = hls_config.get("io_type", "io_parallel")
     #     backend = model_entry.get("backend", "VivadoAccelerator")

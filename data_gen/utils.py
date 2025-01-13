@@ -145,26 +145,29 @@ def data_from_report(path):
     return resource_dict, latency_dict
 
 
-def data_from_synthesis(synth_dict: dict, vsynth):
+def data_from_synthesis(synth_dict: dict):
     resource_dict = {}
     res_keys = ["BRAM", "DSP", "FF", "LUT", "URAM"]
-    target_report = "VivadoSynthReport" if vsynth else "CSynthesisReport"
+    target_reports = ["CSynthesisReport", "VivadoSynthReport"]
 
-    for k1 in res_keys:
-        for k2 in synth_dict[target_report]:
-            if k2.startswith(k1):
-                resource_dict[k1] = str(float(synth_dict[target_report][k2]))
+    for report in target_reports:
+        if report in synth_dict:
+            resource_dict[report] = {}
+            print(f"{report}: {synth_dict[report]}")
+            for k1 in res_keys:
+                for k2 in synth_dict[report]:
+                    if k2.startswith(k1):
+                        resource_dict[report][k1] = str(float(synth_dict[report][k2]))
 
     latency_dict = {}
-    if "CSynthesisReport" in synth_dict:
+    report = "CSynthesisReport"
+    if report in synth_dict:
         latency_dict.update(
             {
-                "cycles_min": str(float(synth_dict["CSynthesisReport"]["BestLatency"])),
-                "cycles_max": str(float(synth_dict["CSynthesisReport"]["WorstLatency"])),
-                "target_clock": str(float(synth_dict["CSynthesisReport"]["TargetClockPeriod"])),
-                "estimated_clock": str(
-                    float(synth_dict["CSynthesisReport"]["EstimatedClockPeriod"])
-                ),
+                "cycles_min": str(float(synth_dict[report]["BestLatency"])),
+                "cycles_max": str(float(synth_dict[report]["WorstLatency"])),
+                "target_clock": str(float(synth_dict[report]["TargetClockPeriod"])),
+                "estimated_clock": str(float(synth_dict[report]["EstimatedClockPeriod"])),
             }
         )
 
