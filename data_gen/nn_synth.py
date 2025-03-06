@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 import shutil
 import tarfile
@@ -42,6 +43,15 @@ backend_build_args = {
     }
     for backend_name in get_available_backends()
 }
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+# Set Xilinx license file if available
+if os.path.exists("secrets.json"):
+    with open("secrets.json") as f:
+        secrets = json.load(f)
+        if "XILINXD_LICENSE_FILE" in secrets:
+            os.environ["XILINXD_LICENSE_FILE"] = secrets["XILINXD_LICENSE_FILE"]
 
 
 @dataclass
@@ -472,67 +482,70 @@ def parallel_synthesis(args):
                 for clock_period in clock_periods:
                     for io_type in io_types:
                         for backend, backend_version in zip(backends, backend_versions):
-                            # try:
-                            synth_result = synth_function(
-                                model,
-                                output_dir,
-                                hls_config,
-                                clock_period,
-                                part_number,
-                                io_type,
-                                backend,
-                                backend_version,
-                                xilinx_path=xilinx_path,
-                                model_id=model_id,
-                                verbose=synth_verbose,
-                                **build_args,
-                            )
-
-                            if meta_entry:
-                                meta_entry["synthesis_info"] += synth_result["meta_data"][
-                                    "synthesis_info"
-                                ]
-                                synth_result["meta_data"]["synthesis_info"] = meta_entry[
-                                    "synthesis_info"
-                                ]
-
-                            updated_model_id = synth_result["meta_data"]["model_id"]
-                            if model_id is None:
-                                model_id = updated_model_id
-
-                            json_file = json_filename if json_filename else f"{model_id}.json"
-                            json_path = os.path.join(output_dir, json_file)
-
-                            if os.path.isfile(json_path):
-                                os.remove(json_path)
-                            save_to_json(
-                                synth_result,
-                                os.path.join(output_dir, f"{updated_model_id}.json"),
-                                indent=2,
-                            )
-
-                            project_dir = os.path.join(output_dir, "projects")
-                            if model_id != updated_model_id:
-                                os.rename(
-                                    os.path.join(project_dir, model_id),
-                                    os.path.join(project_dir, updated_model_id),
+                            try:
+                                synth_result = synth_function(
+                                    model,
+                                    output_dir,
+                                    hls_config,
+                                    clock_period,
+                                    part_number,
+                                    io_type,
+                                    backend,
+                                    backend_version,
+                                    xilinx_path=xilinx_path,
+                                    model_id=model_id,
+                                    verbose=synth_verbose,
+                                    **build_args,
                                 )
 
-                            if prj_compress:
-                                os.remove(os.path.join(project_dir, f"{model_id}.tar.gz"))
+                                if meta_entry:
+                                    meta_entry["synthesis_info"] += synth_result["meta_data"][
+                                        "synthesis_info"
+                                    ]
+                                    synth_result["meta_data"]["synthesis_info"] = meta_entry[
+                                        "synthesis_info"
+                                    ]
 
-                                with tarfile.open(
-                                    os.path.join(project_dir, f"{updated_model_id}.tar.gz"), "w:gz"
-                                ) as tar:
-                                    tar.add(
-                                        os.path.join(project_dir, str(updated_model_id)),
-                                        arcname=str(updated_model_id),
+                                updated_model_id = synth_result["meta_data"]["model_id"]
+                                if model_id is None:
+                                    model_id = updated_model_id
+
+                                json_file = json_filename if json_filename else f"{model_id}.json"
+                                json_path = os.path.join(output_dir, json_file)
+
+                                if os.path.isfile(json_path):
+                                    os.remove(json_path)
+                                save_to_json(
+                                    synth_result,
+                                    os.path.join(output_dir, f"{updated_model_id}.json"),
+                                    indent=2,
+                                )
+
+                                project_dir = os.path.join(output_dir, "projects")
+                                if model_id != updated_model_id:
+                                    os.rename(
+                                        os.path.join(project_dir, model_id),
+                                        os.path.join(project_dir, updated_model_id),
                                     )
 
-                                shutil.rmtree(os.path.join(project_dir, str(updated_model_id)))
+                                if prj_compress:
+                                    os.remove(
+                                        os.path.join(project_dir, f"{model_id}.tar.gz")
+                                    )  # remove the tar archive that hls4ml produces
 
-                            # except Exception as e:
-                            # print(e)
+                                    with tarfile.open(
+                                        os.path.join(project_dir, f"{updated_model_id}.tar.gz"),
+                                        "w:gz",
+                                    ) as tar:
+                                        tar.add(
+                                            os.path.join(project_dir, str(updated_model_id)),
+                                            arcname=str(updated_model_id),
+                                        )
+
+                                    shutil.rmtree(os.path.join(project_dir, str(updated_model_id)))
+
+                            except Exception as e:
+                                print(e)
 
 
 def parallel_rnd_synthesis(args):
@@ -648,18 +661,48 @@ def synth_from_json(args):
         meta_data = model_entry["meta_data"]
         model_config = model_entry["model_config"]
         hls_config = model_entry["hls_config"]
-        model_id = meta_data["model_id"]
+        model_id = meta_data.get(
+            "model_id",
+            md5_hash_dict({"model_config": model_config, "hls_config": hls_config}),
+        )
 
         if prj_decompress:
             project_dir = os.path.join(args["output_dir"], "projects")
             tar_path = os.path.join(args["output_dir"], "projects", f"{model_id}.tar.gz")
-            with tarfile.open(tar_path, "r:gz") as tar:
-                tar.extractall(project_dir)
+
+            try:
+                with tarfile.open(tar_path, "r:gz") as tar:
+                    tar.extractall(project_dir)
+
+                    top_level_dirs = {
+                        member.name.split("/")[0]
+                        for member in tar.getmembers()
+                        if member.name.count("/") > 0
+                    }
+                    if len(top_level_dirs) == 1:
+                        extracted_dir = os.path.join(project_dir, next(iter(top_level_dirs)))
+                    else:
+                        raise ValueError(f"Unexpected directory structure: {top_level_dirs}")
+
+                    # rename the extracted project folder to the model_id
+                    new_dir = os.path.join(project_dir, str(model_id))
+                    if extracted_dir != new_dir:
+                        os.rename(extracted_dir, new_dir)
+            except Exception as e:
+                print(e)
+                continue
 
         model = keras_model_from_config(model_config)
 
-        clock_period = str(int(float(model_entry["latency_report"]["target_clock"])))
-        part_number = get_part_from_board(hls_config["board"])
+        clock_period = str(int(float(model_entry["hls_config"]["clock_period"])))
+
+        if "target_part" in model_entry:
+            part_number = model_entry["target_part"]
+        elif "board" in hls_config:
+            part_number = get_part_from_board(hls_config["board"])
+        else:
+            raise ValueError("Failed to find target part number")
+
         io_type = hls_config.get("io_type", "io_parallel")
         backend = model_entry.get("backend", "VivadoAccelerator")
         backend_version = model_entry.get("backend_version", "2019.1")
@@ -679,6 +722,95 @@ def synth_from_json(args):
         if progress_counter is not None and progress_lock is not None:
             with progress_lock:
                 progress_counter.value += 1
+
+
+def sanitize_csynth_data(args):
+    data = args["json_data"]
+    output_dir = args["output_dir"]
+    save_files = args.get("save_files", False)
+
+    progress_counter = args.get("progress_counter", None)
+    progress_lock = args.get("progress_lock", None)
+
+    sanitized_data = []
+    for entry in data:
+        sanitized_entry = {}
+        sanitized_entry["meta_data"] = {}
+        sanitized_entry["meta_data"]["model_id"] = ""
+        sanitized_entry["meta_data"]["model_name"] = entry["meta_data"]["model_name"]
+        sanitized_entry["meta_data"]["artifacts_file"] = ""
+        sanitized_entry["meta_data"]["synthesis_info"] = [
+            {
+                "start_time": entry["meta_data"]["synthesis_start"],
+                "end_time": entry["meta_data"]["synthesis_end"],
+                "cpu": entry["meta_data"]["cpu"],
+                "build_args": {
+                    "reset": False,
+                    "csim": False,
+                    "synth": True,
+                    "cosim": False,
+                    "validation": False,
+                    "export": False,
+                    "vsynth": False,
+                    "fifo_opt": False,
+                    "bitfile": False,
+                },
+            }
+        ]
+
+        sanitized_entry["model_config"] = entry["model_config"]
+        sanitized_entry["hls_config"] = entry["hls_config"]
+        del sanitized_entry["hls_config"]["board"]
+
+        sanitized_entry["resource_report"] = {}
+        sanitized_entry["resource_report"]["CSynthesisReport"] = entry["resource_report"]
+
+        sanitized_entry["latency_report"] = entry["latency_report"]
+
+        sanitized_entry["target_part"] = entry["target_part"]
+        sanitized_entry["backend"] = entry["backend"]
+        sanitized_entry["backend_version"] = entry["backend_version"]
+        sanitized_entry["hls4ml_version"] = entry["hls4ml_version"]
+
+        sanitized_entry["meta_data"]["model_id"] = md5_hash_dict(
+            {
+                "model_config": sanitized_entry["model_config"],
+                "hls_config": sanitized_entry["hls_config"],
+            }
+        )
+        sanitized_entry["meta_data"][
+            "artifacts_file"
+        ] = f"{sanitized_entry['meta_data']['model_id']}.tar.gz"
+
+        if save_files:
+            old_model_id = entry["meta_data"]["model_id"]
+            old_json_path = os.path.join(output_dir, f"{old_model_id}.json")
+            if os.path.exists(old_json_path):
+                os.remove(old_json_path)
+
+            new_model_id = sanitized_entry["meta_data"]["model_id"]
+            new_json_path = os.path.join(output_dir, f"{new_model_id}.json")
+            save_to_json(sanitized_entry, new_json_path, indent=2)
+
+            if os.path.isdir(os.path.join(output_dir, "projects", str(old_model_id))):
+                os.rename(
+                    os.path.join(output_dir, "projects", str(old_model_id)),
+                    os.path.join(output_dir, "projects", str(new_model_id)),
+                )
+
+            if os.path.exists(os.path.join(output_dir, "projects", f"{old_model_id}.tar.gz")):
+                os.rename(
+                    os.path.join(output_dir, "projects", f"{old_model_id}.tar.gz"),
+                    os.path.join(output_dir, "projects", f"{new_model_id}.tar.gz"),
+                )
+
+        sanitized_data.append(sanitized_entry)
+
+        if progress_counter is not None and progress_lock is not None:
+            with progress_lock:
+                progress_counter.value += 1
+
+    return sanitized_data
 
 
 if __name__ == "__main__":
@@ -741,10 +873,11 @@ if __name__ == "__main__":
     #     with open(file_path, "w") as json_file:
     #         json.dump(data.tolist(), json_file, indent=2)
 
-    n_workers = 1
-
     json_path = os.path.join(base_path, "datasets", "vsynth", "*.json")
+    # json_path = os.path.join(base_path, "datasets", "*.json")
     json_data = read_from_json(json_path)
+
+    n_workers = min(16, len(json_data))
 
     build_args = {
         "reset": False,
@@ -804,6 +937,19 @@ if __name__ == "__main__":
                         for idx, data_split in enumerate(data_splits)
                     ],
                 )
+                # result = p.map_async(
+                #     sanitize_csynth_data,
+                #     [
+                #         {
+                #             "json_data": data_split,
+                #             "output_dir": os.path.join(base_path, "datasets", "vsynth"),
+                #             "save_files": True,
+                #             "progress_counter": progress_counter,
+                #             "progress_lock": progress_lock,
+                #         }
+                #         for idx, data_split in enumerate(data_splits)
+                #     ],
+                # )
 
                 while not result.ready():
                     pbar.n = progress_counter.value
@@ -811,8 +957,25 @@ if __name__ == "__main__":
                     time.sleep(1)
 
                 result = result.get()
+                pbar.n = progress_counter.value
+                pbar.refresh()
+
                 p.terminate()
                 p.join()
+
+    # data_split = data_splits[0]
+    # synth_from_json(
+    #     {
+    #         "output_dir": os.path.join(base_path, "datasets", "vsynth"),
+    #         "json_data": data_split,
+    #         "prj_compress": True,
+    #         "prj_decompress": True,
+    #         "xilinx_path": "/opt/Xilinx",
+    #         "build_args": build_args,
+    #         # "progress_counter": progress_counter,
+    #         # "progress_lock": progress_lock,
+    #     }
+    # )
 
     #     hls_config = model_entry["hls_config"]
     #     clock_period = str(int(float(model_entry["latency_report"]["target_clock"])))

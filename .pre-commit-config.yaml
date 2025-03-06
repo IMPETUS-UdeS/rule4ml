@@ -1,13 +1,13 @@
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.4.10
+  rev: v0.9.6
   hooks:
     - id: ruff
       types_or: [ python, jupyter ]
       args: [ --fix ]
 
 - repo: https://github.com/psf/black
-  rev: 24.4.2
+  rev: 25.1.0
   hooks:
   - id: black
     language_version: python3
@@ -20,7 +20,7 @@ repos:
            '--skip-string-normalization']
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.6.0
+  rev: v5.0.0
   hooks:
   - id: check-added-large-files
     args: ['--maxkb=2048']
@@ -34,19 +34,19 @@ repos:
   - id: trailing-whitespace
 
 - repo: https://github.com/PyCQA/isort
-  rev: 5.13.2
+  rev: 6.0.0
   hooks:
   - id: isort
     args: ["--profile", "black", "--line-length=100"]
 
 - repo: https://github.com/asottile/pyupgrade
-  rev: v3.16.0
+  rev: v3.19.1
   hooks:
   - id: pyupgrade
     args: ["--py36-plus"]
 
 - repo: https://github.com/mgedmin/check-manifest
-  rev: "0.49"
+  rev: "0.50"
   hooks:
   - id: check-manifest
     stages: [manual]

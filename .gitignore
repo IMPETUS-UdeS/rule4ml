@@ -42,6 +42,7 @@ notebooks/**
 **/hls4ml_prj*
 *.log
 *.out
+secrets*
 
 _version.py
 format.py
