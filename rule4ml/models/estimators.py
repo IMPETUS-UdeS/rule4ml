@@ -1,6 +1,7 @@
 import itertools
 import json
 import os
+import time
 from dataclasses import dataclass, field
 
 import keras
@@ -21,6 +22,7 @@ from keras.layers import (
 from keras.losses import Loss
 from keras.optimizers import Adam, Optimizer
 from packaging import version
+from sklearn.metrics import r2_score
 
 try:
     import torch
@@ -32,6 +34,7 @@ try:
 except ImportError:
     onnx = None
 
+from rule4ml.models.metrics import rmse, smape
 from rule4ml.parsers.data_parser import (
     boards_data,
     get_global_inputs,
@@ -206,7 +209,7 @@ class MultiModelEstimator:
     def __init__(self):
         self._models = {}
 
-        self._default_boards = list(boards_data.keys())
+        self._default_boards = ["pynq-z2", "zcu102", "alveo-u200"]
         self._default_strategies = ["Latency", "Resource"]
         self._default_precisions = ["ap_fixed<2, 1>", "ap_fixed<8, 3>", "ap_fixed<16, 6>"]
         self._reuse_factors = [1, 2, 4, 8, 16, 32, 64]
@@ -314,7 +317,7 @@ class MultiModelEstimator:
         outputs_df = pd.DataFrame(outputs).round(2)
         if not outputs_df.empty:
             sorted_boards = sorted(
-                outputs_df["Board"].unique(), key=lambda x: self._default_boards.index(x)
+                outputs_df["Board"].unique(), key=lambda x: list(boards_data.keys()).index(x)
             )
             outputs_df["Board"] = pd.Categorical(
                 outputs_df["Board"], categories=sorted_boards, ordered=True
@@ -611,7 +614,7 @@ class ModelWrapper:
                 print(f"{key}: {value.shape}")
 
         self.output_labels = targets_df.columns.values
-        self.dataset = tf.data.Dataset.from_tensor_slices((input_dict, targets_df.values))
+        self.dataset = tf.data.Dataset.from_tensor_slices((input_dict, np.array(targets_df.values)))
         if val_ratio > 0.0:
             val_len = int(len(self.dataset) * val_ratio)
             val_data = self.dataset.take(val_len)
@@ -708,6 +711,21 @@ class ModelWrapper:
         if not isinstance(hls_configs, (tuple, list)):
             raise TypeError("hls_configs expects a list of HLS configuration dictionaries.")
 
+        # Check if hls_configs boards and strategies are supported
+        supported_boards = self.global_categorical_maps.get("board", [])
+        supported_strategies = self.global_categorical_maps.get("strategy", [])
+        for hls_config in hls_configs:
+            config_board = hls_config.get("board", None)
+            config_strategy = hls_config["model"].get("strategy", None)
+            if config_board.lower() not in supported_boards:
+                raise ValueError(
+                    f"Model \"{self.model_name}\" does not support board \"{config_board}\". Supported boards: {list(supported_boards.keys())}"
+                )
+            if config_strategy.lower() not in supported_strategies:
+                raise ValueError(
+                    f"Model \"{self.model_name}\" does not support strategy \"{config_strategy}\". Supported strategies: {list(supported_strategies.keys())}"
+                )
+
         global_inputs = []
         sequential_inputs = []
 
@@ -741,7 +759,7 @@ class ModelWrapper:
 
         return self.predict_from_df(inputs_df, verbose=verbose)
 
-    def predict_from_df(self, inputs_df, verbose=0):
+    def predict_from_df(self, inputs_df, targets=None, verbose=0):
         feature_labels = list(self.global_numerical_labels) + list(
             self.global_categorical_maps.keys()
         )
@@ -757,7 +775,25 @@ class ModelWrapper:
         inputs_df = inputs_df[feature_labels]
         inputs = self.build_inputs(inputs_df)
 
+        start_time = time.time()
         prediction = self.model.predict(inputs, 0, verbose=verbose)
+        total_time = time.time() - start_time
+        avg_inference_time = total_time / len(inputs_df)
+
+        if verbose > 1:
+            r2 = r2_score(targets, prediction)
+            print(f"R2 Score: {r2:.1f}")
+
+            smape_value = smape(targets, prediction)
+            print(f"SMAPE: {smape_value:.1f}%")
+
+            rmse_value = rmse(targets, prediction)
+            print(f"RMSE: {rmse_value:.1f}")
+
+            print(f"Average Inference Time: {avg_inference_time:.2E} seconds")
+
+            return prediction, r2, smape_value, rmse_value, avg_inference_time
+
         return prediction
 
     def to_config(self):

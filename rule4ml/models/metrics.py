@@ -1,4 +1,5 @@
 import keras
+import numpy as np
 import tensorflow as tf
 from packaging import version
 
@@ -7,6 +8,26 @@ if version.parse(keras.__version__).major >= 3:
     from keras import ops as kops
 else:
     kops = None
+
+
+def smape(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+
+    y_true = y_true.squeeze()
+    y_pred = y_pred.squeeze()
+
+    return 200 * np.mean(np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1))
+
+
+def rmse(y_true, y_pred):
+    y_true = np.array(y_true, dtype=np.float64)
+    y_pred = np.array(y_pred, dtype=np.float64)
+
+    y_true = y_true.squeeze()
+    y_pred = y_pred.squeeze()
+
+    return np.sqrt(np.mean((y_true - y_pred) ** 2))
 
 
 def parametric_mape(y_index, name="", eps=1e-6):

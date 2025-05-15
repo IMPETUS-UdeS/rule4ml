@@ -1,19 +1,18 @@
+import fnmatch
 import inspect
 import json
 import os
+import re
 import shutil
 import tarfile
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from multiprocessing import Manager, Pool
 
 import hls4ml
 import numpy as np
 import tensorflow as tf
 from hls4ml.backends.backend import get_available_backends, get_backend
 from nn_gen import GeneratorSettings, generate_fc_network
-from tqdm import tqdm
 from utils import (
     IntRange,
     Power2Range,
@@ -25,7 +24,6 @@ from utils import (
     save_to_json,
 )
 
-from rule4ml.parsers.data_parser import read_from_json
 from rule4ml.parsers.network_parser import (
     config_from_keras_model,
     config_from_torch_model,
@@ -813,7 +811,160 @@ def sanitize_csynth_data(args):
     return sanitized_data
 
 
+def change_json_file_keys(args):
+    data = args["json_data"]
+    output_dir = args["output_dir"]
+    save_files = args.get("save_files", False)
+
+    progress_counter = args.get("progress_counter", None)
+    progress_lock = args.get("progress_lock", None)
+
+    changed_data = []
+    for entry in data:
+        changed_entry = {}
+        changed_entry["meta_data"] = entry["meta_data"]
+        changed_entry["model_config"] = entry["model_config"]
+        changed_entry["hls_config"] = entry["hls_config"]
+
+        changed_entry["hls_resource_report"] = {}
+        for key in entry["resource_report"]["CSynthesisReport"]:
+            changed_entry["hls_resource_report"][key.lower()] = entry["resource_report"][
+                "CSynthesisReport"
+            ][key]
+
+        changed_entry["resource_report"] = {}
+        for key in entry["resource_report"]["VivadoSynthReport"]:
+            changed_entry["resource_report"][key.lower()] = entry["resource_report"][
+                "VivadoSynthReport"
+            ][key]
+
+        changed_entry["latency_report"] = entry["latency_report"]
+        changed_entry["target_part"] = entry["target_part"]
+        changed_entry["backend"] = entry["backend"]
+        changed_entry["backend_version"] = entry["backend_version"]
+        changed_entry["hls4ml_version"] = entry["hls4ml_version"]
+
+        if save_files:
+            output_json_path = os.path.join(
+                output_dir, f"{changed_entry['meta_data']['model_id']}.json"
+            )
+            save_to_json(changed_entry, output_json_path, indent=2)
+
+        changed_data.append(changed_entry)
+
+        if progress_counter is not None and progress_lock is not None:
+            with progress_lock:
+                progress_counter.value += 1
+
+    return changed_data
+
+
+def read_report_from_tar(pattern, tar_path):
+    report_content = ""
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            for member in tar.getmembers():
+                if fnmatch.fnmatch(member.name, pattern):
+                    report_file = tar.extractfile(member)
+                    if report_file:
+                        report_content = report_file.read().decode("utf-8")
+                        break
+    except Exception as e:
+        print(f"Error reading tar file {tar_path}: {e}")
+        return ""
+
+    return report_content
+
+
+def extract_ii_from_csynth_report(args):
+    json_data = args["json_data"]
+    base_dir = args["base_dir"]
+    output_dir = args["output_dir"]
+    save_files = args.get("save_files", False)
+
+    csynth_counter = args.get("csynth_counter", None)
+    csynth_lock = args.get("csynth_lock", None)
+
+    reports_counter = args.get("reports_counter", None)
+    reports_lock = args.get("reports_lock", None)
+
+    progress_counter = args.get("progress_counter", None)
+    progress_lock = args.get("progress_lock", None)
+
+    header_pattern = re.compile(
+        r"(\s*\|\s*latency\s*[a-zA-Z0-9()]*)+\s*\|\s*interval\s*\|\s*pipeline\s*\|\s*"
+    )
+    # interval_pattern = re.compile(r"\s*\|\s*(\d+)\|\s*(\d+)\|\s*(\d+)\|\s*(\d+)\|\s*\w*\s*\|\s*")
+    interval_pattern = re.compile(r"([-+]?\d*\.\d+|[-+]?\d+)")
+
+    project_dir = os.path.join(base_dir, "projects")
+    for entry in json_data:
+        model_id = entry["meta_data"].get("model_id", None)
+        if model_id is None:
+            model_id = entry["meta_data"]["artifacts_file"].split(".")[0]
+        if "CSynthesisReport" in entry["resource_report"]:
+            if csynth_counter is not None and csynth_lock is not None:
+                with csynth_lock:
+                    csynth_counter.value += 1
+
+        project_file = os.path.join(project_dir, f"{model_id}.tar.gz")
+        if not os.path.isfile(project_file):
+            continue
+
+        report_pattern = f"*{model_id}*/myproject_prj/solution1/syn/report/myproject_csynth.rpt"
+        report_content = read_report_from_tar(report_pattern, project_file)
+        if report_content:
+            report_lines = report_content.split("\n")
+            header_found = False
+            for line in report_lines:
+                line = line.lower().strip()
+                if header_pattern.match(line):
+                    header_found = True
+                    continue
+
+                if header_found:
+                    numbers = interval_pattern.findall(line)
+                    if numbers:
+                        interval_min = float(numbers[-2])
+                        interval_max = float(numbers[-1])
+                        entry["latency_report"]["interval_min"] = str(interval_min)
+                        entry["latency_report"]["interval_max"] = str(interval_max)
+                        break
+
+            if reports_counter is not None and reports_lock is not None:
+                with reports_lock:
+                    reports_counter.value += 1
+
+        if save_files:
+            # if "VivadoSynthReport" in entry["resource_report"]:
+            output_json_path = os.path.join(output_dir, f"{model_id}.json")
+            save_to_json(entry, output_json_path, indent=2)
+
+        if progress_counter is not None and progress_lock is not None:
+            with progress_lock:
+                progress_counter.value += 1
+
+    # print(f"Found {found_reports} reports, csynth jsons total: {jsons_with_csynth}, total jsons: {len(json_data)}")
+
+
 if __name__ == "__main__":
+    pass
+
+    # split_data = read_from_json(
+    #     os.path.join(base_path, "datasets", "iccad_submit", "preprocessed", "benchmark", "*.json"),
+    # )
+    # output_file = os.path.join(base_path, "datasets", "iccad_submit", "preprocessed", "benchmark_vsynth_with_ii.json")
+    # with open(output_file, "w") as json_file:
+    #     json.dump(split_data, json_file, indent=2)
+
+    # extract_ii_from_csynth_report({
+    #     "input_dir": os.path.join(base_path, "datasets", "vsynth_2"),
+    #     "output_dir": os.path.join(base_path, "datasets", "vsynth_2"),
+    #     "save_files": True,
+    #     "progress_counter": None,
+    #     "progress_lock": None,
+    # })
+
     # gen_settings = GeneratorSettings(
     #     input_range=Power2Range(16, 32),
     #     layer_range=IntRange(2, 3),
@@ -873,95 +1024,195 @@ if __name__ == "__main__":
     #     with open(file_path, "w") as json_file:
     #         json.dump(data.tolist(), json_file, indent=2)
 
-    json_path = os.path.join(base_path, "datasets", "vsynth", "*.json")
+    # json_path = os.path.join(base_path, "datasets", "vsynth_2", "*.json")
+    # json_path = os.path.join(base_path, "datasets", "vsynth_3_4", "*.json")
     # json_path = os.path.join(base_path, "datasets", "*.json")
-    json_data = read_from_json(json_path)
+    # json_path = os.path.join(base_path, "datasets", "iccad_submit", "*.json")
+    # json_path = os.path.join(base_path, "datasets", "iccad_submit", "vsynth_2", "*.json")
+    # json_path = os.path.join(base_path, "datasets", "iccad_submit", "vsynth_3_4", "*.json")
+    # json_path = os.path.join(base_path, "datasets", "benchmark", "*.json")
+    # json_data = read_from_json(json_path)
 
-    n_workers = min(16, len(json_data))
+    # def archive_vsynth_jsons(json_path):
+    #     json_data = read_from_json(json_path)
+    #     csynth_count = 0
+    #     vsynth_count = 0
+    #     vsynth_json_paths = []
+    #     for model_entry in json_data:
+    #         res_report = model_entry["resource_report"]
+    #         if "CSynthesisReport" in res_report:
+    #             csynth_count += 1
+    #         if "VivadoSynthReport" in res_report:
+    #             vsynth_count += 1
+    #             json_path = os.path.join(os.path.dirname(json_path), f"{model_entry['meta_data']['model_id']}.json")
+    #             if os.path.isfile(json_path):
+    #                 vsynth_json_paths.append(json_path)
 
-    build_args = {
-        "reset": False,
-        "csim": False,
-        "cosim": False,
-        "synth": False,
-        "vsynth": True,
-        "validation": False,
-        "export": False,
-        "fifo_opt": False,
-        "bitfile": False,
-    }
+    #     json_dir = os.path.dirname(json_path)
+    #     all_json_archive = os.path.join(json_dir, os.path.basename(json_dir) + "_jsons.tar.gz")
+    #     with tarfile.open(all_json_archive, "w:gz") as tar:
+    #         for json_path in tqdm(vsynth_json_paths):
+    #             tar.add(json_path, arcname=os.path.basename(json_path))
 
-    skip_ids = [
-        # Path(f).stem for f in glob.glob(
-        #     os.path.join(base_path, "datasets", "vsynth", "*.json")
-        # )
-    ]
+    #     print(f"Total: {len(json_data)}, CSynth: {csynth_count}, VSynth: {vsynth_count}")
 
-    data_left_to_synthesize = []
-    for model_entry in json_data:
-        model_id = md5_hash_dict(
-            {"model_config": model_entry["model_config"], "hls_config": model_entry["hls_config"]}
-        )
+    # def archive_vsynth_projects(json_path):
+    #     json_data = read_from_json(json_path)
+    #     csynth_count = 0
+    #     vsynth_count = 0
+    #     project_dir = os.path.join(os.path.dirname(json_path), "projects")
+    #     vsynth_tar_paths = []
+    #     for model_entry in json_data:
+    #         res_report = model_entry["resource_report"]
+    #         if "CSynthesisReport" in res_report:
+    #             csynth_count += 1
+    #         if "VivadoSynthReport" in res_report:
+    #             vsynth_count += 1
+    #             tar_path = os.path.join(project_dir, f"{model_entry['meta_data']['model_id']}.tar.gz")
+    #             if os.path.isfile(tar_path):
+    #                 vsynth_tar_paths.append(tar_path)
 
-        res_report = model_entry["resource_report"]
-        target_reports = []
-        if build_args["synth"]:
-            target_reports.append("CSynthesisReport")
-        if build_args["vsynth"]:
-            target_reports.append("VivadoSynthReport")
+    #     all_tars_archive = os.path.join(project_dir, os.path.basename(os.path.dirname(json_path)) + "_projects.tar.gz")
+    #     with tarfile.open(all_tars_archive, "w:gz") as tar:
+    #         for tar_path in tqdm(vsynth_tar_paths):
+    #             tar.add(tar_path, arcname=os.path.basename(tar_path))
 
-        if model_id not in skip_ids and not all(report in res_report for report in target_reports):
-            data_left_to_synthesize.append(model_entry)
+    #     print(f"Total: {len(json_data)}, CSynth: {csynth_count}, VSynth: {vsynth_count}")
 
-    data_splits = np.array_split(data_left_to_synthesize, n_workers)
+    # archive_vsynth_jsons(os.path.join(base_path, "datasets", "vsynth_2", "*.json"))
+    # archive_vsynth_jsons(os.path.join(base_path, "datasets", "vsynth_3_4", "*.json"))
 
-    with Manager() as manager:
-        progress_counter = manager.Value("i", 0)
-        progress_lock = manager.Lock()
+    # archive_vsynth_projects(os.path.join(base_path, "datasets", "vsynth_2", "*.json"))
+    # archive_vsynth_projects(os.path.join(base_path, "datasets", "vsynth_3_4", "*.json"))
 
-        with tqdm(total=len(data_left_to_synthesize), desc="Synthesis Loop") as pbar:
-            with Pool(n_workers) as p:
-                result = p.map_async(
-                    synth_from_json,
-                    [
-                        {
-                            "output_dir": os.path.join(base_path, "datasets", "vsynth"),
-                            "json_data": data_split,
-                            "prj_compress": True,
-                            "prj_decompress": True,
-                            "xilinx_path": "/opt/Xilinx",
-                            "build_args": build_args,
-                            "progress_counter": progress_counter,
-                            "progress_lock": progress_lock,
-                        }
-                        for idx, data_split in enumerate(data_splits)
-                    ],
-                )
-                # result = p.map_async(
-                #     sanitize_csynth_data,
-                #     [
-                #         {
-                #             "json_data": data_split,
-                #             "output_dir": os.path.join(base_path, "datasets", "vsynth"),
-                #             "save_files": True,
-                #             "progress_counter": progress_counter,
-                #             "progress_lock": progress_lock,
-                #         }
-                #         for idx, data_split in enumerate(data_splits)
-                #     ],
-                # )
+    # n_workers = min(16, len(json_data))
 
-                while not result.ready():
-                    pbar.n = progress_counter.value
-                    pbar.refresh()
-                    time.sleep(1)
+    # build_args = {
+    #     "reset": False,
+    #     "csim": False,
+    #     "cosim": False,
+    #     "synth": False,
+    #     "vsynth": True,
+    #     "validation": False,
+    #     "export": False,
+    #     "fifo_opt": False,
+    #     "bitfile": False,
+    # }
 
-                result = result.get()
-                pbar.n = progress_counter.value
-                pbar.refresh()
+    # skip_ids = [
+    #     # Path(f).stem for f in glob.glob(
+    #     #     os.path.join(base_path, "datasets", "vsynth", "*.json")
+    #     # )
+    # ]
 
-                p.terminate()
-                p.join()
+    # data_left_to_process = []
+    # for model_entry in json_data:
+    #     model_id = md5_hash_dict(
+    #         {"model_config": model_entry["model_config"], "hls_config": model_entry["hls_config"]}
+    #     )
+
+    #     res_report = model_entry["resource_report"]
+    #     target_reports = []
+    #     if build_args["synth"]:
+    #         target_reports.append("CSynthesisReport")
+    #     if build_args["vsynth"]:
+    #         target_reports.append("VivadoSynthReport")
+
+    #     if model_id not in skip_ids and not all(report in res_report for report in target_reports):
+    #         data_left_to_process.append(model_entry)
+
+    # data_splits = np.array_split(data_left_to_process, n_workers)
+
+    # data_left_to_process = json_data
+    # data_splits = np.array_split(data_left_to_process, n_workers)
+
+    # with Manager() as manager:
+    #     progress_counter = manager.Value("i", 0)
+    #     progress_lock = manager.Lock()
+
+    # csynth_counter = manager.Value("j", 0)
+    # csynth_lock = manager.Lock()
+
+    # reports_counter = manager.Value("k", 0)
+    # reports_lock = manager.Lock()
+
+    # with tqdm(total=len(data_left_to_process), desc="Synthesis Loop") as pbar:
+    #     with Pool(n_workers) as p:
+    # result = p.map_async(
+    #     synth_from_json,
+    #     [
+    #         {
+    #             "output_dir": os.path.join(base_path, "datasets", "vsynth_3_4"),
+    #             "json_data": data_split,
+    #             "prj_compress": True,
+    #             "prj_decompress": True,
+    #             "xilinx_path": "/opt/Xilinx",
+    #             "build_args": build_args,
+    #             "progress_counter": progress_counter,
+    #             "progress_lock": progress_lock,
+    #         }
+    #         for idx, data_split in enumerate(data_splits)
+    #     ],
+    # )
+    # result = p.map_async(
+    #     sanitize_csynth_data,
+    #     [
+    #         {
+    #             "json_data": data_split,
+    #             "output_dir": os.path.join(base_path, "datasets", "vsynth_3_4"),
+    #             "save_files": True,
+    #             "progress_counter": progress_counter,
+    #             "progress_lock": progress_lock,
+    #         }
+    #         for idx, data_split in enumerate(data_splits)
+    #     ],
+    # )
+    # result = p.map_async(
+    #     change_json_file_keys,
+    #     [
+    #         {
+    #             "json_data": data_split,
+    #             "output_dir": os.path.join(base_path, "datasets", "iccad_submit", "preprocessed"),
+    #             "save_files": True,
+    #             "progress_counter": progress_counter,
+    #             "progress_lock": progress_lock,
+    #         }
+    #         for idx, data_split in enumerate(data_splits)
+    #     ],
+    # )
+    # result = p.map_async(
+    #     extract_ii_from_csynth_report,
+    #     [
+    #         {
+    #             "json_data": data_split,
+    #             "base_dir": os.path.join(base_path, "datasets", "benchmark"),
+    #             "output_dir": os.path.join(base_path, "datasets", "iccad_submit", "preprocessed", "benchmark"),
+    #             "save_files": True,
+    #             # "csynth_counter": csynth_counter,
+    #             # "csynth_lock": csynth_lock,
+    #             # "reports_counter": reports_counter,
+    #             # "reports_lock": reports_lock,
+    #             "progress_counter": progress_counter,
+    #             "progress_lock": progress_lock,
+    #         }
+    #         for idx, data_split in enumerate(data_splits)
+    #     ],
+    # )
+
+    # while not result.ready():
+    #     pbar.n = progress_counter.value
+    #     pbar.refresh()
+    # print(f"CSynth: {csynth_counter.value}, Reports: {reports_counter.value}")
+    # time.sleep(1)
+
+    # result = result.get()
+    # pbar.n = progress_counter.value
+    # pbar.refresh()
+
+    # print(f"Total: {len(data_left_to_process)}, CSynth: {csynth_counter.value}, Reports: {reports_counter.value}")
+
+    # p.terminate()
+    # p.join()
 
     # data_split = data_splits[0]
     # synth_from_json(

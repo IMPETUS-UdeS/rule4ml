@@ -4,7 +4,7 @@ import keras
 import numpy as np
 import tensorflow as tf
 
-from rule4ml.parsers.utils import get_closest_reuse_factor
+from rule4ml.parsers.utils import camel_keys_to_snake, get_closest_reuse_factor
 
 try:
     import torch
@@ -40,6 +40,8 @@ def config_from_keras_model(model, hls_config):
 
     dummy_input = tf.random.uniform((1, *model_input_shape[1:]))
     _ = model(dummy_input)
+
+    hls_config = camel_keys_to_snake(hls_config)
 
     layers_data = []
     for layer in model.layers:
@@ -88,6 +90,7 @@ def config_from_keras_model(model, hls_config):
         output_shape = tuple(output_shape)
         layer_dict["output_shape"] = tuple(output_shape)
 
+        # Tracking inbound layers can be useful for add/concatenate layers
         inbound_nodes = layer.inbound_nodes
         inbound_layers = []
         for node in inbound_nodes:
@@ -115,10 +118,11 @@ def config_from_keras_model(model, hls_config):
             layer_dict["neurons"] = int(layer_config["units"])
             layer_dict["use_bias"] = layer_config["use_bias"]
 
-        elif class_name in ["Conv2D", "QConv2D"]:
-            layer_dict["n_channel"] = int(input_shape[-1])
-            layer_dict["n_filter"] = int(layer_config["filters"])
+        elif class_name in ["Conv1D", "Conv2D", "QConv1D", "QConv2D"]:
+            layer_dict["channels"] = int(input_shape[-1])
+            layer_dict["filters"] = int(layer_config["filters"])
             layer_dict["kernel_size"] = tuple([int(x) for x in layer_config["kernel_size"]])
+            layer_dict["strides"] = tuple([int(x) for x in layer_config["strides"]])
             layer_dict["padding"] = layer_config["padding"]
             layer_dict["use_bias"] = layer_config["use_bias"]
 
@@ -136,25 +140,20 @@ def config_from_keras_model(model, hls_config):
             dtype = dtype["config"]["name"]
         layer_dict["dtype"] = dtype
 
-        reuse_factor = hls_config["Model"]["ReuseFactor"]
-        if "LayerType" in hls_config and class_name in hls_config["LayerType"]:
-            reuse_factor = hls_config["LayerType"][class_name].get("ReuseFactor", reuse_factor)
-        if "LayerName" in hls_config and layer.name in hls_config["LayerName"]:
-            reuse_factor = hls_config["LayerName"][layer.name].get("ReuseFactor", reuse_factor)
+        reuse_factor = hls_config["model"]["reuse_factor"]
+        if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
+            reuse_factor = hls_config["layer_type"][class_name].get("reuse_factor", reuse_factor)
+        if "layer_name" in hls_config and layer.name in hls_config["layer_name"]:
+            reuse_factor = hls_config["layer_name"][layer.name].get("reuse_factor", reuse_factor)
 
         layer_dict["reuse_factor"] = reuse_factor
-        if class_name in ["Dense", "QDense", "Conv2D", "QConv2D"]:
-            if class_name in ["Dense", "QDense"]:
-                n_in = np.prod([x for x in input_shape if x is not None])
-                n_out = np.prod([x for x in output_shape if x is not None])
-            if class_name == ["Conv2D", "QConv2D"]:
-                n_in = (
-                    layer_dict["n_channel"]
-                    * layer_dict["kernel_size"][0]
-                    * layer_dict["kernel_size"][1]
-                )
-                n_out = layer_dict["n_filter"]
-
+        if class_name in ["Dense", "QDense"]:
+            n_in = np.prod([x for x in input_shape if x is not None])
+            n_out = np.prod([x for x in output_shape if x is not None])
+            layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+        elif class_name in ["Conv1D", "Conv2D", "QConv1D", "QConv2D"]:
+            n_in = layer_dict["channels"] * np.prod(layer_dict["kernel_size"])
+            n_out = layer_dict["filters"]
             layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
 
         layers_data.append(layer_dict)
@@ -256,6 +255,8 @@ def config_from_torch_model(model, hls_config):
         "BatchNorm2d": "BatchNormalization",
     }
 
+    hls_config = camel_keys_to_snake(hls_config)
+
     layers_data = OrderedDict()
     model_layers = get_torch_layers(model)
     traced_model = torch.fx.symbolic_trace(model)
@@ -269,11 +270,13 @@ def config_from_torch_model(model, hls_config):
         if node.op == "placeholder":
             class_name = "InputLayer"
 
-            reuse_factor = hls_config["Model"]["ReuseFactor"]
-            if "LayerType" in hls_config and class_name in hls_config["LayerType"]:
-                reuse_factor = hls_config["LayerType"][class_name].get("ReuseFactor", reuse_factor)
-            if "LayerName" in hls_config and node.name in hls_config["LayerName"]:
-                reuse_factor = hls_config["LayerName"][node.name].get("ReuseFactor", reuse_factor)
+            reuse_factor = hls_config["model"]["reuse_factor"]
+            if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
+                reuse_factor = hls_config["layer_type"][class_name].get(
+                    "reuse_factor", reuse_factor
+                )
+            if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
+                reuse_factor = hls_config["layer_name"][node.name].get("reuse_factor", reuse_factor)
 
             layer_dict = {
                 "class_name": class_name,
@@ -324,13 +327,13 @@ def config_from_torch_model(model, hls_config):
             else:
                 raise TypeError(f"Model has unexpected first layer of type {class_name}.")
 
-            reuse_factor = hls_config["Model"]["ReuseFactor"]
-            if "LayerType" in hls_config and mapped_class_name in hls_config["LayerType"]:
-                reuse_factor = hls_config["LayerType"][mapped_class_name].get(
-                    "ReuseFactor", reuse_factor
+            reuse_factor = hls_config["model"]["reuse_factor"]
+            if "layer_type" in hls_config and mapped_class_name in hls_config["layer_type"]:
+                reuse_factor = hls_config["layer_type"][mapped_class_name].get(
+                    "reuse_factor", reuse_factor
                 )
-            if "LayerName" in hls_config and node.name in hls_config["LayerName"]:
-                reuse_factor = hls_config["LayerName"][node.name].get("ReuseFactor", reuse_factor)
+            if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
+                reuse_factor = hls_config["layer_name"][node.name].get("reuse_factor", reuse_factor)
 
             layer_dict["reuse_factor"] = reuse_factor
             if mapped_class_name in ["Dense"]:

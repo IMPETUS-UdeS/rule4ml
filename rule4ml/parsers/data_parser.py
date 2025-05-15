@@ -6,7 +6,12 @@ from glob import glob
 import numpy as np
 import pandas as pd
 
-from rule4ml.parsers.utils import fixed_precision_to_bit_width, unwrap_nested_dicts
+from rule4ml.parsers.utils import (
+    camel_keys_to_snake,
+    fixed_precision_to_bit_width,
+    get_board_from_part,
+    unwrap_nested_dicts,
+)
 
 # Loading boards info
 boards_path = os.path.join(os.path.dirname(__file__), "supported_boards.json")
@@ -19,14 +24,16 @@ default_board_map = {key.lower(): idx + 1 for idx, key in enumerate(boards_data.
 default_layer_type_map = {
     "inputlayer": 1,
     "dense": 2,
-    "relu": 3,
-    "sigmoid": 4,
-    "tanh": 5,
-    "softmax": 6,
-    "batchnormalization": 7,
-    "add": 8,
-    "concatenate": 9,
-    "dropout": 10,
+    "conv1d": 3,
+    "conv2d": 4,
+    "relu": 5,
+    "sigmoid": 6,
+    "tanh": 7,
+    "softmax": 8,
+    "batchnormalization": 9,
+    "add": 10,
+    "concatenate": 11,
+    "dropout": 12,
 }
 default_precision_map = {
     'ap_fixed<2, 1>': 1,
@@ -217,7 +224,10 @@ def read_from_json(file_patterns, data_filter: ParsedDataFilter = None):
 
     for filename in json_files:
         with open(filename) as json_file:
-            json_data += json.load(json_file)
+            file_data = json.load(json_file)
+            if not isinstance(file_data, list):
+                file_data = [file_data]
+            json_data += file_data
 
     # Optionally filter the json data
     if data_filter is not None:
@@ -248,6 +258,9 @@ def get_global_data(parsed_data):
     for model_data in parsed_data:
         model_config = model_data["model_config"]
         hls_config = model_data["hls_config"]
+        target_part = model_data.get("target_part", None)
+        if target_part:
+            hls_config["board"] = get_board_from_part(target_part)
 
         meta.append(model_data["meta_data"])
         global_inputs.append(get_global_inputs(model_config, hls_config))
@@ -347,6 +360,26 @@ def get_global_inputs(model_config, hls_config):
             "reuse": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
             "count": 0,
         },
+        "conv1d": {
+            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "filters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "kernel_size": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "strides": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "reuse": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "count": 0,
+        },
+        "conv2d": {
+            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "filters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "kernel_size": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "strides": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "reuse": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "count": 0,
+        },
         "batchnormalization": {
             "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
             "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
@@ -424,6 +457,9 @@ def get_global_inputs(model_config, hls_config):
 
     for idx, layer in enumerate(model_config):
         layer_class = layer["class_name"].lower()
+        if layer_class[0] == "q" and layer_class[1:] in features_to_extract:
+            layer_class = layer_class[1:]
+
         if layer_class == "activation":
             layer_class = layer["activation"]
 
@@ -445,10 +481,14 @@ def get_global_inputs(model_config, hls_config):
 
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
 
-    precision = hls_config["Model"]["Precision"]
+    hls_config = camel_keys_to_snake(hls_config)
+
+    precision = hls_config["model"]["precision"]
+    if isinstance(precision, dict):
+        precision = precision["default"]
     total_bits, fractional_bits = fixed_precision_to_bit_width(precision)
 
-    strategy = hls_config["Model"]["Strategy"]
+    strategy = hls_config["model"]["strategy"]
     board = hls_config["board"]
 
     inputs = {
@@ -458,7 +498,7 @@ def get_global_inputs(model_config, hls_config):
         "bit_width": total_bits,
         "integer_bits": total_bits - fractional_bits,
         "fractional_bits": fractional_bits,
-        "global_reuse": hls_config["Model"]["ReuseFactor"],
+        "global_reuse": hls_config["model"]["reuse_factor"],
         "reuse_mean": reuse_factor_mean,
     }
     inputs.update(extracted_features)
@@ -489,6 +529,15 @@ def get_prediction_targets(model_data, norm_board=None):
     ff = resource_report["ff"]
     lut = resource_report["lut"]
 
+    if isinstance(bram, str):
+        bram = float(bram.strip())
+    if isinstance(dsp, str):
+        dsp = float(dsp.strip())
+    if isinstance(ff, str):
+        ff = float(ff.strip())
+    if isinstance(lut, str):
+        lut = float(lut.strip())
+
     if norm_board is None:
         targets = {
             "bram": bram,
@@ -512,7 +561,23 @@ def get_prediction_targets(model_data, norm_board=None):
 
     cycles_min = latency_report["cycles_min"]
     cycles_max = latency_report["cycles_max"]
-    targets.update({"cycles": (cycles_min + cycles_max) / 2.0})
+    interval_min = latency_report.get("interval_min", None)
+    interval_max = latency_report.get("interval_max", None)
+
+    if isinstance(cycles_min, str):
+        cycles_min = float(cycles_min.strip())
+    if isinstance(cycles_max, str):
+        cycles_max = float(cycles_max.strip())
+    if isinstance(interval_min, str):
+        interval_min = float(interval_min.strip())
+    if isinstance(interval_max, str):
+        interval_max = float(interval_max.strip())
+
+    targets["cycles"] = (cycles_min + cycles_max) / 2.0
+    if interval_min is not None and interval_max is not None:
+        targets["interval"] = (interval_min + interval_max) / 2.0
+    else:
+        targets["interval"] = None
 
     return targets
 

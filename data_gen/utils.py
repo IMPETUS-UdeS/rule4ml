@@ -153,7 +153,6 @@ def data_from_synthesis(synth_dict: dict):
     for report in target_reports:
         if report in synth_dict:
             resource_dict[report] = {}
-            print(f"{report}: {synth_dict[report]}")
             for k1 in res_keys:
                 for k2 in synth_dict[report]:
                     if k2.startswith(k1):
