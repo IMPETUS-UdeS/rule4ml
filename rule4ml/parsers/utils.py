@@ -31,6 +31,32 @@ def camel_keys_to_snake(d: dict, recursive=True):
     return new_dict
 
 
+def to_lower_keys(d: dict, recursive=True):
+    """
+    Transforms dictionary keys to lower case.
+
+    Args:
+        d (dict): Targeted dictionary for keys conversion.
+        recursive (bool, optional): Whether to apply to nested dictionaries. Defaults to True.
+
+    Returns:
+        dict: Transformed dictionary.
+    """
+
+    if not isinstance(d, dict):
+        return d
+
+    new_dict = {}
+    for key, value in d.items():
+        new_key = key.lower()
+        if recursive and isinstance(value, dict):
+            new_dict[new_key] = to_lower_keys(value, recursive=True)
+        else:
+            new_dict[new_key] = value
+
+    return new_dict
+
+
 def unwrap_nested_dicts(d, prefix=None):
     """
     _summary_
@@ -55,6 +81,13 @@ def unwrap_nested_dicts(d, prefix=None):
             items.append((new_key, value))
 
     return dict(items)
+
+
+def get_activation_name(activation):
+    match = re.match(r"quantized_(\w+)(?:\(?[^)]*\)?)", activation)
+    if match:
+        return match.group(1)
+    return activation
 
 
 def fixed_precision_to_bit_width(precision: str):

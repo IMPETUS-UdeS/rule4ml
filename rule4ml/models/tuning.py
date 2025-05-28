@@ -2,7 +2,7 @@ from datetime import datetime
 
 import keras_tuner as kt
 
-from rule4ml.models.estimators import MLPSettings, TrainSettings
+from rule4ml.models.wrappers import MLPSettings, TrainSettings
 
 
 class Searcher:

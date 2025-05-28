@@ -9,7 +9,9 @@ import pandas as pd
 from rule4ml.parsers.utils import (
     camel_keys_to_snake,
     fixed_precision_to_bit_width,
+    get_activation_name,
     get_board_from_part,
+    to_lower_keys,
     unwrap_nested_dicts,
 )
 
@@ -26,20 +28,19 @@ default_layer_type_map = {
     "dense": 2,
     "conv1d": 3,
     "conv2d": 4,
-    "relu": 5,
-    "sigmoid": 6,
-    "tanh": 7,
-    "softmax": 8,
-    "batchnormalization": 9,
-    "add": 10,
-    "concatenate": 11,
-    "dropout": 12,
-}
-default_precision_map = {
-    'ap_fixed<2, 1>': 1,
-    'ap_fixed<8, 3>': 2,
-    'ap_fixed<8, 4>': 3,
-    'ap_fixed<16, 6>': 4,
+    "maxpooling1d": 5,
+    "averagepooling1d": 6,
+    "maxpooling2d": 7,
+    "averagepooling2d": 8,
+    "relu": 9,
+    "sigmoid": 10,
+    "tanh": 11,
+    "softmax": 12,
+    "batchnormalization": 13,
+    "add": 14,
+    "concatenate": 15,
+    "dropout": 16,
+    "flatten": 17,
 }
 default_strategy_map = {"latency": 1, "resource": 2}
 
@@ -105,6 +106,8 @@ class ParsedDataFilter:
     )
 
     boards: list = field(default_factory=lambda: ["pynq-z2", "zcu102", "alveo-u200"])
+
+    resource_keys: list = field(default_factory=lambda: ["CSynthesisReport"])
 
 
 def filter_match(parsed_data, data_filter: ParsedDataFilter):
@@ -195,6 +198,12 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
         if board not in data_filter.boards:
             return False
 
+    if data_filter.resource_keys:
+        resource_keys = list(parsed_data["resource_report"].keys())
+        for resource_key in data_filter.resource_keys:
+            if resource_key not in resource_keys:
+                return False
+
     return True
 
 
@@ -241,7 +250,7 @@ def read_from_json(file_patterns, data_filter: ParsedDataFilter = None):
     return json_data
 
 
-def get_global_data(parsed_data):
+def get_global_data(parsed_data, resource_key=None, normalize=False):
     """
     _summary_
 
@@ -264,7 +273,11 @@ def get_global_data(parsed_data):
 
         meta.append(model_data["meta_data"])
         global_inputs.append(get_global_inputs(model_config, hls_config))
-        targets.append(get_prediction_targets(model_data, norm_board=hls_config["board"]))
+
+        norm_board = None
+        if normalize:
+            norm_board = hls_config["board"]
+        targets.append(get_prediction_targets(model_data, resource_key, norm_board=norm_board))
 
     return (meta, global_inputs, targets)
 
@@ -313,8 +326,13 @@ def get_layers_data(model_config):
     layers_data = []
     for layer_config in model_config:
         layer_type = layer_config["class_name"]
+        if layer_type.startswith("Q"):  # qkeras layers
+            layer_type = layer_type[1:]
+
         if layer_type == "Activation":
-            layer_type = layer_config["activation"]
+            layer_type = get_activation_name(layer_config["activation"])
+            if layer_type == "linear":  # ignore linear activations
+                continue
 
         input_shape = layer_config["input_shape"]
         if layer_type in ["Add", "Concatenate"]:
@@ -509,20 +527,27 @@ def get_global_inputs(model_config, hls_config):
     return inputs
 
 
-def get_prediction_targets(model_data, norm_board=None):
+def get_prediction_targets(model_data, resource_key, norm_board=None):
     """
     _summary_
 
     Args:
         model_data (_type_): _description_
+        resource_key (_type_): _description_
         norm_board (_type_): _description_
 
     Returns:
         _type_: _description_
     """
 
-    resource_report = model_data["resource_report"]
     latency_report = model_data["latency_report"]
+    if resource_key:
+        resource_report = model_data["resource_report"][resource_key]
+    else:
+        resource_report = model_data["resource_report"]
+
+    resource_report = to_lower_keys(resource_report)
+    latency_report = to_lower_keys(latency_report)
 
     bram = resource_report["bram"]
     dsp = resource_report["dsp"]

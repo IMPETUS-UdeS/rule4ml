@@ -7,19 +7,19 @@ import pandas as pd
 import torch
 from keras.layers import Dense, Input
 
-from rule4ml.models.estimators import MultiModelEstimator
+from rule4ml.models.wrappers import MultiModelWrapper
 
 # force tests on CPU
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
-class MultiModelEstimatorTests(unittest.TestCase):
-    def test_estimator_instance(self):
-        estimator = MultiModelEstimator()
-        self.assertIsInstance(estimator, MultiModelEstimator)
+class MultiModelWrapperTests(unittest.TestCase):
+    def test_wrapper_instance(self):
+        estimator = MultiModelWrapper()
+        self.assertIsInstance(estimator, MultiModelWrapper)
 
     def test_load_default_models(self):
-        estimator = MultiModelEstimator()
+        estimator = MultiModelWrapper()
         estimator.load_default_models()
 
     def test_keras_sequential_prediction(self):
@@ -40,7 +40,7 @@ class MultiModelEstimatorTests(unittest.TestCase):
         )
         model_to_predict.build((None, input_size))
 
-        estimator = MultiModelEstimator()
+        estimator = MultiModelWrapper()
         estimator.load_default_models()
 
         prediction_df = estimator.predict(model_to_predict)
@@ -58,7 +58,7 @@ class MultiModelEstimatorTests(unittest.TestCase):
         model_to_predict = keras.Model(inputs=inputs, outputs=outputs, name="Jet Classifier")
         model_to_predict.build((None, input_size))
 
-        estimator = MultiModelEstimator()
+        estimator = MultiModelWrapper()
         estimator.load_default_models()
 
         prediction_df = estimator.predict(model_to_predict)
@@ -88,7 +88,7 @@ class MultiModelEstimatorTests(unittest.TestCase):
         model_to_predict = JetClassifier()
         model_to_predict.build((None, input_size))
 
-        estimator = MultiModelEstimator()
+        estimator = MultiModelWrapper()
         estimator.load_default_models()
 
         prediction_df = estimator.predict(model_to_predict)
@@ -104,7 +104,7 @@ class MultiModelEstimatorTests(unittest.TestCase):
             torch.nn.Sigmoid(),
         )
 
-        estimator = MultiModelEstimator()
+        estimator = MultiModelWrapper()
         estimator.load_default_models()
 
         prediction_df = estimator.predict(model_to_predict)
@@ -131,7 +131,7 @@ class MultiModelEstimatorTests(unittest.TestCase):
 
         model_to_predict = TopQuarks(input_size=10)
 
-        estimator = MultiModelEstimator()
+        estimator = MultiModelWrapper()
         estimator.load_default_models()
 
         prediction_df = estimator.predict(model_to_predict)
@@ -191,7 +191,7 @@ class MultiModelEstimatorTests(unittest.TestCase):
             for board, strategy in itertools.product(["pynq-z2", "zcu102"], ["Latency", "Resource"])
         ]
 
-        estimator = MultiModelEstimator()
+        estimator = MultiModelWrapper()
         estimator.load_default_models()
 
         prediction_df = estimator.predict(models_to_predict, hls_configs)

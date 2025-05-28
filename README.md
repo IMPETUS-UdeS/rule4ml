@@ -37,7 +37,7 @@ Here's a quick example of how to use `rule4ml` to estimate resources and latency
 import keras
 from keras.layers import Input, Dense, Activation
 
-from rule4ml.models.estimators import MultiModelEstimator
+from rule4ml.models.wrappers import MultiModelWrapper
 
 # Example of a simple keras Model
 input_size = 16
@@ -51,10 +51,10 @@ model_to_predict = keras.Model(inputs=inputs, outputs=outputs, name="Jet Classif
 model_to_predict.build((None, input_size))  # building keras models is required
 
 # Loading default predictors
-estimator = MultiModelEstimator()
+estimator = MultiModelWrapper()
 estimator.load_default_models()
 
-# MultiModelEstimator predictions are formatted as a pandas DataFrame
+# MultiModelWrapper predictions are formatted as a pandas DataFrame
 prediction_df = estimator.predict(model_to_predict)
 
 # Further formatting can applied to organize the DataFrame

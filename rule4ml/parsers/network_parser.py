@@ -130,7 +130,7 @@ def config_from_keras_model(model, hls_config):
             layer_dict["dropout_rate"] = layer_config["rate"]
 
         if "activation" in layer_config and layer_config["activation"] != "linear":
-            if class_name == "Activation":
+            if class_name in ["Activation", "QActivation"]:
                 layer_dict["activation"] = layer_config["activation"]
             else:
                 nested_activation = True
@@ -160,7 +160,7 @@ def config_from_keras_model(model, hls_config):
 
         if (
             nested_activation
-        ):  # activation function wrapped in a layer other than "Activation", example: Dense(units=32, activation="relu")
+        ):  # activation function wrapped in a layer other than "(Q)Activation", example: Dense(units=32, activation="relu")
             activation_dict = {}
             activation_dict["class_name"] = "Activation"
 
