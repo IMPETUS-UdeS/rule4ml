@@ -57,7 +57,7 @@ estimator.load_default_models()
 # MultiModelWrapper predictions are formatted as a pandas DataFrame
 prediction_df = estimator.predict(model_to_predict)
 
-# Further formatting can applied to organize the DataFrame
+# Further formatting can be applied to organize the DataFrame
 if not prediction_df.empty:
     prediction_df = prediction_df.groupby(
         ["Model", "Board", "Strategy", "Precision", "Reuse Factor"], observed=True

@@ -1,5 +1,6 @@
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from glob import glob
 
@@ -207,19 +208,65 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
     return True
 
 
-def read_from_json(file_patterns, data_filter: ParsedDataFilter = None):
+def batch_iterable(iterable, batch_size):
+    """
+    Splits an iterable into batches of a specified size.
+
+    Args:
+        iterable (iterable): The input iterable to be batched.
+        batch_size (int): The size of each batch.
+
+    Yields:
+        list: A batch of items from the iterable.
+    """
+    batch = []
+    for item in iterable:
+        batch.append(item)
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def read_json_files(filenames):
+    """
+    Reads multiple JSON files and returns their content as a list of dictionaries.
+
+    Args:
+        filenames (list): A list of paths to the JSON files.
+
+    Returns:
+        list: A list of dictionaries containing the JSON data.
+    """
+
+    json_data = []
+    for filename in filenames:
+        try:
+            with open(filename, "r") as json_file:
+                data = json.load(json_file)
+                if not isinstance(data, list):
+                    data = [data]
+                json_data.extend(data)
+        except Exception as e:
+            raise ValueError(f"Error reading JSON file \"{filename}\": {e}")
+
+    return json_data
+
+
+def read_from_json(file_patterns, data_filter: ParsedDataFilter = None, max_workers=1, batch_size=128):
     """
     _summary_
 
     Args:
         file_patterns (_type_): _description_
         data_filter (ParsedDataFilter): _description_
+        max_workers (int, optional): _description_. Defaults to 8.
 
     Returns:
         _type_: _description_
     """
 
-    json_data = []
     if isinstance(file_patterns, (list, tuple)):
         file_patterns = list(file_patterns)
 
@@ -231,96 +278,66 @@ def read_from_json(file_patterns, data_filter: ParsedDataFilter = None):
     else:
         json_files = glob(file_patterns)
 
-    for filename in json_files:
-        with open(filename) as json_file:
-            file_data = json.load(json_file)
-            if not isinstance(file_data, list):
-                file_data = [file_data]
-            json_data += file_data
+    batches = list(batch_iterable(json_files, batch_size))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(read_json_files, batches)
+    json_data = [entry for result in results for entry in result]
 
     # Optionally filter the json data
     if data_filter is not None:
-        filtered_data = []
-        for model_data in json_data:
-            if filter_match(model_data, data_filter):
-                filtered_data.append(model_data)
-
-        json_data = filtered_data
+        json_data = [
+            model_data for model_data in json_data if filter_match(model_data, data_filter)
+        ]
 
     return json_data
 
 
-def get_global_data(parsed_data, resource_key=None, normalize=False):
-    """
-    _summary_
+def process_global_batch(model_batch, resource_key, normalize):
+    batch_meta, batch_inputs, batch_targets = [], [], []
 
-    Args:
-        parsed_data (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
-
-    meta = []
-    global_inputs = []
-    targets = []
-    for model_data in parsed_data:
+    for model_data in model_batch:
         model_config = model_data["model_config"]
         hls_config = model_data["hls_config"]
-        target_part = model_data.get("target_part", None)
-        if target_part:
+        if (target_part := model_data.get("target_part")):
             hls_config["board"] = get_board_from_part(target_part)
 
-        meta.append(model_data["meta_data"])
-        global_inputs.append(get_global_inputs(model_config, hls_config))
+        norm_board = hls_config["board"] if normalize else None
 
-        norm_board = None
-        if normalize:
-            norm_board = hls_config["board"]
-        targets.append(get_prediction_targets(model_data, resource_key, norm_board=norm_board))
+        batch_meta.append(unwrap_nested_dicts(model_data["meta_data"]))
+        batch_inputs.append(unwrap_nested_dicts(get_global_inputs(model_config, hls_config)))
+        batch_targets.append(unwrap_nested_dicts(get_prediction_targets(model_data, resource_key, norm_board)))
 
-    return (meta, global_inputs, targets)
+    return batch_meta, batch_inputs, batch_targets
 
 
-def get_sequential_data(parsed_data):
+def get_global_data(parsed_data, resource_key=None, normalize=False, max_workers=1, batch_size=128):
+    batches = list(batch_iterable(parsed_data, batch_size))
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_global_batch, b, resource_key, normalize) for b in batches]
+
+        # Flatten the batched results
+        meta, inputs, targets = [], [], []
+        for future in futures:
+            m, i, t = future.result()
+            meta.extend(m)
+            inputs.extend(i)
+            targets.extend(t)
+
+    return meta, inputs, targets
+
+
+def get_layers_data(model_config, target_depth=None):
     """
-    _summary_
+    Processes the layers data of a model.
 
     Args:
-        parsed_data (_type_): _description_
+        model_data (dict): The model data containing configuration and layer information.
+        target_depth (int, optional): The target depth for padding the layers data.
 
     Returns:
-        _type_: _description_
-    """
-
-    max_model_depth = 0
-    for model_data in parsed_data:
-        max_model_depth = max(max_model_depth, len(model_data["model_config"]))
-
-    sequential_inputs = []
-    for model_data in parsed_data:
-        model_config = model_data["model_config"]
-        layers_data = get_layers_data(model_config)
-
-        # Zero padding for equal model depth across dataset
-        for idx in range(max_model_depth - len(layers_data)):
-            padding_dict = {}
-            for key in layers_data[0].keys():
-                padding_dict[key] = 0
-
-            layers_data.append(padding_dict)
-
-        sequential_inputs.append(layers_data)
-
-    return sequential_inputs
-
-
-def get_layers_data(model_config):
-    """
-    _summary_
-
-    Args:
-        model_config (_type_): _description_
+        list: A list of processed layer data dictionaries.
     """
 
     layers_data = []
@@ -355,7 +372,33 @@ def get_layers_data(model_config):
             }
         )
 
+    # Optional zero-padding
+    if target_depth is not None:
+        pad_count = target_depth - len(layers_data)
+        if pad_count > 0:
+            pad = [{key: 0 for key in layers_data[0].keys()}] * pad_count
+            layers_data.extend(pad)
+
     return layers_data
+
+
+def process_model_batch(model_batch, max_model_depth):
+    result = []
+    for model_data in model_batch:
+        layers_data = get_layers_data(model_data["model_config"], target_depth=max_model_depth)
+        result.append(layers_data)
+    return result
+
+def get_sequential_data(parsed_data, max_workers=1, batch_size=128):
+    max_model_depth = max(len(model["model_config"]) for model in parsed_data)
+
+    batches = list(batch_iterable(parsed_data, batch_size))
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_model_batch, b, max_model_depth) for b in batches]
+        results = [r for f in futures for r in f.result()]
+
+    return results
 
 
 def get_global_inputs(model_config, hls_config):
@@ -549,10 +592,10 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
     resource_report = to_lower_keys(resource_report)
     latency_report = to_lower_keys(latency_report)
 
-    bram = resource_report["bram"]
-    dsp = resource_report["dsp"]
-    ff = resource_report["ff"]
-    lut = resource_report["lut"]
+    bram = resource_report.get("bram", None)
+    dsp = resource_report.get("dsp", None)
+    ff = resource_report.get("ff", None)
+    lut = resource_report.get("lut", None)
 
     if isinstance(bram, str):
         bram = float(bram.strip())
@@ -577,15 +620,22 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
         max_ff = board_data["max_ff"]
         max_lut = board_data["max_lut"]
 
+        # targets = {
+        #     "bram": max(1 / max_bram, min(bram / max_bram, 2.0)) * 100,
+        #     "dsp": max(1 / max_dsp, min(dsp / max_dsp, 2.0)) * 100,
+        #     "ff": max(1 / max_ff, min(ff / max_ff, 2.0)) * 100,
+        #     "lut": max(1 / max_lut, min(lut / max_lut, 2.0)) * 100,
+        # }
+
         targets = {
-            "bram": max(1 / max_bram, min(bram / max_bram, 2.0)) * 100,
-            "dsp": max(1 / max_dsp, min(dsp / max_dsp, 2.0)) * 100,
-            "ff": max(1 / max_ff, min(ff / max_ff, 2.0)) * 100,
-            "lut": max(1 / max_lut, min(lut / max_lut, 2.0)) * 100,
+            "bram": max(1 / max_bram, (bram / max_bram)) * 100,
+            "dsp": max(1 / max_dsp, (dsp / max_dsp)) * 100,
+            "ff": max(1 / max_ff, (ff / max_ff)) * 100,
+            "lut": max(1 / max_lut, (lut / max_lut)) * 100,
         }
 
-    cycles_min = latency_report["cycles_min"]
-    cycles_max = latency_report["cycles_max"]
+    cycles_min = latency_report.get("cycles_min", None)
+    cycles_max = latency_report.get("cycles_max", None)
     interval_min = latency_report.get("interval_min", None)
     interval_max = latency_report.get("interval_max", None)
 
@@ -598,7 +648,11 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
     if isinstance(interval_max, str):
         interval_max = float(interval_max.strip())
 
-    targets["cycles"] = (cycles_min + cycles_max) / 2.0
+    if cycles_min is not None and cycles_max is not None:
+        targets["cycles"] = (cycles_min + cycles_max) / 2.0
+    else:
+        targets["cycles"] = None
+
     if interval_min is not None and interval_max is not None:
         targets["interval"] = (interval_min + interval_max) / 2.0
     else:
@@ -685,6 +739,48 @@ def get_network_fixed_ops(model_json, precision):
     }
 
 
+def batch_to_dataframe(
+    meta_batch,
+    global_batch,
+    seq_batch,
+    target_batch,
+    global_categorical_maps,
+    sequential_categorical_maps,
+):
+    # Unwrap dicts
+    meta_batch = [unwrap_nested_dicts(m) for m in meta_batch]
+    global_batch = [unwrap_nested_dicts(g) for g in global_batch]
+    target_batch = [unwrap_nested_dicts(t) for t in target_batch]
+
+    # Convert sequential to DataFrames
+    sequential_wrapped = []
+    for layers in seq_batch:
+        df = pd.DataFrame([unwrap_nested_dicts(layer) for layer in layers])
+        sequential_wrapped.append({"sequential_inputs": df})
+
+    # Build per-batch DataFrame
+    df = pd.concat([
+        pd.DataFrame(meta_batch),
+        pd.DataFrame(global_batch),
+        pd.DataFrame(sequential_wrapped),
+        pd.DataFrame(target_batch),
+    ], axis=1)
+
+    # Encode global categorical features
+    for key, mapping in global_categorical_maps.items():
+        df[key] = df[key].map(mapping)
+
+    # Encode sequential categorical features
+    for key, mapping in sequential_categorical_maps.items():
+        df["sequential_inputs"] = df["sequential_inputs"].apply(
+            lambda sdf: sdf.assign(**{
+                key: sdf[key].map(lambda x: mapping.get(x, x))
+            })
+        )
+
+    return df
+
+
 def to_dataframe(
     meta_data,
     global_inputs,
@@ -692,50 +788,32 @@ def to_dataframe(
     global_categorical_maps,
     sequential_categorical_maps,
     targets,
+    max_workers=1,
+    batch_size=128,
 ):
     """
-    _summary_
-
-    Args:
-        meta_data (_type_): _description_
-        global_inputs (_type_): _description_
-        sequential_inputs (_type_): _description_
-        global_categorical_maps (_type_): _description_
-        sequential_categorical_maps (_type_): _description_
-        targets (_type_): _description_
-
-    Returns:
-        _type_: _description_
+    Batched and parallelized to_dataframe implementation.
     """
 
-    meta_data = [unwrap_nested_dicts(d) for d in meta_data]
-    global_inputs = [unwrap_nested_dicts(d) for d in global_inputs]
-    targets = [unwrap_nested_dicts(d) for d in targets]
-
-    tmp = []
-    for inputs in sequential_inputs:
-        layers_df = pd.DataFrame([unwrap_nested_dicts(d) for d in inputs])
-        tmp.append({"sequential_inputs": layers_df})
-    sequential_inputs = tmp
-
-    data_df = pd.concat(
-        [
-            pd.DataFrame(meta_data),
-            pd.DataFrame(global_inputs),
-            pd.DataFrame(sequential_inputs),
-            pd.DataFrame(targets),
-        ],
-        axis=1,
-    )
-
-    # Ordinal coding of global categorical inputs
-    for key, value in global_categorical_maps.items():
-        data_df[key] = data_df[key].map(value)
-
-    # Ordinal coding of sequential categorical inputs
-    for key, value in sequential_categorical_maps.items():
-        data_df["sequential_inputs"] = data_df["sequential_inputs"].apply(
-            lambda df: df.assign(**{key: df[key].apply(lambda x: value[x] if x in value else x)})
+    n = len(meta_data)
+    batches = [
+        (
+            meta_data[i:i+batch_size],
+            global_inputs[i:i+batch_size],
+            sequential_inputs[i:i+batch_size],
+            targets[i:i+batch_size]
         )
+        for i in range(0, n, batch_size)
+    ]
 
-    return data_df
+    args = [
+        (m, g, s, t, global_categorical_maps, sequential_categorical_maps)
+        for (m, g, s, t) in batches
+    ]
+
+    dataframes = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for df in executor.map(lambda p: batch_to_dataframe(*p), args):
+            dataframes.append(df)
+
+    return pd.concat(dataframes, axis=0).reset_index(drop=True)

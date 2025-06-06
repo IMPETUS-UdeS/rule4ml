@@ -10,6 +10,11 @@ try:
 except ImportError:
     torch = None
 
+try:
+    import torch_geometric
+except ImportError:
+    torch_geometric = None
+
 # Check Keras version
 if version.parse(keras.__version__).major >= 3:
     from keras import ops as kops
@@ -23,15 +28,14 @@ class MLPSettings:
     _summary_
 
     Args: (all optional, default values inside data class)
-        embedding_outputs (list): _description_
+        embedding_layers (list): _description_
         numerical_dense_layers (list): _description_
         dense_layers (list): _description_
         dense_dropouts (list): _description_
     """
 
     # Default settings
-
-    embedding_outputs: list = field(default_factory=lambda: [16, 16, 16, 16])
+    embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
     numerical_dense_layers: list = field(default_factory=lambda: [16])
     dense_layers: list = field(default_factory=lambda: [64, 32, 64, 32])
     dense_dropouts: list = field(
@@ -45,7 +49,7 @@ class MLPSettings:
 
     def to_config(self):
         return {
-            "embedding_outputs": self.embedding_outputs,
+            "embedding_layers": self.embedding_layers,
             "numerical_dense_layers": self.numerical_dense_layers,
             "dense_layers": self.dense_layers,
             "dense_dropouts": self.dense_dropouts,
@@ -74,13 +78,13 @@ class TransformerSettings:
         output_dim (int): _description_
         dropout_rate (int): _description_
 
-        embedding_outputs (list): _description_
+        global_embedding_layers (list): _description_
+        seq_embedding_layers (list): _description_
         dense_layers (list): _description_
         dense_dropouts (list): _description_
     """
 
     # Default settings
-
     global_dense_layers: list = field(default_factory=lambda: [64, 128])
     seq_dense_layers: list = field(default_factory=lambda: [64, 128])
 
@@ -93,7 +97,9 @@ class TransformerSettings:
     output_dim: int = 64
     dropout_rate: float = 0.1
 
-    embedding_outputs: list = field(default_factory=lambda: [16, 16, 16, 16])
+    global_embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
+    seq_embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
+
     dense_layers: list = field(default_factory=lambda: [128, 128, 64])
     dense_dropouts: list = field(
         default_factory=lambda: [
@@ -113,7 +119,8 @@ class TransformerSettings:
             "ff_dim": self.ff_dim,
             "output_dim": self.output_dim,
             "dropout_rate": self.dropout_rate,
-            "embedding_outputs": self.embedding_outputs,
+            "global_embedding_layers": self.global_embedding_layers,
+            "seq_embedding_layers": self.seq_embedding_layers,
             "dense_layers": self.dense_layers,
             "dense_dropouts": self.dense_dropouts,
         }
@@ -132,9 +139,29 @@ class GNNSettings:
     """
 
     # Default settings
+    numerical_dense_layers: list = field(default_factory=lambda: [32])
+    gconv_layers: list = field(default_factory=lambda: [128, 64])
+
+    global_embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
+    seq_embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
+
+    dense_layers: list = field(default_factory=lambda: [128, 128, 64])
+    dense_dropouts: list = field(
+        default_factory=lambda: [
+            0.2,
+            0.2,
+        ]
+    )
 
     def to_config(self):
-        return {}
+        return {
+            "numerical_dense_layers": self.numerical_dense_layers,
+            "gconv_layers": self.gconv_layers,
+            "global_embedding_layers": self.global_embedding_layers,
+            "seq_embedding_layers": self.seq_embedding_layers,
+            "dense_layers": self.dense_layers,
+            "dense_dropouts": self.dense_dropouts,
+        }
 
     @classmethod
     def from_config(cls, config):
@@ -158,7 +185,7 @@ class KerasMLP(keras.Model):
             embedding_layer = squeeze_op(
                 keras.layers.Embedding(
                     input_dim=len(categorical_maps[key]) + 1,
-                    output_dim=settings.embedding_outputs[idx],
+                    output_dim=settings.embedding_layers[idx],
                     name=f"{key}_embedding",
                 )(input_layer),
                 axis=-2,
@@ -219,7 +246,7 @@ class KerasMLP(keras.Model):
 class KerasTransformer(keras.Model):
     def __init__(
         self,
-        settings,
+        settings: TransformerSettings,
         global_input_shape,
         sequential_input_shape,
         output_shape,
@@ -240,7 +267,7 @@ class KerasTransformer(keras.Model):
             embedding_layer = squeeze_op(
                 keras.layers.Embedding(
                     input_dim=len(global_categorical_maps[key]) + 1,
-                    output_dim=settings.embedding_outputs[idx],
+                    output_dim=settings.global_embedding_layers[idx],
                     name=f"{key}_embedding",
                 )(input_layer),
                 axis=-2,
@@ -280,12 +307,10 @@ class KerasTransformer(keras.Model):
             )
 
             embedding_layer = squeeze_op(
-                # embedding_layer = (
-                keras.layers.Embedding(
+                ZeroMaskEmbedding(
                     input_dim=len(sequential_categorical_maps[key]) + 1,
-                    output_dim=settings.embedding_outputs[0],
+                    output_dim=settings.seq_embedding_layers[idx],
                     name=f"{key}_embedding",
-                    # )(input_layer)
                 )(input_layer),
                 axis=-2,
             )
@@ -308,18 +333,23 @@ class KerasTransformer(keras.Model):
             [*sequential_embeddings, sequential_numerical_outputs], axis=-1
         )
         masked_inputs = keras.layers.Masking(mask_value=0.0)(concat_seq_inputs)
+        mask = tf.reduce_any(tf.not_equal(masked_inputs, 0.0), axis=-1)  # shape: (batch, seq_len)
 
         x = masked_inputs
         for idx, units in enumerate(settings.seq_dense_layers):
-            x = keras.layers.Dense(units, activation="relu")(x)
+            x = keras.layers.TimeDistributed(keras.layers.Dense(units, activation="relu"))(x)
 
-        x = TransformerBlock(
+        x = KerasTransformerBlock(
             x.shape[-1],
             settings.num_heads,
             settings.ff_dim,
             settings.output_dim,
             settings.dropout_rate,
-        )(x)
+        )(x, mask=mask)
+
+        # seq_lens = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
+        # indices = tf.stack([tf.range(tf.shape(x)[0]), seq_lens - 1], axis=1)
+        # x = tf.gather_nd(x, indices)
 
         x = keras.layers.Concatenate(axis=-1)([x, global_outputs])
 
@@ -386,18 +416,19 @@ class TorchMLP(torch.nn.Module):
         for idx, key in enumerate(categorical_maps):
             self.embeddings[f"g{idx}_{key}_embedding"] = torch.nn.Embedding(
                 num_embeddings=len(categorical_maps[key]) + 1,
-                embedding_dim=settings.embedding_outputs[idx],
+                embedding_dim=settings.embedding_layers[idx],
             )
 
         self.numerical_layers = torch.nn.ModuleDict()
         in_dim = input_shape[-1] - len(categorical_maps)
-        for idx, units in enumerate(settings.numerical_dense_layers):
-            self.numerical_layers[f"g{idx + len(categorical_maps)}_numerical_layer"] = (
-                torch.nn.Linear(in_dim, units, bias=False)
-            )
-            in_dim = units
+        if in_dim > 0:
+            for idx, units in enumerate(settings.numerical_dense_layers):
+                self.numerical_layers[f"g{idx + len(categorical_maps)}_numerical_layer"] = (
+                    torch.nn.Linear(in_dim, units, bias=False)
+                )
+                in_dim = units
 
-        concat_dim = sum(settings.embedding_outputs) + in_dim
+        concat_dim = sum(settings.embedding_layers) + in_dim
         self.dense_layers = torch.nn.ModuleList()
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
@@ -420,6 +451,7 @@ class TorchMLP(torch.nn.Module):
         }
         self.global_input_shape = input_shape
         self.global_categorical_maps = categorical_maps
+
         self.output_shape = output_shape
 
     def forward(self, inputs):
@@ -456,18 +488,185 @@ class TorchMLP(torch.nn.Module):
 
 
 class TorchGNN(torch.nn.Module):
-    def __init__(self, **kwargs):
-        pass
+    def __init__(
+        self,
+        settings: GNNSettings,
+        global_input_shape,
+        sequential_input_shape,
+        output_shape,
+        global_categorical_maps,
+        sequential_categorical_maps,
+        name="TorchGNN",
+    ):
+        if torch is None:
+            raise ImportError(
+                "Failed to import \"torch\". Please install \"torch\" to use this class."
+            )
+        if torch_geometric is None:
+            raise ImportError(
+                "Failed to import \"torch_geometric\". Please install \"torch_geometric\" to use this class."
+            )
+
+        super().__init__()
+
+        self.global_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(global_categorical_maps):
+            self.global_embeddings[f"g{idx}_{key}_embedding"] = torch.nn.Embedding(
+                num_embeddings=len(global_categorical_maps[key]) + 1,
+                embedding_dim=settings.global_embedding_layers[idx],
+            )
+
+        self.sequential_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(sequential_categorical_maps):
+            self.sequential_embeddings[f"s{idx}_{key}_embedding"] = torch.nn.Embedding(
+                num_embeddings=len(sequential_categorical_maps[key]) + 1,
+                embedding_dim=settings.seq_embedding_layers[idx],
+            )
+
+        self.numerical_layers = torch.nn.ModuleDict()
+        in_dim = global_input_shape[-1] - len(global_categorical_maps)
+        if in_dim > 0:
+            for idx, units in enumerate(settings.numerical_dense_layers):
+                self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
+                    torch.nn.Linear(in_dim, units, bias=False)
+                )
+                in_dim = units
+
+        seq_numerical_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
+        gnn_dim = sum(settings.seq_embedding_layers) + seq_numerical_dim
+        self.gconvs = torch.nn.ModuleList()
+        for idx, units in enumerate(settings.gconv_layers):
+            self.gconvs.append(
+                torch_geometric.nn.SAGEConv(
+                    in_channels=gnn_dim,
+                    out_channels=units,
+                    bias=True,
+                )
+            )
+            gnn_dim = units
+
+        self.global_pool = torch_geometric.nn.global_add_pool
+
+        concat_dim = sum(settings.global_embedding_layers) + in_dim + settings.gconv_layers[-1]
+        self.dense_layers = torch.nn.ModuleList()
+        self.dropouts = torch.nn.ModuleList()
+        for idx, units in enumerate(settings.dense_layers):
+            self.dense_layers.append(torch.nn.Linear(concat_dim, units))
+            if idx < len(settings.dense_dropouts) - 1 and settings.dense_dropouts[idx] > 0.0:
+                self.dropouts.append(torch.nn.Dropout(settings.dense_dropouts[idx]))
+            else:
+                self.dropouts.append(None)
+
+            concat_dim = units
+
+        self.output_layer = torch.nn.Linear(concat_dim, output_shape[-1])
+
+        self.name = name
+        self.settings = settings
+
+        self.global_input_keys = {
+            "categorical": [name for name in self.global_embeddings.keys()],
+            "numerical": f"g{len(global_categorical_maps)}_numerical_layer",
+        }
+        self.global_input_shape = global_input_shape
+        self.global_categorical_maps = global_categorical_maps
+
+        self.sequential_input_keys = {
+            "categorical": [name for name in self.sequential_embeddings.keys()],
+            "numerical": f"s{len(sequential_categorical_maps)}_numerical_layer",
+        }
+        self.sequential_input_shape = sequential_input_shape
+        self.sequential_categorical_maps = sequential_categorical_maps
+
+        self.output_shape = output_shape
+
+    def forward(self, inputs):
+        x_global_categorical = []
+        for idx, key in enumerate (self.global_embeddings.keys()):
+            x_global_categorical.append(
+                self.global_embeddings[key](inputs[key]).squeeze(1)
+            )
+
+        x_global_numerical = inputs[self.global_input_keys["numerical"]]
+        for idx, key in enumerate(self.numerical_layers.keys()):
+            x_global_numerical = self.numerical_layers[key](x_global_numerical)
+
+        seq_numerical_inputs = inputs[self.sequential_input_keys["numerical"]]  # shape: (batch, seq_len, seq_features)
+        mask = ~(seq_numerical_inputs == 0.0).all(dim=-1)  # mask to eliminate zero padding
+
+        x_sequential_categorical = []
+        for idx, key in enumerate(self.sequential_embeddings.keys()):
+            x_sequential_categorical.append(
+                self.sequential_embeddings[key](inputs[key]).squeeze(2)
+            )
+
+        node_features = []
+        edge_indices = []
+        batch_vector = []
+        ptr = 0
+        for i in range(seq_numerical_inputs.shape[0]):
+            valid_seq_numerical = seq_numerical_inputs[i][mask[i]]
+            if valid_seq_numerical.size(0) == 0:
+                continue
+
+            valid_seq_embeddings = [
+                embedding[i][mask[i]] for embedding in x_sequential_categorical
+            ]
+            valid_features = torch.cat(
+                [*valid_seq_embeddings, valid_seq_numerical], dim=-1
+            )
+            node_features.append(valid_features)
+            num_nodes = valid_features.size(0)
+            if num_nodes > 1:
+                row = torch.arange(num_nodes - 1, dtype=torch.long)
+                edge = torch.stack([row, row + 1], dim=0) + ptr
+                edge_indices.append(edge)
+
+            batch_vector.append(
+                torch.full((num_nodes,), i, dtype=torch.long)
+            )
+            ptr += num_nodes
+
+        if len(node_features) == 0:
+            raise ValueError("All sequential samples are empty after masking.")
+
+        x_seq = torch.cat(node_features, dim=0)
+        edge_indices = torch.cat(edge_indices, dim=1) if edge_indices else torch.empty((2, 0), dtype=torch.long)
+        batch = torch.cat(batch_vector, dim=0)
+
+        for gconv in self.gconvs:
+            x_seq = gconv(x_seq, edge_index=edge_indices)
+            x_seq = torch.nn.functional.relu(x_seq)
+
+        pooled_seq = self.global_pool(x_seq, batch=batch)
+
+        x = torch.cat([*x_global_categorical, x_global_numerical, pooled_seq], dim=-1)
+        for idx, dense in enumerate(self.dense_layers):
+            x = torch.nn.functional.relu(dense(x))
+            if self.dropouts[idx] is not None:
+                x = self.dropouts[idx](x)
+
+        outputs = torch.nn.functional.relu(self.output_layer(x))
+        return outputs            
 
     def to_config(self):
-        return {}
+        return {
+            "name": self.name,
+            "settings": self.settings.to_config(),
+            "global_input_shape": self.global_input_shape,
+            "sequential_input_shape": self.sequential_input_shape,
+            "output_shape": self.output_shape,
+            "global_categorical_maps": self.global_categorical_maps,
+            "sequential_categorical_maps": self.sequential_categorical_maps,
+        }
 
     @classmethod
     def from_config(cls, config):
+        config["settings"] = GNNSettings.from_config(config["settings"])
         return cls(**config)
 
 
-class TransformerBlock(keras.layers.Layer):
+class KerasTransformerBlock(keras.layers.Layer):
     """
     _summary_
 
@@ -479,8 +678,15 @@ class TransformerBlock(keras.layers.Layer):
         dropout_rate (_type_): _description_. Defaults to 0.1
     """
 
-    def __init__(self, embed_dim, num_heads, ff_dim, output_dim, dropout_rate=0.1):
+    def __init__(self, embed_dim, num_heads, ff_dim, output_dim, dropout_rate=0.1, global_pool="last"):
         super().__init__()
+
+        if global_pool not in ["avg", "last"]:
+            raise ValueError(
+                f"global_pool must be one of [\"avg\", \"last\"], but got \"{global_pool}\""
+            )
+        self.global_pool = global_pool
+
         self.att = keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
         self.ffn = keras.Sequential(
             [
@@ -498,25 +704,30 @@ class TransformerBlock(keras.layers.Layer):
 
         self.supports_masking = True  # needed to pass the mask to downstream layers
 
-    def call(self, inputs, training=False, mask=None, global_pool="last"):
+    def call(self, inputs, training=False, mask=None):
+        attention_mask = None
         if mask is not None:
-            mask = tf.expand_dims(mask, axis=1)
+            attention_mask = tf.cast(tf.expand_dims(mask, axis=1), dtype=tf.float32)
 
-        attn_output = self.att(inputs, inputs, attention_mask=mask, training=training)
+        seq_len = tf.shape(inputs)[1]
+        pos_encoding = self.positional_encoding(seq_len, inputs.shape[-1])
+        inputs = inputs + pos_encoding
+
+        attn_output = self.att(inputs, inputs, attention_mask=attention_mask, training=training)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(inputs + attn_output)
         ffn_output = self.ffn(out1)
         ffn_output = self.dropout2(ffn_output, training=training)
         outputs = self.layernorm2(out1 + ffn_output)
 
-        if global_pool == "avg":
-            outputs = self.global_avg_pooling(outputs)
-        elif global_pool == "last":
-            outputs = outputs[:, -1, :]  # last hidden state
-        else:
-            raise ValueError(
-                f"global_pool must be one of [\"avg\", \"last\"], but got \"{global_pool}\""
-            )
+        if self.global_pool == "avg":
+            mask = tf.cast(mask, outputs.dtype)
+            mask = tf.expand_dims(mask, axis=-1)
+            outputs = tf.reduce_sum(outputs * mask, axis=1) / (tf.reduce_sum(mask, axis=1) + 1e-6)
+        elif self.global_pool == "last":
+            seq_lens = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
+            indices = tf.stack([tf.range(tf.shape(outputs)[0]), seq_lens - 1], axis=1)
+            outputs = tf.gather_nd(outputs, indices)
 
         outputs = self.out_dense(outputs)
         return outputs
@@ -526,19 +737,51 @@ class TransformerBlock(keras.layers.Layer):
 
     # Positional encoding doesn't seem to be important
     def positional_encoding(self, position, d_model):
-        angle_rads = self.get_angles(
-            np.arange(position)[:, np.newaxis],
-            np.arange(d_model)[np.newaxis, :],
-            d_model,
+        angle_rads = self._get_angles(
+            tf.range(position, dtype=tf.float32)[:, tf.newaxis],
+            tf.range(d_model, dtype=tf.float32)[tf.newaxis, :],
+            d_model
         )
 
-        angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
-        angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
+        sines = tf.sin(angle_rads[:, 0::2])
+        cosines = tf.cos(angle_rads[:, 1::2])
 
-        pos_encoding = angle_rads[np.newaxis, ...]
+        pos_encoding = tf.concat([sines, cosines], axis=-1)
+        return tf.expand_dims(pos_encoding, axis=0)
 
-        return tf.cast(pos_encoding, dtype=tf.float32)
+    def _get_angles(self, pos, i, d_model):
+        angle_rates = 1 / tf.pow(10000.0, (2 * (i // 2)) / tf.cast(d_model, tf.float32))
+        return pos * angle_rates
 
-    def get_angles(self, position, i, d_model):
-        angle_rates = 1 / np.power(10000, (2 * (i // 2)) / np.float32(d_model))
-        return position * angle_rates
+
+class ZeroMaskEmbedding(keras.layers.Layer):
+    def __init__(self, input_dim, output_dim, **kwargs):
+        """
+        Custom embedding layer that zeroes out and freezes the 0th index embedding vector.
+        Args:
+            input_dim (int): Size of the vocabulary.
+            output_dim (int): Dimension of the embedding vectors.
+        """
+
+        super().__init__(**kwargs)
+        self.embedding = keras.layers.Embedding(
+            input_dim=input_dim,
+            output_dim=output_dim,
+            mask_zero=False  # We'll manually handle masking
+        )
+        self.output_dim = output_dim
+
+    def build(self, input_shape):
+        super().build(input_shape)
+
+        # Manually zero out the 0th embedding vector
+        self.embedding.build(input_shape)
+        embeddings = self.embedding.embeddings
+        embeddings.assign(tf.tensor_scatter_nd_update(
+            embeddings,
+            indices=[[0]],
+            updates=[tf.zeros(self.output_dim)]
+        ))
+
+    def call(self, inputs):
+        return self.embedding(inputs)

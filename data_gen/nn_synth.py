@@ -24,6 +24,7 @@ from utils import (
     save_to_json,
 )
 
+from rule4ml.parsers.data_parser import read_from_json
 from rule4ml.parsers.network_parser import (
     config_from_keras_model,
     config_from_torch_model,
@@ -948,7 +949,36 @@ def extract_ii_from_csynth_report(args):
 
 
 if __name__ == "__main__":
-    pass
+    benchmark_path = os.path.join(base_path, "datasets", "iccad_submit", "preprocessed", "benchmark")
+    data = read_from_json(
+        os.path.join(benchmark_path, "*.json"),
+    )
+    for idx, entry in enumerate(data):
+        new_model_config = []
+        model_config = entry["model_config"]
+        for layer in model_config:
+            if layer["class_name"] == "Activation" and layer["activation"] == "linear":
+                continue
+
+            new_model_config.append(layer)
+
+        hls_config = entry["hls_config"]
+        new_hls_config = {
+            "Model": hls_config["Model"],
+            "LayerName": {},
+        }
+        for layer_name, config in hls_config["LayerName"].items():
+            if layer_name.endswith("_linear"):
+                continue
+            new_hls_config["LayerName"][layer_name] = config
+
+        entry["model_config"] = new_model_config
+        entry["hls_config"] = new_hls_config
+        data[idx] = entry
+
+    output_file = os.path.join(benchmark_path, "benchmark_vsynth_with_ii_fixed.json")
+    with open(output_file, "w") as json_file:
+        json.dump(data, json_file, indent=2)
 
     # split_data = read_from_json(
     #     os.path.join(base_path, "datasets", "iccad_submit", "preprocessed", "benchmark", "*.json"),

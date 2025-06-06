@@ -1,8 +1,17 @@
 from datetime import datetime
 
+import keras
 import keras_tuner as kt
 
-from rule4ml.models.wrappers import MLPSettings, TrainSettings
+from rule4ml.models.architectures import (
+    MLPSettings,
+    KerasMLP,
+)
+from rule4ml.models.wrappers import (
+    TrainSettings,
+    KerasModelWrapper,
+)
+from rule4ml.models.metrics import KerasParametricSMAPE, KerasParametricR2
 
 
 class Searcher:
@@ -16,7 +25,7 @@ class Searcher:
     def mlp_model_builder_generator(self, inputs_df, targets_df, categorical_maps):
         def mlp_model_builder(hp):
             mlp_settings = MLPSettings(
-                embedding_outputs=[
+                embedding_layers=[
                     hp.Choice(name=f"embedding_output_{idx}", values=[4, 8, 16])
                     for idx in range(len(categorical_maps))
                 ],
@@ -34,40 +43,55 @@ class Searcher:
                 ],
             )
 
-            self.train_settings = TrainSettings(
-                num_epochs=50,
-                batch_size=hp.Choice(name="batch_size", values=[32, 64, 128, 256]),
-                learning_rate=hp.Choice(name="learning_rate", values=[1e-4, 1e-3, 1e-2]),
-            )
-
             input_shape = (None, len(inputs_df.columns))
             output_shape = (None, len(targets_df.columns))
 
-            self.model_wrapper.build_mlp_model(
-                mlp_settings,
+            target_labels = list(targets_df.columns)
+            metrics = [
+                KerasParametricSMAPE(idx, name=f"smape_{target_labels[idx]}", eps=1) \
+                for idx in range(len(target_labels))
+            ]
+            metrics += [
+                KerasParametricR2(idx, name=f"r2_{target_labels[idx]}", eps=1) \
+                for idx in range(len(target_labels))
+            ]
+
+            self.train_settings = TrainSettings(
+                num_epochs=20,
+                batch_size=64,
+                # batch_size=hp.Choice(name="batch_size", values=[32, 64, 128, 256]),
+                learning_rate=hp.Choice(name="learning_rate", values=[1e-4, 1e-3, 1e-2]),
+                optimizer=keras.optimizers.Adam,
+                loss_function="msle",
+                metrics=metrics,
+            )
+
+            mlp_model = KerasMLP(
+                settings=mlp_settings,
                 input_shape=input_shape,
                 output_shape=output_shape,
                 categorical_maps=categorical_maps,
-                verbose=0,
+                name=f"{'-'.join([x.upper() for x in target_labels])}_MLP",
             )
-
-            self.model_wrapper.model.compile(
+            mlp_model.compile(
                 optimizer=self.train_settings.optimizer(
                     learning_rate=self.train_settings.learning_rate
                 ),
                 loss=self.train_settings.loss_function,
                 metrics=self.train_settings.metrics,
             )
+            self.model_wrapper.set_model(mlp_model)
 
-            self.model_wrapper.build_dataset(
-                inputs_df,
-                targets_df,
-                self.train_settings.batch_size,
-                val_ratio=0.2,
-                train_repeats=10,
-                shuffle=True,
-                verbose=0,
-            )
+            if self.model_wrapper.dataset is None:
+                self.model_wrapper.build_dataset(
+                    inputs_df,
+                    targets_df,
+                    self.train_settings.batch_size,
+                    val_ratio=0.15,
+                    train_repeats=10,
+                    shuffle=True,
+                    verbose=0,
+                )
 
             return self.model_wrapper.model
 
@@ -82,7 +106,7 @@ class Searcher:
         self.tuner = kt.Hyperband(
             hypermodel=model_builder,
             objective="val_loss",
-            max_epochs=50,
+            max_epochs=20,
             factor=3,
             hyperband_iterations=1,
             directory=directory,
@@ -104,7 +128,7 @@ class Searcher:
         self.tuner = kt.Hyperband(
             hypermodel=model_builder,
             objective="val_loss",
-            max_epochs=50,
+            max_epochs=20,
             factor=3,
             hyperband_iterations=1,
             directory=directory,

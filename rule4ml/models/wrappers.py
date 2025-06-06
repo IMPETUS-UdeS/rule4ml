@@ -413,6 +413,7 @@ class BaseModelWrapper:
         model_class = config["model_class"]
         self.model_config = config["model_config"]
         self.model = globals()[model_class].from_config(self.model_config)
+        self.set_model(self.model)
 
     def save(self, save_dir):
         """
@@ -474,68 +475,6 @@ class TorchModelWrapper(BaseModelWrapper):
             raise ImportError("Torch import failed. Please install torch to use this wrapper.")
 
         self.device = device
-
-    # def build_inputs(self, inputs_df):
-    #     """
-    #     Build inputs for a torch model, formatted as nested dictionaries of "global" and "sequential" inputs.
-    #     Each element (global, sequential) is a dictionary with "categorical" and "numerical" inputs.
-
-    #     input_dict = {
-    #         "global": {
-    #             "categorical": <torch tensor>,
-    #             "numerical": <torch tensor>,
-    #         },
-    #         "sequential": {
-    #             "categorical": <torch tensor>,
-    #             "numerical": <torch tensor>,
-    #         }
-    #     }
-    #     """
-    #     super().build_inputs(inputs_df)
-
-    #     input_dict = {}
-    #     for key, label in zip(
-    #         self.global_input_keys["categorical"], self.global_categorical_maps.keys()
-    #     ):
-    #         input_dict[key] = torch.tensor(inputs_df[label].values, dtype=torch.float32)
-
-    #     global_numerical_inputs_df = inputs_df.drop(
-    #         self.global_categorical_maps.keys(), axis=1
-    #     ).select_dtypes(
-    #         exclude=[object]
-    #     )  # excluding nested "sequential_inputs" Series
-    #     self.global_numerical_labels = global_numerical_inputs_df.columns.values
-
-    #     input_dict[self.global_input_keys["numerical"]] = torch.tensor(
-    #         global_numerical_inputs_df.values, dtype=torch.float32
-    #     )
-
-    #     if "sequential_inputs" in inputs_df:
-    #         seq_inputs_series = inputs_df["sequential_inputs"]
-    #         if not seq_inputs_series.empty:
-    #             for key, label in zip(
-    #                 self.sequential_input_keys["categorical"],
-    #                 self.sequential_categorical_maps.keys(),
-    #             ):
-    #                 input_dict[key] = seq_inputs_series.apply(lambda df: df[label]).values
-
-    #             seq_numerical_inputs = seq_inputs_series.apply(
-    #                 lambda df: df.drop(sequential_categorical_labels, axis=1)
-    #                 .select_dtypes(exclude=[object])
-    #                 .values
-    #             ).values
-    #             self.sequential_numerical_labels = (
-    #                 seq_inputs_series.iloc[0]
-    #                 .drop(sequential_categorical_labels, axis=1)
-    #                 .select_dtypes(exclude=[object])
-    #                 .columns.values
-    #             )
-
-    #             input_dict[self.sequential_input_keys["numerical"]] = torch.tensor(
-    #                 seq_numerical_inputs, dtype=torch.float32
-    #             )
-
-    #     return input_dict
 
     def build_dataset(
         self,
@@ -712,7 +651,7 @@ class TorchModelWrapper(BaseModelWrapper):
 
     def _load_weights(self, weights_path):
         if not weights_path.endswith(".pt"):
-            raise ValueError("Weights file name must end with .pt")
+            raise ValueError("Weights filename must end with .pt")
 
         self.model.load_state_dict(torch.load(weights_path, map_location=self.device))
 
@@ -727,6 +666,8 @@ class KerasModelWrapper(BaseModelWrapper):
         targets_df,
         batch_size,
         val_ratio=0.2,
+        val_inputs_df=None,
+        val_targets_df=None,
         train_repeats=1,
         shuffle=True,
         verbose=0,
@@ -739,7 +680,20 @@ class KerasModelWrapper(BaseModelWrapper):
                 print(f"{key}: shape={value.shape}, dtype={value.dtype}")
 
         self.dataset = tf.data.Dataset.from_tensor_slices((input_dict, np.array(targets_df.values)))
-        if val_ratio > 0.0:
+        if val_inputs_df is not None and val_targets_df is not None:
+            val_input_dict = self.build_inputs(val_inputs_df)
+
+            train_data = self.dataset.repeat(train_repeats)
+            if shuffle:
+                train_data = train_data.shuffle(len(train_data))
+            train_data = train_data.batch(batch_size)
+
+            val_data = tf.data.Dataset.from_tensor_slices((val_input_dict, np.array(val_targets_df.values)))
+            val_data = val_data.batch(batch_size)
+
+            self.train_data = train_data
+            self.val_data = val_data
+        elif val_ratio > 0.0:
             val_len = int(len(self.dataset) * val_ratio)
             val_data = self.dataset.take(val_len)
             val_data = val_data.batch(batch_size)
@@ -796,6 +750,6 @@ class KerasModelWrapper(BaseModelWrapper):
 
     def _load_weights(self, weights_path):
         if not weights_path.endswith(".weights.h5"):
-            raise ValueError("Weights file name must end with .weights.h5")
+            raise ValueError("Weights filename must end with .weights.h5")
 
         self.model.load_weights(weights_path)
