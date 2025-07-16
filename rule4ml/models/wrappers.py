@@ -468,39 +468,20 @@ class BaseModelWrapper:
 
 
 class TorchModelWrapper(BaseModelWrapper):
-    def __init__(self, device="cpu"):
+    def __init__(self, device=None):
         super().__init__()
 
         if torch is None:
             raise ImportError("Torch import failed. Please install torch to use this wrapper.")
 
+        if device is None:
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
         self.device = device
 
-    def build_dataset(
-        self,
-        inputs_df,
-        targets_df,
-        batch_size,
-        val_ratio=0.2,
-        train_repeats=1,
-        shuffle=True,
-        verbose=0,
-    ):
-        super().build_dataset(targets_df, batch_size)
-
-        input_dict = self.build_inputs(inputs_df)
-        if verbose > 0:
-            for key, value in input_dict.items():
-                print(f"{key}: {value.shape}")
-
-        target_tensors = torch.tensor(targets_df.values)
-
-        total_size = len(inputs_df)
-        val_size = int(total_size * val_ratio)
-
-        val_indices = list(range(val_size))
-        train_indices = list(range(val_size, total_size)) * train_repeats
-
+    def _process_input_dict(self, input_dict):
         input_tensors = []
         for key, value in input_dict.items():
             if (
@@ -513,9 +494,57 @@ class TorchModelWrapper(BaseModelWrapper):
                 # Convert numerical inputs to float tensors
                 input_tensors.append(torch.tensor(value, dtype=torch.float32))
 
+        return input_tensors
+
+    def build_dataset(
+        self,
+        inputs_df,
+        targets_df,
+        batch_size,
+        val_ratio=0.2,
+        val_inputs_df=None,
+        val_targets_df=None,
+        train_repeats=1,
+        shuffle=True,
+        verbose=0,
+    ):
+        super().build_dataset(targets_df, batch_size)
+
+        input_dict = self.build_inputs(inputs_df)
+        if verbose > 0:
+            for key, value in input_dict.items():
+                print(f"{key}: {value.shape}")
+
+        input_tensors = self._process_input_dict(input_dict)
+        target_tensors = torch.tensor(targets_df.values)
+
         self.dataset = torch.utils.data.TensorDataset(*input_tensors, target_tensors)
-        train_subset = torch.utils.data.Subset(self.dataset, train_indices)
-        val_subset = torch.utils.data.Subset(self.dataset, val_indices)
+        if val_inputs_df is not None and val_targets_df is not None:
+            train_subset = torch.utils.data.TensorDataset(*input_tensors, target_tensors)
+            
+            val_input_dict = self.build_inputs(val_inputs_df)
+            if verbose > 0:
+                for key, value in val_input_dict.items():
+                    print(f"val_{key}: {value.shape}")
+
+            val_target_tensors = torch.tensor(val_targets_df.values)
+            val_input_tensors = []
+            for key, value in val_input_dict.items():
+                if (
+                    key in self.global_input_keys["categorical"]
+                    or key in self.sequential_input_keys["categorical"]
+                ):
+                    val_input_tensors.append(torch.tensor(value, dtype=torch.long))
+                else:
+                    val_input_tensors.append(torch.tensor(value, dtype=torch.float32))
+            val_subset = torch.utils.data.TensorDataset(*val_input_tensors, val_target_tensors)
+        else:
+            total_size = len(inputs_df)
+            val_size = int(total_size * val_ratio)
+            val_indices = list(range(val_size))
+            train_indices = list(range(val_size, total_size)) * train_repeats
+            train_subset = torch.utils.data.Subset(self.dataset, train_indices)
+            val_subset = torch.utils.data.Subset(self.dataset, val_indices)
 
         def collate_fn(batch):
             batch = list(zip(*batch))
@@ -538,8 +567,6 @@ class TorchModelWrapper(BaseModelWrapper):
 
     def fit(self, train_settings: TrainSettings, verbose=0):
         super().fit()
-
-        self.model.to(self.device)
 
         optimizer = train_settings.optimizer
         if isinstance(optimizer, str):
@@ -635,13 +662,18 @@ class TorchModelWrapper(BaseModelWrapper):
                 for m in metric_functions:
                     summary += f" val_{m.name}: {history['val'][m.name][-1]:.4f} -"
 
-            print(summary)
+            if verbose > 0:
+                print(summary)
 
         return history
 
     def _model_predict(self, inputs, batch_size, verbose=0):
         self.model.eval()
         with torch.no_grad():
+            if isinstance(inputs, dict):
+                input_tensors = self._process_input_dict(inputs)
+                inputs = {key: value.to(self.device) for key, value in zip(inputs.keys(), input_tensors)}
+
             outputs = self.model(inputs)
             return outputs.detach().cpu().numpy()
 

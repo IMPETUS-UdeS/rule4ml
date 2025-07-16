@@ -407,9 +407,6 @@ class TorchMLP(torch.nn.Module):
     def __init__(
         self, settings: MLPSettings, input_shape, output_shape, categorical_maps, name="TorchMLP"
     ):
-        if torch is None:
-            raise ImportError("Torch is not available. Please install torch to use this class.")
-
         super().__init__()
 
         self.embeddings = torch.nn.ModuleDict()
@@ -497,11 +494,8 @@ class TorchGNN(torch.nn.Module):
         global_categorical_maps,
         sequential_categorical_maps,
         name="TorchGNN",
+        device=None
     ):
-        if torch is None:
-            raise ImportError(
-                "Failed to import \"torch\". Please install \"torch\" to use this class."
-            )
         if torch_geometric is None:
             raise ImportError(
                 "Failed to import \"torch_geometric\". Please install \"torch_geometric\" to use this class."
@@ -579,6 +573,14 @@ class TorchGNN(torch.nn.Module):
         self.sequential_categorical_maps = sequential_categorical_maps
 
         self.output_shape = output_shape
+        
+        if device is None:
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+        self.device = device
+        self.to(self.device)
 
     def forward(self, inputs):
         x_global_categorical = []
@@ -615,15 +617,15 @@ class TorchGNN(torch.nn.Module):
             valid_features = torch.cat(
                 [*valid_seq_embeddings, valid_seq_numerical], dim=-1
             )
-            node_features.append(valid_features)
+            node_features.append(valid_features.to(self.device))
             num_nodes = valid_features.size(0)
             if num_nodes > 1:
                 row = torch.arange(num_nodes - 1, dtype=torch.long)
                 edge = torch.stack([row, row + 1], dim=0) + ptr
-                edge_indices.append(edge)
+                edge_indices.append(edge.to(self.device))
 
             batch_vector.append(
-                torch.full((num_nodes,), i, dtype=torch.long)
+                torch.full((num_nodes,), i, dtype=torch.long).to(self.device)
             )
             ptr += num_nodes
 

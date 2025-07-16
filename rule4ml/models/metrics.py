@@ -172,7 +172,7 @@ class TorchParametricMAPE(torch.nn.Module):
 
 
 class TorchParametricSMAPE(torch.nn.Module):
-    def __init__(self, y_index, name="", eps=1e-6):
+    def __init__(self, y_index, name="", eps=1e-6, device=None):
         if torch is None:
             raise ImportError(
                 "PyTorch is not installed. Please install PyTorch to use this backend."
@@ -183,8 +183,15 @@ class TorchParametricSMAPE(torch.nn.Module):
         self.eps = eps
         self.name = name if name else f"smape_{y_index}"
 
-        self.total = torch.zeros(1, dtype=torch.float32)
-        self.count = torch.zeros(1, dtype=torch.float32)
+        if device is None:
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+        self.device = device
+
+        self.total = torch.zeros(1, dtype=torch.float32, device=self.device)
+        self.count = torch.zeros(1, dtype=torch.float32, device=self.device)
 
     def update(self, y_true, y_pred):
         y_true_i = y_true[..., self.y_index]
@@ -195,11 +202,11 @@ class TorchParametricSMAPE(torch.nn.Module):
         smape = 100.0 * numerator / denominator
 
         self.total += torch.sum(smape)
-        self.count += torch.tensor(smape.numel(), dtype=torch.float32)
-
+        self.count += torch.tensor(smape.numel(), dtype=torch.float32, device=self.device)
+    
     def result(self):
         if self.count.item() == 0:
-            return torch.tensor(0.0, dtype=torch.float32)
+            return torch.tensor(0.0, dtype=torch.float32, device=self.device)
 
         return self.total / self.count
 
@@ -209,7 +216,7 @@ class TorchParametricSMAPE(torch.nn.Module):
 
 
 class TorchParametricR2(torch.nn.Module):
-    def __init__(self, y_index, name="", eps=1e-6):
+    def __init__(self, y_index, name="", eps=1e-6, device=None, verbose=0):
         if torch is None:
             raise ImportError(
                 "PyTorch is not installed. Please install PyTorch to use this backend."
@@ -219,6 +226,14 @@ class TorchParametricR2(torch.nn.Module):
         self.y_index = y_index
         self.eps = eps
         self.name = name if name else f"r2_{y_index}"
+        self.verbose = verbose
+
+        if device is None:
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+        self.device = device
 
         self.reset()
 
@@ -238,7 +253,12 @@ class TorchParametricR2(torch.nn.Module):
         ss_tot = torch.sum((y_true - mean_true) ** 2)
         ss_tot = torch.clamp(ss_tot, min=self.eps)
 
-        return 1.0 - ss_res / ss_tot
+        r2 = 1.0 - ss_res / ss_tot
+
+        if self.verbose > 0:
+            print(f"[{self.name}] SS_res: {ss_res.item():.4f}, SS_tot: {ss_tot.item():.4f}, R2: {r2.item():.4f}")
+
+        return r2
 
     def reset(self):
         self.y_true_all = []

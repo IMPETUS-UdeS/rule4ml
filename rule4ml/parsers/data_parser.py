@@ -282,7 +282,7 @@ def read_from_json(file_patterns, data_filter: ParsedDataFilter = None, max_work
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = executor.map(read_json_files, batches)
-    json_data = [entry for result in results for entry in result]
+    json_data = [entry for result in results for entry in result if entry]
 
     # Optionally filter the json data
     if data_filter is not None:
@@ -297,6 +297,9 @@ def process_global_batch(model_batch, resource_key, normalize):
     batch_meta, batch_inputs, batch_targets = [], [], []
 
     for model_data in model_batch:
+        if not model_data:
+            continue
+
         model_config = model_data["model_config"]
         hls_config = model_data["hls_config"]
         if (target_part := model_data.get("target_part")):
@@ -360,6 +363,30 @@ def get_layers_data(model_config, target_depth=None):
         output_shape = np.asarray(layer_config["output_shape"]).flatten()
         output_size = np.prod([x for x in output_shape if x is not None])
         layer_parameters = layer_config["parameters"]
+        layer_trainable_parameters = layer_config["trainable_parameters"]
+
+        layer_filters = layer_config.get("filters", 0)
+        layer_kernels = layer_config.get("kernel_size", 0)
+        if isinstance(layer_kernels, (list, tuple)):
+            if len(layer_kernels) == 2:
+                layer_kernel_height = layer_kernels[0]
+                layer_kernel_width = layer_kernels[1]
+            else:
+                layer_kernel_height = layer_kernel_width = layer_kernels[0]
+        else:
+            layer_kernel_height = layer_kernel_width = layer_kernels
+
+        layer_strides = layer_config.get("strides", 0)
+        if isinstance(layer_strides, (list, tuple)):
+            if len(layer_strides) == 2:
+                layer_stride_height = layer_strides[0]
+                layer_stride_width = layer_strides[1]
+            else:
+                layer_stride_height = layer_stride_width = layer_strides[0]
+        else:
+            layer_stride_height = layer_stride_width = layer_strides
+
+        layer_use_bias = 1 if layer_config.get("use_bias", False) else 0
         reuse_factor = layer_config["reuse_factor"]
 
         layers_data.append(
@@ -368,6 +395,12 @@ def get_layers_data(model_config, target_depth=None):
                 "layer_input_size": input_size,
                 "layer_output_size": output_size,
                 "layer_parameter_count": layer_parameters,
+                "layer_trainable_parameter_count": layer_trainable_parameters,
+                "layer_filters": layer_filters,
+                "layer_kernel_height": layer_kernel_height,
+                "layer_kernel_width": layer_kernel_width,
+                "layer_stride_height": layer_stride_height,
+                "layer_stride_width": layer_stride_width,
                 "layer_reuse": reuse_factor,
             }
         )
@@ -385,12 +418,15 @@ def get_layers_data(model_config, target_depth=None):
 def process_model_batch(model_batch, max_model_depth):
     result = []
     for model_data in model_batch:
+        if not model_data:
+            continue
+
         layers_data = get_layers_data(model_data["model_config"], target_depth=max_model_depth)
         result.append(layers_data)
     return result
 
 def get_sequential_data(parsed_data, max_workers=1, batch_size=128):
-    max_model_depth = max(len(model["model_config"]) for model in parsed_data)
+    max_model_depth = max(len(model["model_config"]) for model in parsed_data if model)
 
     batches = list(batch_iterable(parsed_data, batch_size))
 
@@ -628,10 +664,10 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
         # }
 
         targets = {
-            "bram": max(1 / max_bram, (bram / max_bram)) * 100,
-            "dsp": max(1 / max_dsp, (dsp / max_dsp)) * 100,
-            "ff": max(1 / max_ff, (ff / max_ff)) * 100,
-            "lut": max(1 / max_lut, (lut / max_lut)) * 100,
+            "bram": max(1 / max_bram, (bram / max_bram)) * 100 if bram is not None else None,
+            "dsp": max(1 / max_dsp, (dsp / max_dsp)) * 100 if dsp is not None else None,
+            "ff": max(1 / max_ff, (ff / max_ff)) * 100 if ff is not None else None,
+            "lut": max(1 / max_lut, (lut / max_lut)) * 100 if lut is not None else None,
         }
 
     cycles_min = latency_report.get("cycles_min", None)
