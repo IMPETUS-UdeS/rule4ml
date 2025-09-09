@@ -242,7 +242,7 @@ class TorchSearcher:
         ]
 
         train_settings = TrainSettings(
-            num_epochs=20,
+            num_epochs=self.num_epochs,
             batch_size=64,
             learning_rate=trial.suggest_categorical("learning_rate", [1e-5, 1e-4, 1e-3]),
             optimizer="adam",
@@ -275,8 +275,10 @@ class TorchSearcher:
         directory="./torch_search",
         project_name=None,
         n_trials=20,
+        n_epochs=5,
         direction="minimize"
     ):
+        self.num_epochs = n_epochs
         self.inputs_df = inputs_df
         self.targets_df = targets_df
         self.val_inputs_df = val_inputs_df

@@ -52,7 +52,7 @@
   },
   "sequential_categorical_maps": {},
   "output_labels": [
-    "cycles"
+    "interval"
   ],
   "output_shape": [
     null,
@@ -60,7 +60,7 @@
   ],
   "model_class": "KerasMLP",
   "model_config": {
-    "name": "CYCLES_MLP",
+    "name": "INTERVAL_MLP",
     "settings": {
       "embedding_layers": [
         16,

@@ -1,0 +1,5 @@
+*
+!.gitignore
+
+!*_config.json
+!*.weights.h5

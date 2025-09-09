@@ -373,14 +373,14 @@ class BaseModelWrapper:
         total_time = time.time() - start_time
 
         if verbose > 1:
-            r2 = r2_score(targets, prediction)
-            print(f"R2 Score: {r2:.1f}")
+            r2 = r2_score(targets, prediction, force_finite=False)
+            print(f"R2 Score: {r2:.2f}")
 
             smape_value = smape(targets, prediction)
-            print(f"SMAPE: {smape_value:.1f}%")
+            print(f"SMAPE: {smape_value:.2f}%")
 
             rmse_value = rmse(targets, prediction)
-            print(f"RMSE: {rmse_value:.1f}")
+            print(f"RMSE: {rmse_value:.2f}")
 
             avg_inference_time = total_time / len(inputs_df)
             print(f"Average Inference Time: {avg_inference_time:.2E} seconds")

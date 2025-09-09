@@ -831,7 +831,7 @@ def to_dataframe(
     Batched and parallelized to_dataframe implementation.
     """
 
-    n = len(meta_data)
+    n = len(global_inputs)
     batches = [
         (
             meta_data[i:i+batch_size],
