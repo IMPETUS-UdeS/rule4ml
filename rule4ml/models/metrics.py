@@ -16,8 +16,8 @@ else:
 
 
 def smape(y_true, y_pred):
-    y_true = np.asarray(y_true, dtype=np.float64)
-    y_pred = np.asarray(y_pred, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float32)
+    y_pred = np.asarray(y_pred, dtype=np.float32)
 
     y_true = y_true.squeeze()
     y_pred = y_pred.squeeze()
@@ -26,8 +26,8 @@ def smape(y_true, y_pred):
 
 
 def rmse(y_true, y_pred):
-    y_true = np.asarray(y_true, dtype=np.float64)
-    y_pred = np.asarray(y_pred, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float32)
+    y_pred = np.asarray(y_pred, dtype=np.float32)
 
     y_true = y_true.squeeze()
     y_pred = y_pred.squeeze()
@@ -136,7 +136,7 @@ class KerasParametricR2(tf.keras.metrics.Metric):
 
 
 class TorchParametricMAPE(torch.nn.Module):
-    def __init__(self, y_index, name="", eps=1e-6):
+    def __init__(self, y_index, name="", eps=1e-6, scaler=None, device=None):
         if torch is None:
             raise ImportError(
                 "PyTorch is not installed. Please install PyTorch to use this backend."
@@ -146,42 +146,7 @@ class TorchParametricMAPE(torch.nn.Module):
         self.y_index = y_index
         self.eps = eps
         self.name = name if name else f"mape_{y_index}"
-
-        self.total = torch.zeros(1, dtype=torch.float32)
-        self.count = torch.zeros(1, dtype=torch.float32)
-
-    def update(self, y_true, y_pred):
-        y_true_i = y_true[..., self.y_index]
-        y_pred_i = y_pred[..., self.y_index]
-
-        diff = torch.abs(y_true_i - y_pred_i) / torch.clamp(torch.abs(y_true_i), min=self.eps)
-        mape = 100.0 * torch.mean(diff, dim=-1)
-
-        self.total += torch.sum(mape)
-        self.count += torch.tensor(mape.numel(), dtype=torch.float32)
-
-    def result(self):
-        if self.count.item() == 0:
-            return torch.tensor(0.0, dtype=torch.float32)
-
-        return self.total / self.count
-
-    def reset(self):
-        self.total.fill_(0)
-        self.count.fill_(0)
-
-
-class TorchParametricSMAPE(torch.nn.Module):
-    def __init__(self, y_index, name="", eps=1e-6, device=None):
-        if torch is None:
-            raise ImportError(
-                "PyTorch is not installed. Please install PyTorch to use this backend."
-            )
-
-        super().__init__()
-        self.y_index = y_index
-        self.eps = eps
-        self.name = name if name else f"smape_{y_index}"
+        self.scaler = scaler
 
         if device is None:
             if torch.cuda.is_available():
@@ -193,9 +158,69 @@ class TorchParametricSMAPE(torch.nn.Module):
         self.total = torch.zeros(1, dtype=torch.float32, device=self.device)
         self.count = torch.zeros(1, dtype=torch.float32, device=self.device)
 
-    def update(self, y_true, y_pred):
+    def update(self, y_true, y_pred, keys=None):
         y_true_i = y_true[..., self.y_index]
         y_pred_i = y_pred[..., self.y_index]
+
+        if self.scaler and keys:
+            key = keys[self.y_index]
+            y_true_i = self.scaler.inverse({key: y_true_i})[key]
+            y_pred_i = self.scaler.inverse({key: y_pred_i})[key]
+
+        y_true_i = y_true_i.reshape(-1)
+        y_pred_i = y_pred_i.reshape(-1)
+
+        diff = torch.abs(y_true_i - y_pred_i) / torch.clamp(torch.abs(y_true_i), min=self.eps)
+        mape = 100.0 * torch.mean(diff, dim=-1)
+
+        self.total += torch.sum(mape)
+        self.count += torch.tensor(mape.numel(), dtype=torch.float32, device=self.device)
+
+    def result(self):
+        if self.count.item() == 0:
+            return torch.tensor(0.0, dtype=torch.float32, device=self.device)
+
+        return self.total / self.count
+
+    def reset(self):
+        self.total.fill_(0)
+        self.count.fill_(0)
+
+
+class TorchParametricSMAPE(torch.nn.Module):
+    def __init__(self, y_index, name="", eps=1e-6, scaler=None, device=None):
+        if torch is None:
+            raise ImportError(
+                "PyTorch is not installed. Please install PyTorch to use this backend."
+            )
+
+        super().__init__()
+        self.y_index = y_index
+        self.eps = eps
+        self.name = name if name else f"smape_{y_index}"
+        self.scaler = scaler
+
+        if device is None:
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+        self.device = device
+
+        self.total = torch.zeros(1, dtype=torch.float32, device=self.device)
+        self.count = torch.zeros(1, dtype=torch.float32, device=self.device)
+
+    def update(self, y_true, y_pred, keys=None):
+        y_true_i = y_true[..., self.y_index]
+        y_pred_i = y_pred[..., self.y_index]
+
+        if self.scaler and keys:
+            key = keys[self.y_index]
+            y_true_i = self.scaler.inverse({key: y_true_i})[key]
+            y_pred_i = self.scaler.inverse({key: y_pred_i})[key]
+
+        y_true_i = y_true_i.reshape(-1)
+        y_pred_i = y_pred_i.reshape(-1)
 
         numerator = torch.abs(y_true_i - y_pred_i)
         denominator = torch.clamp(torch.abs(y_true_i) + torch.abs(y_pred_i), min=self.eps)
@@ -216,7 +241,7 @@ class TorchParametricSMAPE(torch.nn.Module):
 
 
 class TorchParametricR2(torch.nn.Module):
-    def __init__(self, y_index, name="", eps=1e-6, device=None, verbose=0):
+    def __init__(self, y_index, name="", eps=1e-6, scaler=None, device=None):
         if torch is None:
             raise ImportError(
                 "PyTorch is not installed. Please install PyTorch to use this backend."
@@ -226,7 +251,7 @@ class TorchParametricR2(torch.nn.Module):
         self.y_index = y_index
         self.eps = eps
         self.name = name if name else f"r2_{y_index}"
-        self.verbose = verbose
+        self.scaler = scaler
 
         if device is None:
             if torch.cuda.is_available():
@@ -237,9 +262,17 @@ class TorchParametricR2(torch.nn.Module):
 
         self.reset()
 
-    def update(self, y_true, y_pred):
-        y_true_i = y_true[..., self.y_index].detach().cpu()
-        y_pred_i = y_pred[..., self.y_index].detach().cpu()
+    def update(self, y_true, y_pred, keys=None):
+        y_true_i = y_true[..., self.y_index]
+        y_pred_i = y_pred[..., self.y_index]
+
+        if self.scaler and keys:
+            key = keys[self.y_index]
+            y_true_i = self.scaler.inverse({key: y_true_i})[key]
+            y_pred_i = self.scaler.inverse({key: y_pred_i})[key]
+
+        y_true_i = y_true_i.reshape(-1)
+        y_pred_i = y_pred_i.reshape(-1)
 
         self.y_true_all.append(y_true_i)
         self.y_pred_all.append(y_pred_i)
@@ -254,9 +287,6 @@ class TorchParametricR2(torch.nn.Module):
         ss_tot = torch.clamp(ss_tot, min=self.eps)
 
         r2 = 1.0 - ss_res / ss_tot
-
-        if self.verbose > 0:
-            print(f"[{self.name}] SS_res: {ss_res.item():.4f}, SS_tot: {ss_tot.item():.4f}, R2: {r2.item():.4f}")
 
         return r2
 

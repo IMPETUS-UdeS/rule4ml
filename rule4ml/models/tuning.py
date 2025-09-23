@@ -7,6 +7,7 @@ import numpy as np
 import optuna
 
 from rule4ml.models.architectures import GNNSettings, KerasMLP, MLPSettings, TorchGNN
+from rule4ml.models.callbacks import EarlyStopping, ModelCheckpoint
 from rule4ml.models.metrics import (
     KerasParametricR2,
     KerasParametricSMAPE,
@@ -241,16 +242,21 @@ class TorchSearcher:
             for idx in range(len(target_labels))
         ]
 
+        if self.batch_size:
+            batch_size = self.batch_size
+        else:
+            batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256])
+
         train_settings = TrainSettings(
-            num_epochs=self.num_epochs,
-            batch_size=64,
+            num_epochs=self.n_epochs,
+            batch_size=batch_size,
             learning_rate=trial.suggest_categorical("learning_rate", [1e-5, 1e-4, 1e-3]),
             optimizer="adam",
             loss_function="msle",
             metrics=metrics
         )
 
-        if self.model_wrapper.dataset is None:
+        if self.model_wrapper.dataset is None or self.batch_size != batch_size:
             self.model_wrapper.build_dataset(
                 inputs_df=self.inputs_df,
                 targets_df=self.targets_df,
@@ -261,7 +267,27 @@ class TorchSearcher:
                 shuffle=True,
             )
 
-        history = self.model_wrapper.fit(train_settings, verbose=0)
+        path = os.path.dirname(self.db_path)
+        callbacks = [
+            EarlyStopping(
+                monitor="val_loss",
+                mode="min",
+                patience=5,
+                min_delta=0.0,
+                restore_best=False
+            ),
+            ModelCheckpoint(
+                dirpath=path,
+                monitor="val_loss",
+                mode="min"
+            )
+        ]
+
+        history = self.model_wrapper.fit(
+            train_settings,
+            callbacks=callbacks,
+            verbose=1
+        )
         return np.min(history["val"]["loss"])
 
     def gnn_search(
@@ -276,6 +302,7 @@ class TorchSearcher:
         project_name=None,
         n_trials=20,
         n_epochs=5,
+        batch_size=None,
         direction="minimize"
     ):
         self.num_epochs = n_epochs
@@ -285,6 +312,8 @@ class TorchSearcher:
         self.val_targets_df = val_targets_df
         self.global_categorical_maps = global_categorical_maps
         self.sequential_categorical_maps = sequential_categorical_maps
+        self.n_epochs = n_epochs
+        self.batch_size = batch_size
 
         os.makedirs(directory, exist_ok=True)
         project_name = project_name or datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -303,6 +332,8 @@ class TorchSearcher:
         self,
         inputs_df,
         targets_df,
+        global_categorical_maps,
+        sequential_categorical_maps,
         directory,
         project_name,
         val_inputs_df=None,
@@ -312,18 +343,20 @@ class TorchSearcher:
         self.targets_df = targets_df
         self.val_inputs_df = val_inputs_df
         self.val_targets_df = val_targets_df
+        self.global_categorical_maps = global_categorical_maps
+        self.sequential_categorical_maps = sequential_categorical_maps
 
         self.study_name = project_name
         self.db_path = os.path.join(directory, f"{project_name}.db")
         db_uri = f"sqlite:///{self.db_path}"
-
+        
         self.study = optuna.load_study(
             study_name=self.study_name,
             storage=db_uri,
         )
 
     def best_params(self):
-        return self.study.best_params if self.study else None
+        return self.study.best_params if self.study else {}
 
     def best_train_settings(self):
         best_params = self.best_params()

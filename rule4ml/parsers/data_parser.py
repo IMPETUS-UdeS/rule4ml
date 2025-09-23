@@ -44,7 +44,21 @@ default_layer_type_map = {
     "flatten": 17,
 }
 default_strategy_map = {"latency": 1, "resource": 2}
-
+default_hls4ml_map = {"0.8.1": 1, "1.1.0": 2}
+default_vivado_map = {
+    "2019.1": 1,
+    "2019.2": 2,
+    "2020.1": 3,
+    "2020.2": 4,
+    "2021.1": 5,
+    "2021.2": 6,
+    "2022.1": 7,
+    "2022.2": 8,
+    "2023.1": 9,
+    "2023.2": 10,
+    "2024.1": 11,
+    "2024.2": 12,
+}
 
 @dataclass
 class ParsedDataFilter:
@@ -311,6 +325,15 @@ def process_global_batch(model_batch, resource_key, normalize):
         batch_inputs.append(unwrap_nested_dicts(get_global_inputs(model_config, hls_config)))
         batch_targets.append(unwrap_nested_dicts(get_prediction_targets(model_data, resource_key, norm_board)))
 
+        hls4ml_version = model_data.get("hls4ml_version", None)
+        if hls4ml_version:
+            batch_inputs[-1]["hls4ml_version"] = hls4ml_version
+        vivado_version = model_data.get("vivado_version", None)
+        if not vivado_version:
+            vivado_version = model_data.get("backend_version", None)
+        if vivado_version:
+            batch_inputs[-1]["vivado_version"] = vivado_version
+
     return batch_meta, batch_inputs, batch_targets
 
 
@@ -343,19 +366,24 @@ def get_layers_data(model_config, target_depth=None):
         list: A list of processed layer data dictionaries.
     """
 
+    layers_fixed_ops = []
+    fixed_ops = get_network_fixed_ops(model_config)
+    if "layers" in fixed_ops:
+        layers_fixed_ops = fixed_ops["layers"]
+
     layers_data = []
-    for layer_config in model_config:
-        layer_type = layer_config["class_name"]
-        if layer_type.startswith("Q"):  # qkeras layers
+    for idx, layer_config in enumerate(model_config):
+        layer_type = layer_config["class_name"].lower()
+        if layer_type.startswith("q"):  # qkeras layers
             layer_type = layer_type[1:]
 
-        if layer_type == "Activation":
+        if layer_type == "activation":
             layer_type = get_activation_name(layer_config["activation"])
             if layer_type == "linear":  # ignore linear activations
                 continue
 
         input_shape = layer_config["input_shape"]
-        if layer_type in ["Add", "Concatenate"]:
+        if layer_type in ["add", "concatenate"]:
             input_shape = layer_config["output_shape"]
         input_shape = np.asarray(input_shape).flatten()
         input_size = np.prod([x for x in input_shape if x is not None])
@@ -389,21 +417,24 @@ def get_layers_data(model_config, target_depth=None):
         layer_use_bias = 1 if layer_config.get("use_bias", False) else 0
         reuse_factor = layer_config["reuse_factor"]
 
-        layers_data.append(
-            {
-                "layer_type": layer_type.lower(),
-                "layer_input_size": input_size,
-                "layer_output_size": output_size,
-                "layer_parameter_count": layer_parameters,
-                "layer_trainable_parameter_count": layer_trainable_parameters,
-                "layer_filters": layer_filters,
-                "layer_kernel_height": layer_kernel_height,
-                "layer_kernel_width": layer_kernel_width,
-                "layer_stride_height": layer_stride_height,
-                "layer_stride_width": layer_stride_width,
-                "layer_reuse": reuse_factor,
-            }
-        )
+        data = {
+            "layer_type": layer_type.lower(),
+            "layer_input_size": input_size,
+            "layer_output_size": output_size,
+            "layer_parameter_count": layer_parameters,
+            "layer_trainable_parameter_count": layer_trainable_parameters,
+            "layer_filters": layer_filters,
+            "layer_kernel_height": layer_kernel_height,
+            "layer_kernel_width": layer_kernel_width,
+            "layer_stride_height": layer_stride_height,
+            "layer_stride_width": layer_stride_width,
+            "layer_reuse": reuse_factor,
+            "layer_op_add": layers_fixed_ops[idx].get("add", 0),
+            "layer_op_mult": layers_fixed_ops[idx].get("mult", 0),
+            "layer_op_logical": layers_fixed_ops[idx].get("logical", 0),
+            "layer_op_lookup": layers_fixed_ops[idx].get("lookup", 0),
+        }
+        layers_data.append(data)
 
     # Optional zero-padding
     if target_depth is not None:
@@ -424,6 +455,7 @@ def process_model_batch(model_batch, max_model_depth):
         layers_data = get_layers_data(model_data["model_config"], target_depth=max_model_depth)
         result.append(layers_data)
     return result
+
 
 def get_sequential_data(parsed_data, max_workers=1, batch_size=128):
     max_model_depth = max(len(model["model_config"]) for model in parsed_data if model)
@@ -575,11 +607,9 @@ def get_global_inputs(model_config, hls_config):
         features_to_extract, keys=["inputs", "outputs", "parameters", "reuse"]
     )
     extracted_features = unwrap_nested_dicts(adjusted_features)
-
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
 
     hls_config = camel_keys_to_snake(hls_config)
-
     precision = hls_config["model"]["precision"]
     if isinstance(precision, dict):
         precision = precision["default"]
@@ -600,7 +630,9 @@ def get_global_inputs(model_config, hls_config):
     }
     inputs.update(extracted_features)
 
-    fixed_ops = get_network_fixed_ops(model_config, precision)
+    fixed_ops = get_network_fixed_ops(model_config)
+    if "layers" in fixed_ops:
+        fixed_ops.pop("layers")
     inputs.update(fixed_ops)
 
     return inputs
@@ -697,82 +729,99 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
     return targets
 
 
-def get_network_fixed_ops(model_json, precision):
+def get_network_fixed_ops(model_json):
     """
     _summary_
 
     Args:
         model_json (_type_): _description_
-        precision (_type_): _description_
 
     Returns:
         _type_: _description_
     """
 
-    total_mult = 0
-    total_add = 0
-    total_logical = 0
-    total_lookup = 0
-
-    total_bits, fractional_bits = fixed_precision_to_bit_width(precision)
-
+    fops_dict = {
+        "total_add": 0,
+        "total_mult": 0,
+        "total_logical": 0,
+        "total_lookup": 0,
+        "layers": []
+    }
     for layer_json in model_json:
-        flat_input_shape = np.asarray(layer_json["input_shape"]).flatten()
+        layer_add = 0
+        layer_mult = 0
+        layer_logical = 0
+        layer_lookup = 0
 
-        if layer_json["class_name"] == "Add":
-            input_size = np.prod([x for x in flat_input_shape if x is not None])
-            total_add += input_size
-        elif layer_json["class_name"] == "Concatenate":
+        input_shape = np.asarray(layer_json["input_shape"])
+        flat_input_shape = input_shape.flatten()
+        output_shape = np.asarray(layer_json["output_shape"])
+        use_bias = layer_json.get("use_bias", False)
+
+        layer_class = layer_json["class_name"].lower()
+        if layer_class.startswith("q"): # QKeras layers
+            layer_class = layer_class[1:]
+
+        if layer_class == "add":
+            inbound_count = max(2, len(layer_json.get("inbound_layers", [])))
+            output_size = np.prod([x for x in output_shape if x is not None])
+            layer_add = (inbound_count - 1) * output_size
+        elif layer_class == "concatenate":
             pass
 
-        elif layer_json["class_name"] == "Conv2D":
+        elif layer_class in ["conv1d", "conv2d"]:
             # Assuming "channel-last" format
-            input_size = np.prod([x for x in layer_json["input_shape"][:-1] if x is not None])
-            use_bias = layer_json["use_bias"]
-            mult_in = (
-                layer_json["kernel_size"][0]
-                * layer_json["kernel_size"][1]
-                * layer_json["n_channel"]
-            )
-            mult_out = layer_json["n_filter"]
-            total_mult += (input_size * int(use_bias)) * mult_in * mult_out
-            total_add += (input_size * int(use_bias)) * mult_in * mult_out
+            groups = layer_json.get("groups", 1)
+            output_size = np.prod([x for x in output_shape[:-1] if x is not None])
+
+            kernel_size = list(layer_json["kernel_size"])
+            if (len(kernel_size) == 1) and (layer_class == "conv2d"):
+                kernel_size = [kernel_size[0], kernel_size[0]]
+            kernel_size = np.prod(kernel_size)
+
+            fan_in = (kernel_size * layer_json["channels"]) // max(1, groups)
+            filters = layer_json["filters"]
+
+            layer_add = output_size * filters * (fan_in - 1 + int(use_bias))
+            layer_mult = output_size * filters * fan_in
 
         else:
             input_size = np.prod([x for x in flat_input_shape if x is not None])
-            if layer_json["class_name"] == "Dense":
-                neurons = layer_json["neurons"]
-                use_bias = layer_json["use_bias"]
-                total_mult += (input_size + int(use_bias)) * neurons
-                total_add += (input_size + int(use_bias)) * (neurons - 1)
+            if layer_class == "dense":
+                neurons = layer_json.get("neurons", output_shape[-1])
+                layer_add = (input_size - 1 + int(use_bias)) * neurons
+                layer_mult = input_size * neurons
 
-            elif layer_json["class_name"] == "Activation":
-                if layer_json["activation"] == "relu":
-                    total_logical += input_size
-                elif layer_json["activation"] in ["tanh", "sigmoid"]:
-                    total_lookup += input_size
-                elif layer_json["activation"] == "softmax":
-                    # all exps (input_size) and then invert of the exps" sum (+1)
-                    total_lookup += input_size + 1
+            elif layer_class == "activation":
+                activation_type = get_activation_name(layer_json["activation"].lower())
+                if activation_type == "relu":
+                    layer_logical = input_size
+                elif activation_type in ["tanh", "sigmoid"]:
+                    layer_lookup = input_size
+                elif activation_type == "softmax":
+                    # all exps (input_size) and then invert of the sum of exps (+1)
+                    layer_lookup = input_size + 1
                     # exps sum
-                    total_add += input_size - 1
+                    layer_add = max(0, input_size - 1)
                     # mult each exp with the inverted sum
-                    total_mult += input_size
+                    layer_mult = input_size
 
-            elif layer_json["class_name"] == "BatchNormalization":
-                total_mult += input_size
-                total_add += input_size
+            elif layer_class == "batchnormalization":
+                layer_mult = input_size
+                layer_add = input_size
 
-    total_mult *= total_bits
-    total_add *= total_bits
-    total_logical *= total_bits
+        fops_dict["layers"].append({
+            "add": layer_add,
+            "mult": layer_mult,
+            "logical": layer_logical,
+            "lookup": layer_lookup,
+        })
+        fops_dict["total_add"] += layer_add
+        fops_dict["total_mult"] += layer_mult
+        fops_dict["total_logical"] += layer_logical
+        fops_dict["total_lookup"] += layer_lookup
 
-    return {
-        "total_mult": total_mult,
-        "total_add": total_add,
-        "total_logical": total_logical,
-        "total_lookup": total_lookup,
-    }
+    return fops_dict
 
 
 def batch_to_dataframe(

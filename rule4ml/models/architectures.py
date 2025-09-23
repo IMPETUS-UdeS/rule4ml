@@ -405,7 +405,13 @@ class KerasTransformer(keras.Model):
 
 class TorchMLP(torch.nn.Module):
     def __init__(
-        self, settings: MLPSettings, input_shape, output_shape, categorical_maps, name="TorchMLP"
+        self,
+        settings: MLPSettings,
+        input_shape,
+        output_shape,
+        categorical_maps,
+        name="TorchMLP",
+        device=None
     ):
         super().__init__()
 
@@ -451,6 +457,14 @@ class TorchMLP(torch.nn.Module):
 
         self.output_shape = output_shape
 
+        if device is None:
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+        self.device = device
+        self.to(self.device)
+
     def forward(self, inputs):
         x_categorical = []
         for idx, key in enumerate(self.embeddings.keys()):
@@ -466,7 +480,9 @@ class TorchMLP(torch.nn.Module):
             if dropout:
                 x = dropout(x)
 
-        outputs = torch.nn.functional.relu(self.output_layer(x))
+        outputs = self.output_layer(x)
+        outputs = torch.nn.functional.softplus(outputs)
+        # outputs = torch.nn.functional.relu(outputs)
         return outputs
 
     def to_config(self):
@@ -518,30 +534,50 @@ class TorchGNN(torch.nn.Module):
             )
 
         self.numerical_layers = torch.nn.ModuleDict()
-        in_dim = global_input_shape[-1] - len(global_categorical_maps)
-        if in_dim > 0:
+        g_in_dim = max(0, global_input_shape[-1] - len(global_categorical_maps))
+        if g_in_dim > 0:
             for idx, units in enumerate(settings.numerical_dense_layers):
                 self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
-                    torch.nn.Linear(in_dim, units, bias=False)
+                    torch.nn.Linear(g_in_dim, units, bias=False)
                 )
-                in_dim = units
+                g_in_dim = units
 
         seq_numerical_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
         gnn_dim = sum(settings.seq_embedding_layers) + seq_numerical_dim
+
+        # Project global features to the same dimension as the GNN node features?
+        g_token_dim = sum(settings.global_embedding_layers) + g_in_dim
+        self.g_projection = torch.nn.Sequential(
+            torch.nn.Linear(g_token_dim, gnn_dim),
+            torch.nn.ReLU(),
+        )
+
         self.gconvs = torch.nn.ModuleList()
+        self.norms = torch.nn.ModuleList()
         for idx, units in enumerate(settings.gconv_layers):
-            self.gconvs.append(
-                torch_geometric.nn.SAGEConv(
-                    in_channels=gnn_dim,
-                    out_channels=units,
-                    bias=True,
-                )
+            mlp = torch.nn.Sequential(
+                torch.nn.Linear(gnn_dim, units),
+                torch.nn.ReLU(),
+                torch.nn.Linear(units, units)
             )
+            self.gconvs.append(
+                # torch_geometric.nn.SAGEConv(
+                #     in_channels=gnn_dim,
+                #     out_channels=units,
+                #     bias=True,
+                # )
+                torch_geometric.nn.GINConv(nn=mlp)
+            )
+            self.norms.append(torch_geometric.nn.GraphNorm(in_channels=units))
             gnn_dim = units
+        self.jumping_knowledge = torch_geometric.nn.JumpingKnowledge(mode="cat")
 
-        self.global_pool = torch_geometric.nn.global_add_pool
+        self.attention_pool = torch_geometric.nn.AttentionalAggregation(
+            gate_nn=torch.nn.Sequential(torch.nn.Linear(sum(settings.gconv_layers), 1))
+        )
+        self.global_pool = torch_geometric.nn.global_mean_pool
 
-        concat_dim = sum(settings.global_embedding_layers) + in_dim + settings.gconv_layers[-1]
+        concat_dim = sum(settings.global_embedding_layers) + g_in_dim + sum(settings.gconv_layers)
         self.dense_layers = torch.nn.ModuleList()
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
@@ -636,11 +672,20 @@ class TorchGNN(torch.nn.Module):
         edge_indices = torch.cat(edge_indices, dim=1) if edge_indices else torch.empty((2, 0), dtype=torch.long)
         batch = torch.cat(batch_vector, dim=0)
 
-        for gconv in self.gconvs:
-            x_seq = gconv(x_seq, edge_index=edge_indices)
-            x_seq = torch.nn.functional.relu(x_seq)
+        if edge_indices.numel() > 0:
+            edge_indices = torch_geometric.utils.to_undirected(edge_indices, num_nodes=ptr)
+        edge_indices, _ = torch_geometric.utils.add_self_loops(edge_indices, num_nodes=ptr)
 
-        pooled_seq = self.global_pool(x_seq, batch=batch)
+        xs = []
+        for gconv, norm in zip(self.gconvs, self.norms):
+            x_seq = gconv(x_seq, edge_index=edge_indices)
+            x_seq = norm(x_seq)
+            x_seq = torch.nn.functional.relu(x_seq)
+            xs.append(x_seq)
+        x_seq = self.jumping_knowledge(xs)
+
+        pooled_seq = self.attention_pool(x_seq, index=batch)
+        # pooled_seq = self.global_pool(x_seq, batch=batch)
 
         x = torch.cat([*x_global_categorical, x_global_numerical, pooled_seq], dim=-1)
         for idx, dense in enumerate(self.dense_layers):
@@ -648,7 +693,9 @@ class TorchGNN(torch.nn.Module):
             if self.dropouts[idx] is not None:
                 x = self.dropouts[idx](x)
 
-        outputs = torch.nn.functional.relu(self.output_layer(x))
+        outputs = self.output_layer(x)
+        outputs = torch.nn.functional.softplus(outputs)
+        # outputs = torch.nn.functional.relu(outputs)
         return outputs            
 
     def to_config(self):

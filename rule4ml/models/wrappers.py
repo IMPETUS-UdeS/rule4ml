@@ -22,6 +22,7 @@ except ImportError:
     onnx = None
 
 from rule4ml.models.architectures import *  # noqa: F403
+from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.metrics import rmse, smape
 from rule4ml.models.utils import get_loss_from_str, get_optimizer_from_str
 from rule4ml.parsers.data_parser import (
@@ -216,6 +217,7 @@ class BaseModelWrapper:
 
         self.model = None
         self.dataset = None
+        self.scaler = None
 
     def set_model(self, model):
         self.model = model
@@ -278,12 +280,25 @@ class BaseModelWrapper:
 
         return input_dict
 
-    def build_dataset(self, targets_df, batch_size):
+    def build_dataset(self, targets_df, batch_size, val_targets_df=None, scaler=None):
         if self.model is None:
             raise Exception("A model needs to be set or loaded before building a dataset.")
 
         self.batch_size = batch_size
         self.output_labels = targets_df.columns.values
+
+        if scaler:
+            targets_df = pd.DataFrame(
+                [scaler.transform(row) for row in targets_df.to_dict(orient="records")],
+                index=targets_df.index
+            )
+            if val_targets_df is not None:
+                val_targets_df = pd.DataFrame(
+                    [scaler.transform(row) for row in val_targets_df.to_dict(orient="records")],
+                    index=val_targets_df.index
+                )
+        self.scaler = scaler
+        return targets_df, val_targets_df
 
     def fit(self):
         if self.model is None:
@@ -360,7 +375,7 @@ class BaseModelWrapper:
             sequential_labels = list(self.sequential_numerical_labels) + list(
                 self.sequential_categorical_maps.keys()
             )
-            inputs_df["sequential_inputs"] = inputs_df["sequential_inputs"].apply(
+            inputs_df.loc[:, "sequential_inputs"] = inputs_df["sequential_inputs"].apply(
                 lambda x: x[sequential_labels]
             )
             feature_labels += ["sequential_inputs"]
@@ -399,6 +414,8 @@ class BaseModelWrapper:
             "output_shape": self.output_shape,
             "model_class": self.model.__class__.__name__,
             "model_config": self.model.to_config(),
+            "scaler_class": self.scaler.__class__.__name__ if self.scaler else None,
+            "scaler_config": self.scaler.to_config() if self.scaler else None,
         }
 
     def from_config(self, config):
@@ -414,6 +431,11 @@ class BaseModelWrapper:
         self.model_config = config["model_config"]
         self.model = globals()[model_class].from_config(self.model_config)
         self.set_model(self.model)
+
+        scaler_class = config.get("scaler_class", None)
+        scaler_config = config.get("scaler_config", None)
+        if scaler_class and scaler_config:
+            self.scaler = globals()[scaler_class].from_config(scaler_config)
 
     def save(self, save_dir):
         """
@@ -470,16 +492,12 @@ class BaseModelWrapper:
 class TorchModelWrapper(BaseModelWrapper):
     def __init__(self, device=None):
         super().__init__()
-
         if torch is None:
             raise ImportError("Torch import failed. Please install torch to use this wrapper.")
 
-        if device is None:
-            if torch.cuda.is_available():
-                device = torch.device("cuda")
-            else:
-                device = torch.device("cpu")
-        self.device = device
+    def set_model(self, model):
+        super().set_model(model)
+        self.device = model.device
 
     def _process_input_dict(self, input_dict):
         input_tensors = []
@@ -506,9 +524,12 @@ class TorchModelWrapper(BaseModelWrapper):
         val_targets_df=None,
         train_repeats=1,
         shuffle=True,
+        scaler=None,
         verbose=0,
     ):
-        super().build_dataset(targets_df, batch_size)
+        targets_df, val_targets_df = super().build_dataset(
+            targets_df, batch_size, val_targets_df=val_targets_df, scaler=scaler
+        )
 
         input_dict = self.build_inputs(inputs_df)
         if verbose > 0:
@@ -520,8 +541,10 @@ class TorchModelWrapper(BaseModelWrapper):
 
         self.dataset = torch.utils.data.TensorDataset(*input_tensors, target_tensors)
         if val_inputs_df is not None and val_targets_df is not None:
-            train_subset = torch.utils.data.TensorDataset(*input_tensors, target_tensors)
-            
+            indices = torch.randperm(len(self.dataset))
+            train_indices = indices.tolist() * train_repeats
+            train_subset = torch.utils.data.Subset(self.dataset, train_indices)
+
             val_input_dict = self.build_inputs(val_inputs_df)
             if verbose > 0:
                 for key, value in val_input_dict.items():
@@ -541,15 +564,18 @@ class TorchModelWrapper(BaseModelWrapper):
         else:
             total_size = len(inputs_df)
             val_size = int(total_size * val_ratio)
-            val_indices = list(range(val_size))
-            train_indices = list(range(val_size, total_size)) * train_repeats
+
+            indices = torch.randperm(total_size)
+            val_indices = indices[:val_size].tolist()
+            train_indices = indices[val_size:].tolist()
+            train_indices = train_indices * train_repeats
             train_subset = torch.utils.data.Subset(self.dataset, train_indices)
             val_subset = torch.utils.data.Subset(self.dataset, val_indices)
 
         def collate_fn(batch):
             batch = list(zip(*batch))
             inputs = {key: torch.stack(batch[i]) for i, key in enumerate(input_dict.keys())}
-            targets = torch.stack(batch[-1])
+            targets = torch.stack(batch[-1]).to(dtype=torch.float32)
             return inputs, targets
 
         self.train_data = torch.utils.data.DataLoader(
@@ -565,13 +591,13 @@ class TorchModelWrapper(BaseModelWrapper):
             collate_fn=collate_fn,
         )
 
-    def fit(self, train_settings: TrainSettings, verbose=0):
+    def fit(self, train_settings: TrainSettings, callbacks=[], verbose=0):
         super().fit()
 
-        optimizer = train_settings.optimizer
-        if isinstance(optimizer, str):
-            optimizer = get_optimizer_from_str(
-                optimizer,
+        self.optimizer = train_settings.optimizer
+        if isinstance(self.optimizer, str):
+            self.optimizer = get_optimizer_from_str(
+                self.optimizer,
                 backend="torch",
                 params=self.model.parameters(),
                 lr=train_settings.learning_rate,
@@ -608,20 +634,21 @@ class TorchModelWrapper(BaseModelWrapper):
                     inputs = {key: value.to(self.device) for key, value in inputs.items()}
                     targets = targets.to(self.device)
 
-                    optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                     outputs = self.model(inputs)
+
                     loss = loss_function(outputs, targets)
                     loss.backward()
-                    optimizer.step()
+                    self.optimizer.step()
 
                     train_loss += loss.item()
                     for m in metric_functions:
-                        m.update(outputs, targets)
+                        m.update(targets.detach(), outputs.detach(), self.output_labels)
 
-                    postfix = {"loss": f"{(train_loss / (pbar.n + 1)):.4f}"}
+                    postfix = {"loss": f"{(train_loss / (pbar.n + 1)):.6f}"}
                     for m in metric_functions:
                         current_metric = m.result().item()
-                        postfix[m.name] = f"{current_metric:.4f}"
+                        postfix[m.name] = f"{current_metric:.6f}"
 
                     pbar.set_postfix(postfix)
 
@@ -632,9 +659,9 @@ class TorchModelWrapper(BaseModelWrapper):
                 m.reset()  # Reset metrics for validation or next epoch
 
             summary = f"Epoch {epoch + 1}/{train_settings.num_epochs}\n"
-            summary += f"loss: {avg_train_loss:.4f} -"
+            summary += f"loss: {avg_train_loss:.6f} -"
             for m in metric_functions:
-                summary += f" {m.name}: {history['train'][m.name][-1]:.4f} -"
+                summary += f" {m.name}: {history['train'][m.name][-1]:.6f} -"
 
             if self.val_data:
                 self.model.eval()
@@ -650,7 +677,7 @@ class TorchModelWrapper(BaseModelWrapper):
                         loss = loss_function(outputs, targets)
                         val_loss += loss.item()
                         for m in metric_functions:
-                            m.update(outputs, targets)
+                            m.update(targets, outputs, self.output_labels)
 
                 avg_val_loss = val_loss / len(self.val_data)
                 history["val"]["loss"].append(avg_val_loss)
@@ -658,12 +685,30 @@ class TorchModelWrapper(BaseModelWrapper):
                     history["val"][m.name].append(m.result().item())
                     m.reset()
 
-                summary += f" val_loss: {avg_val_loss:.4f} -"
+                summary += f" val_loss: {avg_val_loss:.6f} -"
                 for m in metric_functions:
-                    summary += f" val_{m.name}: {history['val'][m.name][-1]:.4f} -"
+                    summary += f" val_{m.name}: {history['val'][m.name][-1]:.6f} -"
 
             if verbose > 0:
                 print(summary)
+
+            for callback in callbacks:
+                if not hasattr(callback, "step"):
+                    raise NotImplementedError(
+                        f"Callback {callback} does not implement a step() method."
+                    )
+                monitor = callback.monitor
+                monitor_parts = monitor.split("_")
+                monitor_value = None
+                if len(monitor_parts) > 1 and monitor_parts[0] in history:
+                    monitor = "_".join(monitor_parts[1:])
+                    monitor_value = history[monitor_parts[0]].get(monitor, None)
+                if monitor_value is None:
+                    raise Exception(f"Monitored value {callback.monitor} not found in fit history.")
+
+                cb_result = callback.step(monitor_value[-1], self, verbose=verbose)
+                if isinstance(callback, EarlyStopping) and cb_result:
+                    return history
 
         return history
 
@@ -702,9 +747,12 @@ class KerasModelWrapper(BaseModelWrapper):
         val_targets_df=None,
         train_repeats=1,
         shuffle=True,
+        scaler=None,
         verbose=0,
     ):
-        super().build_dataset(targets_df, batch_size)
+        targets_df, val_targets_df = super().build_dataset(
+            targets_df, batch_size, val_targets_df=val_targets_df, scaler=scaler
+        )
 
         input_dict = self.build_inputs(inputs_df)
         if verbose > 0:
@@ -748,10 +796,10 @@ class KerasModelWrapper(BaseModelWrapper):
     def fit(self, train_settings: TrainSettings, callbacks=[], verbose=0):
         super().fit()
 
-        optimizer = train_settings.optimizer
-        if isinstance(optimizer, str):
-            optimizer = get_optimizer_from_str(
-                optimizer, backend="keras", learning_rate=train_settings.learning_rate
+        self.optimizer = train_settings.optimizer
+        if isinstance(self.optimizer, str):
+            self.optimizer = get_optimizer_from_str(
+                self.optimizer, backend="keras", learning_rate=train_settings.learning_rate
             )
 
         loss_function = train_settings.loss_function
@@ -759,7 +807,7 @@ class KerasModelWrapper(BaseModelWrapper):
             loss_function = get_loss_from_str(loss_function, backend="keras")
 
         self.model.compile(
-            optimizer=optimizer,
+            optimizer=self.optimizer,
             loss=loss_function,
             metrics=train_settings.metrics,
         )
