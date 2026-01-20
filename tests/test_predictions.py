@@ -194,6 +194,6 @@ class MultiModelWrapperTests(unittest.TestCase):
         estimator = MultiModelWrapper()
         estimator.load_default_models()
 
-        prediction_df = estimator.predict(models_to_predict, hls_configs)
+        prediction_df = estimator.predict(models_to_predict, hls_configs=hls_configs)
         self.assertIsInstance(prediction_df, pd.DataFrame)
         self.assertFalse(prediction_df.empty)

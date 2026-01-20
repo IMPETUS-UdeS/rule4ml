@@ -1,6 +1,6 @@
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from glob import glob
 
@@ -59,6 +59,7 @@ default_vivado_map = {
     "2024.1": 11,
     "2024.2": 12,
 }
+
 
 @dataclass
 class ParsedDataFilter:
@@ -257,7 +258,7 @@ def read_json_files(filenames):
     json_data = []
     for filename in filenames:
         try:
-            with open(filename, "r") as json_file:
+            with open(filename) as json_file:
                 data = json.load(json_file)
                 if not isinstance(data, list):
                     data = [data]
@@ -268,7 +269,9 @@ def read_json_files(filenames):
     return json_data
 
 
-def read_from_json(file_patterns, data_filter: ParsedDataFilter = None, max_workers=1, batch_size=128):
+def read_from_json(
+    file_patterns, data_filter: ParsedDataFilter = None, max_workers=1, batch_size=128
+):
     """
     _summary_
 
@@ -316,23 +319,37 @@ def process_global_batch(model_batch, resource_key, normalize):
 
         model_config = model_data["model_config"]
         hls_config = model_data["hls_config"]
-        if (target_part := model_data.get("target_part")):
+        if (target_part := model_data.get("target_part", None)) is not None:
             hls_config["board"] = get_board_from_part(target_part)
 
-        norm_board = hls_config["board"] if normalize else None
-
-        batch_meta.append(unwrap_nested_dicts(model_data["meta_data"]))
-        batch_inputs.append(unwrap_nested_dicts(get_global_inputs(model_config, hls_config)))
-        batch_targets.append(unwrap_nested_dicts(get_prediction_targets(model_data, resource_key, norm_board)))
+        clock_period = hls_config.get("clock_period", None)
+        if not clock_period:
+            clock_period = model_data["latency_report"].get("target_clock", None)
+        if clock_period is not None:
+            clock_period = float(clock_period)
 
         hls4ml_version = model_data.get("hls4ml_version", None)
-        if hls4ml_version:
-            batch_inputs[-1]["hls4ml_version"] = hls4ml_version
         vivado_version = model_data.get("vivado_version", None)
         if not vivado_version:
             vivado_version = model_data.get("backend_version", None)
-        if vivado_version:
-            batch_inputs[-1]["vivado_version"] = vivado_version
+
+        batch_meta.append(unwrap_nested_dicts(model_data["meta_data"]))
+        batch_inputs.append(
+            unwrap_nested_dicts(
+                get_global_inputs(
+                    model_config,
+                    hls_config,
+                    clock_period=clock_period,
+                    hls4ml_version=hls4ml_version,
+                    vivado_version=vivado_version,
+                )
+            )
+        )
+
+        norm_board = hls_config["board"] if normalize else None
+        batch_targets.append(
+            unwrap_nested_dicts(get_prediction_targets(model_data, resource_key, norm_board))
+        )
 
     return batch_meta, batch_inputs, batch_targets
 
@@ -341,7 +358,9 @@ def get_global_data(parsed_data, resource_key=None, normalize=False, max_workers
     batches = list(batch_iterable(parsed_data, batch_size))
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_global_batch, b, resource_key, normalize) for b in batches]
+        futures = [
+            executor.submit(process_global_batch, b, resource_key, normalize) for b in batches
+        ]
 
         # Flatten the batched results
         meta, inputs, targets = [], [], []
@@ -414,7 +433,7 @@ def get_layers_data(model_config, target_depth=None):
         else:
             layer_stride_height = layer_stride_width = layer_strides
 
-        layer_use_bias = 1 if layer_config.get("use_bias", False) else 0
+        # layer_use_bias = 1 if layer_config.get("use_bias", False) else 0
         reuse_factor = layer_config["reuse_factor"]
 
         data = {
@@ -469,16 +488,19 @@ def get_sequential_data(parsed_data, max_workers=1, batch_size=128):
     return results
 
 
-def get_global_inputs(model_config, hls_config):
+def get_global_inputs(model_config, hls_config, **kwargs):
     """
-    _summary_
+    Gets the global input features from the model and HLS configurations.
 
     Args:
         model_config (_type_): _description_
         hls_config (_type_): _description_
+        **kwargs: Additional keyword arguments,
+            such as 'clock_period', 'hls4ml_version',
+            'vivado_version', etc.
 
     Returns:
-        _type_: _description_
+        dict: A dictionary containing the extracted global features.
     """
 
     features_to_extract = {
@@ -627,6 +649,9 @@ def get_global_inputs(model_config, hls_config):
         "fractional_bits": fractional_bits,
         "global_reuse": hls_config["model"]["reuse_factor"],
         "reuse_mean": reuse_factor_mean,
+        "clock_period": kwargs.get("clock_period", None),
+        "hls4ml_version": kwargs.get("hls4ml_version", None),
+        "vivado_version": kwargs.get("vivado_version", None),
     }
     inputs.update(extracted_features)
 
@@ -745,7 +770,7 @@ def get_network_fixed_ops(model_json):
         "total_mult": 0,
         "total_logical": 0,
         "total_lookup": 0,
-        "layers": []
+        "layers": [],
     }
     for layer_json in model_json:
         layer_add = 0
@@ -759,7 +784,7 @@ def get_network_fixed_ops(model_json):
         use_bias = layer_json.get("use_bias", False)
 
         layer_class = layer_json["class_name"].lower()
-        if layer_class.startswith("q"): # QKeras layers
+        if layer_class.startswith("q"):  # QKeras layers
             layer_class = layer_class[1:]
 
         if layer_class == "add":
@@ -810,12 +835,14 @@ def get_network_fixed_ops(model_json):
                 layer_mult = input_size
                 layer_add = input_size
 
-        fops_dict["layers"].append({
-            "add": layer_add,
-            "mult": layer_mult,
-            "logical": layer_logical,
-            "lookup": layer_lookup,
-        })
+        fops_dict["layers"].append(
+            {
+                "add": layer_add,
+                "mult": layer_mult,
+                "logical": layer_logical,
+                "lookup": layer_lookup,
+            }
+        )
         fops_dict["total_add"] += layer_add
         fops_dict["total_mult"] += layer_mult
         fops_dict["total_logical"] += layer_logical
@@ -844,12 +871,15 @@ def batch_to_dataframe(
         sequential_wrapped.append({"sequential_inputs": df})
 
     # Build per-batch DataFrame
-    df = pd.concat([
-        pd.DataFrame(meta_batch),
-        pd.DataFrame(global_batch),
-        pd.DataFrame(sequential_wrapped),
-        pd.DataFrame(target_batch),
-    ], axis=1)
+    df = pd.concat(
+        [
+            pd.DataFrame(meta_batch),
+            pd.DataFrame(global_batch),
+            pd.DataFrame(sequential_wrapped),
+            pd.DataFrame(target_batch),
+        ],
+        axis=1,
+    )
 
     # Encode global categorical features
     for key, mapping in global_categorical_maps.items():
@@ -858,9 +888,7 @@ def batch_to_dataframe(
     # Encode sequential categorical features
     for key, mapping in sequential_categorical_maps.items():
         df["sequential_inputs"] = df["sequential_inputs"].apply(
-            lambda sdf: sdf.assign(**{
-                key: sdf[key].map(lambda x: mapping.get(x, x))
-            })
+            lambda sdf: sdf.assign(**{key: sdf[key].map(lambda x: mapping.get(x, x))})
         )
 
     return df
@@ -880,13 +908,20 @@ def to_dataframe(
     Batched and parallelized to_dataframe implementation.
     """
 
+    max_depth = max(len(layers) for layers in sequential_inputs)
+    for i in range(len(sequential_inputs)):
+        pad_count = max_depth - len(sequential_inputs[i])
+        if pad_count > 0:
+            pad = [{key: 0 for key in sequential_inputs[i][0].keys()}] * pad_count
+            sequential_inputs[i].extend(pad)
+
     n = len(global_inputs)
     batches = [
         (
-            meta_data[i:i+batch_size],
-            global_inputs[i:i+batch_size],
-            sequential_inputs[i:i+batch_size],
-            targets[i:i+batch_size]
+            meta_data[i : i + batch_size],
+            global_inputs[i : i + batch_size],
+            sequential_inputs[i : i + batch_size],
+            targets[i : i + batch_size],
         )
         for i in range(0, n, batch_size)
     ]
@@ -902,3 +937,21 @@ def to_dataframe(
             dataframes.append(df)
 
     return pd.concat(dataframes, axis=0).reset_index(drop=True)
+
+
+def json_to_df(json_data, global_maps, sequential_maps, normalize, max_workers=16):
+    meta_data, global_inputs, targets = get_global_data(
+        json_data, normalize=normalize, max_workers=max_workers
+    )
+    sequential_inputs = get_sequential_data(json_data, max_workers=max_workers)
+
+    df = to_dataframe(
+        meta_data=meta_data,
+        global_inputs=global_inputs,
+        sequential_inputs=sequential_inputs,
+        global_categorical_maps=global_maps,
+        sequential_categorical_maps=sequential_maps,
+        targets=targets,
+        max_workers=max_workers,
+    )
+    return df

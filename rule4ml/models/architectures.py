@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 
 import keras
@@ -146,12 +147,14 @@ class GNNSettings:
     seq_embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
 
     dense_layers: list = field(default_factory=lambda: [128, 128, 64])
+    bayesian_dense: list = field(default_factory=lambda: [False, False, False])
     dense_dropouts: list = field(
         default_factory=lambda: [
             0.2,
             0.2,
         ]
     )
+    bayesian_output: bool = False
 
     def to_config(self):
         return {
@@ -160,7 +163,9 @@ class GNNSettings:
             "global_embedding_layers": self.global_embedding_layers,
             "seq_embedding_layers": self.seq_embedding_layers,
             "dense_layers": self.dense_layers,
+            "bayesian_dense": self.bayesian_dense,
             "dense_dropouts": self.dense_dropouts,
+            "bayesian_output": self.bayesian_output,
         }
 
     @classmethod
@@ -210,8 +215,8 @@ class KerasMLP(keras.Model):
 
         for idx, units in enumerate(settings.dense_layers):
             x = keras.layers.Dense(units, activation="relu")(x)
-            if idx < len(settings.dense_dropouts) - 1:
-                x = keras.layers.Dropout(settings.dense_dropouts[idx])(x)
+            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
+                x = KerasMCDropout(settings.dense_dropouts[idx])(x)
 
         model_inputs = categorical_inputs + [numerical_inputs]
         model_outputs = keras.layers.Dense(output_shape[-1], activation="relu")(x)
@@ -355,8 +360,8 @@ class KerasTransformer(keras.Model):
 
         for idx, units in enumerate(settings.dense_layers):
             x = keras.layers.Dense(units, activation="relu")(x)
-            if idx < len(settings.dense_dropouts) - 1 and settings.dense_dropouts[idx] > 0.0:
-                x = keras.layers.Dropout(settings.dense_dropouts[idx])(x)
+            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
+                x = KerasMCDropout(settings.dense_dropouts[idx])(x)
 
         # The same order as the model inputs should be maintained, else Keras 3 breaks
         inputs = (
@@ -411,7 +416,7 @@ class TorchMLP(torch.nn.Module):
         output_shape,
         categorical_maps,
         name="TorchMLP",
-        device=None
+        device=None,
     ):
         super().__init__()
 
@@ -436,7 +441,7 @@ class TorchMLP(torch.nn.Module):
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
             self.dense_layers.append(torch.nn.Linear(concat_dim, units))
-            if idx < len(settings.dense_dropouts) - 1 and settings.dense_dropouts[idx] > 0.0:
+            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
                 self.dropouts.append(torch.nn.Dropout(settings.dense_dropouts[idx]))
             else:
                 self.dropouts.append(None)
@@ -510,7 +515,7 @@ class TorchGNN(torch.nn.Module):
         global_categorical_maps,
         sequential_categorical_maps,
         name="TorchGNN",
-        device=None
+        device=None,
     ):
         if torch_geometric is None:
             raise ImportError(
@@ -556,9 +561,7 @@ class TorchGNN(torch.nn.Module):
         self.norms = torch.nn.ModuleList()
         for idx, units in enumerate(settings.gconv_layers):
             mlp = torch.nn.Sequential(
-                torch.nn.Linear(gnn_dim, units),
-                torch.nn.ReLU(),
-                torch.nn.Linear(units, units)
+                torch.nn.Linear(gnn_dim, units), torch.nn.ReLU(), torch.nn.Linear(units, units)
             )
             self.gconvs.append(
                 # torch_geometric.nn.SAGEConv(
@@ -581,15 +584,24 @@ class TorchGNN(torch.nn.Module):
         self.dense_layers = torch.nn.ModuleList()
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
-            self.dense_layers.append(torch.nn.Linear(concat_dim, units))
-            if idx < len(settings.dense_dropouts) - 1 and settings.dense_dropouts[idx] > 0.0:
+            dense_layer = (
+                TorchBayesianLinear(concat_dim, units)
+                if (idx < len(settings.bayesian_dense) and settings.bayesian_dense[idx])
+                else torch.nn.Linear(concat_dim, units)
+            )
+            self.dense_layers.append(dense_layer)
+            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
                 self.dropouts.append(torch.nn.Dropout(settings.dense_dropouts[idx]))
             else:
                 self.dropouts.append(None)
 
             concat_dim = units
 
-        self.output_layer = torch.nn.Linear(concat_dim, output_shape[-1])
+        self.output_layer = (
+            TorchBayesianLinear(concat_dim, output_shape[-1])
+            if settings.bayesian_output
+            else torch.nn.Linear(concat_dim, output_shape[-1])
+        )
 
         self.name = name
         self.settings = settings
@@ -609,9 +621,13 @@ class TorchGNN(torch.nn.Module):
         self.sequential_categorical_maps = sequential_categorical_maps
 
         self.output_shape = output_shape
-        
+        self.kl_loss = 0.0
+
         if device is None:
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and os.environ.get("CUDA_VISIBLE_DEVICES") not in [
+                "",
+                "-1",
+            ]:
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
@@ -620,23 +636,25 @@ class TorchGNN(torch.nn.Module):
 
     def forward(self, inputs):
         x_global_categorical = []
-        for idx, key in enumerate (self.global_embeddings.keys()):
-            x_global_categorical.append(
-                self.global_embeddings[key](inputs[key]).squeeze(1)
-            )
+        for idx, key in enumerate(self.global_embeddings.keys()):
+            try:
+                x_global_categorical.append(self.global_embeddings[key](inputs[key]).squeeze(1))
+            except Exception as e:
+                print(f"Input: {inputs[key].shape}")
+                raise e
 
         x_global_numerical = inputs[self.global_input_keys["numerical"]]
         for idx, key in enumerate(self.numerical_layers.keys()):
             x_global_numerical = self.numerical_layers[key](x_global_numerical)
 
-        seq_numerical_inputs = inputs[self.sequential_input_keys["numerical"]]  # shape: (batch, seq_len, seq_features)
+        seq_numerical_inputs = inputs[
+            self.sequential_input_keys["numerical"]
+        ]  # shape: (batch, seq_len, seq_features)
         mask = ~(seq_numerical_inputs == 0.0).all(dim=-1)  # mask to eliminate zero padding
 
         x_sequential_categorical = []
         for idx, key in enumerate(self.sequential_embeddings.keys()):
-            x_sequential_categorical.append(
-                self.sequential_embeddings[key](inputs[key]).squeeze(2)
-            )
+            x_sequential_categorical.append(self.sequential_embeddings[key](inputs[key]).squeeze(2))
 
         node_features = []
         edge_indices = []
@@ -647,12 +665,8 @@ class TorchGNN(torch.nn.Module):
             if valid_seq_numerical.size(0) == 0:
                 continue
 
-            valid_seq_embeddings = [
-                embedding[i][mask[i]] for embedding in x_sequential_categorical
-            ]
-            valid_features = torch.cat(
-                [*valid_seq_embeddings, valid_seq_numerical], dim=-1
-            )
+            valid_seq_embeddings = [embedding[i][mask[i]] for embedding in x_sequential_categorical]
+            valid_features = torch.cat([*valid_seq_embeddings, valid_seq_numerical], dim=-1)
             node_features.append(valid_features.to(self.device))
             num_nodes = valid_features.size(0)
             if num_nodes > 1:
@@ -660,16 +674,18 @@ class TorchGNN(torch.nn.Module):
                 edge = torch.stack([row, row + 1], dim=0) + ptr
                 edge_indices.append(edge.to(self.device))
 
-            batch_vector.append(
-                torch.full((num_nodes,), i, dtype=torch.long).to(self.device)
-            )
+            batch_vector.append(torch.full((num_nodes,), i, dtype=torch.long).to(self.device))
             ptr += num_nodes
 
         if len(node_features) == 0:
             raise ValueError("All sequential samples are empty after masking.")
 
         x_seq = torch.cat(node_features, dim=0)
-        edge_indices = torch.cat(edge_indices, dim=1) if edge_indices else torch.empty((2, 0), dtype=torch.long)
+        edge_indices = (
+            torch.cat(edge_indices, dim=1)
+            if edge_indices
+            else torch.empty((2, 0), dtype=torch.long)
+        )
         batch = torch.cat(batch_vector, dim=0)
 
         if edge_indices.numel() > 0:
@@ -687,16 +703,21 @@ class TorchGNN(torch.nn.Module):
         pooled_seq = self.attention_pool(x_seq, index=batch)
         # pooled_seq = self.global_pool(x_seq, batch=batch)
 
+        self.kl_loss = 0.0
         x = torch.cat([*x_global_categorical, x_global_numerical, pooled_seq], dim=-1)
         for idx, dense in enumerate(self.dense_layers):
             x = torch.nn.functional.relu(dense(x))
+            if hasattr(dense, "kl_divergence"):
+                self.kl_loss += dense.kl_divergence()
             if self.dropouts[idx] is not None:
                 x = self.dropouts[idx](x)
 
         outputs = self.output_layer(x)
+        if hasattr(self.output_layer, "kl_divergence"):
+            self.kl_loss += self.output_layer.kl_divergence()
         outputs = torch.nn.functional.softplus(outputs)
         # outputs = torch.nn.functional.relu(outputs)
-        return outputs            
+        return outputs
 
     def to_config(self):
         return {
@@ -727,7 +748,9 @@ class KerasTransformerBlock(keras.layers.Layer):
         dropout_rate (_type_): _description_. Defaults to 0.1
     """
 
-    def __init__(self, embed_dim, num_heads, ff_dim, output_dim, dropout_rate=0.1, global_pool="last"):
+    def __init__(
+        self, embed_dim, num_heads, ff_dim, output_dim, dropout_rate=0.1, global_pool="last"
+    ):
         super().__init__()
 
         if global_pool not in ["avg", "last"]:
@@ -745,8 +768,8 @@ class KerasTransformerBlock(keras.layers.Layer):
         )
         self.layernorm1 = keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm2 = keras.layers.LayerNormalization(epsilon=1e-6)
-        self.dropout1 = keras.layers.Dropout(dropout_rate)
-        self.dropout2 = keras.layers.Dropout(dropout_rate)
+        self.dropout1 = KerasMCDropout(dropout_rate)
+        self.dropout2 = KerasMCDropout(dropout_rate)
 
         self.global_avg_pooling = keras.layers.GlobalAveragePooling1D()
         self.out_dense = keras.layers.Dense(output_dim)
@@ -789,7 +812,7 @@ class KerasTransformerBlock(keras.layers.Layer):
         angle_rads = self._get_angles(
             tf.range(position, dtype=tf.float32)[:, tf.newaxis],
             tf.range(d_model, dtype=tf.float32)[tf.newaxis, :],
-            d_model
+            d_model,
         )
 
         sines = tf.sin(angle_rads[:, 0::2])
@@ -816,7 +839,7 @@ class ZeroMaskEmbedding(keras.layers.Layer):
         self.embedding = keras.layers.Embedding(
             input_dim=input_dim,
             output_dim=output_dim,
-            mask_zero=False  # We'll manually handle masking
+            mask_zero=False,  # We'll manually handle masking
         )
         self.output_dim = output_dim
 
@@ -826,11 +849,96 @@ class ZeroMaskEmbedding(keras.layers.Layer):
         # Manually zero out the 0th embedding vector
         self.embedding.build(input_shape)
         embeddings = self.embedding.embeddings
-        embeddings.assign(tf.tensor_scatter_nd_update(
-            embeddings,
-            indices=[[0]],
-            updates=[tf.zeros(self.output_dim)]
-        ))
+        embeddings.assign(
+            tf.tensor_scatter_nd_update(
+                embeddings, indices=[[0]], updates=[tf.zeros(self.output_dim)]
+            )
+        )
 
     def call(self, inputs):
         return self.embedding(inputs)
+
+
+class KerasMCDropout(keras.layers.Dropout):
+    def __init__(self, rate, **kwargs):
+        """
+        Expose an additional attribute to better control the call method's
+        'training' argument for MC Dropout at inference time.
+
+        Args:
+            rate (_type_): _description_
+        """
+        self.enable_mc = kwargs.pop("enable_mc", False)
+        super().__init__(rate, **kwargs)
+
+    def call(self, inputs, training=None):
+        # Normal behavior during training:
+        #   - when training=True (from model.fit), keep it.
+        #   - when training=False, dropout would normally be off (assuming enable_mc=False).
+        # During inference, if enable_mc is True, we force training=True to enable MC dropout.
+
+        if not training and self.enable_mc:
+            training = True
+        return super().call(inputs, training=training)
+
+
+class TorchBayesianLinear(torch.nn.Module):
+    def __init__(self, in_features, out_features, prior_std=1.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.weight_mu = torch.nn.Parameter(torch.Tensor(out_features, in_features))
+        self.weight_logvar = torch.nn.Parameter(torch.Tensor(out_features, in_features))
+        self.bias_mu = torch.nn.Parameter(torch.Tensor(out_features))
+        self.bias_logvar = torch.nn.Parameter(torch.Tensor(out_features))
+
+        # Prior N(0, prior_std^2)
+        self.prior_std = prior_std
+        self.prior_logvar = 2 * torch.log(torch.tensor(prior_std))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.kaiming_uniform_(self.weight_mu, a=np.sqrt(5))
+        torch.nn.init.constant_(self.weight_logvar, -5)  # small initial variance
+
+        fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(self.weight_mu)
+        bound = 1 / np.sqrt(fan_in)
+        torch.nn.init.uniform_(self.bias_mu, -bound, bound)
+        torch.nn.init.constant_(self.bias_logvar, -5)
+
+    def forward(self, input):
+        # Sample weights using reparameterization trick
+        weight_std = torch.exp(0.5 * self.weight_logvar)
+        bias_std = torch.exp(0.5 * self.bias_logvar)
+        weight_eps = torch.randn_like(self.weight_mu)
+        bias_eps = torch.randn_like(self.bias_mu)
+        weight = self.weight_mu + weight_std * weight_eps
+        bias = self.bias_mu + bias_std * bias_eps
+
+        return torch.nn.functional.linear(input, weight, bias)
+
+    def kl_divergence(self):
+        """KL(q(w|θ) || p(w)) for both weights and biases, assuming Gaussian prior."""
+        # posterior and prior variances
+        w_var = torch.exp(self.weight_logvar)
+        b_var = torch.exp(self.bias_logvar)
+        prior_var = torch.exp(self.prior_logvar)
+
+        # KL for each Gaussian param: 0.5 * [ (σ² + μ²)/prior_var - 1 - log(σ²/prior_var) ]
+        kl_weight = (
+            0.5
+            * (
+                (w_var + self.weight_mu**2) / prior_var
+                - (self.weight_logvar - self.prior_logvar)
+                - 1.0
+            ).sum()
+        )
+        kl_bias = (
+            0.5
+            * (
+                (b_var + self.bias_mu**2) / prior_var - (self.bias_logvar - self.prior_logvar) - 1.0
+            ).sum()
+        )
+
+        return kl_weight + kl_bias

@@ -26,12 +26,7 @@ class KerasSearcher:
         self.model_wrapper = KerasModelWrapper()
 
     def mlp_model_builder_generator(
-        self,
-        inputs_df,
-        targets_df,
-        categorical_maps,
-        val_inputs_df=None,
-        val_targets_df=None
+        self, inputs_df, targets_df, categorical_maps, val_inputs_df=None, val_targets_df=None
     ):
         def mlp_model_builder(hp):
             mlp_settings = MLPSettings(
@@ -58,11 +53,11 @@ class KerasSearcher:
 
             target_labels = list(targets_df.columns)
             metrics = [
-                KerasParametricSMAPE(idx, name=f"smape_{target_labels[idx]}", eps=1) \
+                KerasParametricSMAPE(idx, name=f"smape_{target_labels[idx]}", eps=1)
                 for idx in range(len(target_labels))
             ]
             metrics += [
-                KerasParametricR2(idx, name=f"r2_{target_labels[idx]}", eps=1) \
+                KerasParametricR2(idx, name=f"r2_{target_labels[idx]}", eps=1)
                 for idx in range(len(target_labels))
             ]
 
@@ -118,7 +113,7 @@ class KerasSearcher:
         val_targets_df=None,
         directory="./mlp_search",
         project_name=None,
-        verbose=0
+        verbose=0,
     ):
         model_builder = self.mlp_model_builder_generator(
             inputs_df, targets_df, categorical_maps, val_inputs_df, val_targets_df
@@ -152,7 +147,7 @@ class KerasSearcher:
         directory,
         project_name,
         val_inputs_df=None,
-        val_targets_df=None
+        val_targets_df=None,
     ):
         model_builder = self.mlp_model_builder_generator(
             inputs_df, targets_df, categorical_maps, val_inputs_df, val_targets_df
@@ -176,15 +171,17 @@ class KerasSearcher:
 
 class TorchSearcher:
     def __init__(self, device=None):
-        self.model_wrapper = TorchModelWrapper(device)
+        self.model_wrapper = TorchModelWrapper()
         self.study = None
         self.study_name = None
         self.db_path = None
+        self.device = device
+        self.trial_number = 0
 
     def _set_model(self, gnn_settings):
         target_labels = list(self.targets_df.columns)
 
-        global_input_shape = (None, len(self.inputs_df.columns) - 1) # -1 for sequential features
+        global_input_shape = (None, len(self.inputs_df.columns) - 1)  # -1 for sequential features
         sequential_input_shape = (None, len(self.inputs_df["sequential_inputs"].iloc[0].columns))
         output_shape = (None, len(target_labels))
 
@@ -196,21 +193,27 @@ class TorchSearcher:
                 output_shape=output_shape,
                 global_categorical_maps=self.global_categorical_maps,
                 sequential_categorical_maps=self.sequential_categorical_maps,
-                name=f"{'-'.join([x.upper() for x in target_labels])}_GNN",
+                name=f"{'-'.join([x.upper() for x in target_labels])}_GNN_{self.trial_number-1}",
+                device=self.device,
             )
         )
 
     def gnn_objective(self, trial):
+        self.trial_number += 1
         numerical_dense_count = trial.suggest_int("numerical_dense_count", 0, 2)
         gconv_count = trial.suggest_int("gconv_count", 1, 5)
         dense_count = trial.suggest_int("dense_count", 1, 5)
+        bayesian_dense = [
+            trial.suggest_categorical(f"bayesian_dense_{idx}", [True, False])
+            for idx in range(dense_count)
+        ]
         gnn_settings = GNNSettings(
             global_embedding_layers=[
-                trial.suggest_categorical(f"global_embedding_{idx}", [4, 8, 16])
+                trial.suggest_categorical(f"global_embedding_{idx}", [8, 16, 32])
                 for idx in range(len(self.global_categorical_maps))
             ],
             seq_embedding_layers=[
-                trial.suggest_categorical(f"seq_embedding_{idx}", [4, 8, 16])
+                trial.suggest_categorical(f"seq_embedding_{idx}", [8, 16, 32])
                 for idx in range(len(self.sequential_categorical_maps))
             ],
             numerical_dense_layers=[
@@ -229,16 +232,18 @@ class TorchSearcher:
                 trial.suggest_categorical(f"dropout_{idx}", [0.0, 0.1, 0.2, 0.5])
                 for idx in range(dense_count)
             ],
+            bayesian_dense=bayesian_dense,
+            bayesian_output=any(bayesian_dense),
         )
         self._set_model(gnn_settings)
 
         target_labels = list(self.targets_df.columns)
         metrics = [
-            TorchParametricSMAPE(idx, name=f"smape_{target_labels[idx]}", eps=1) \
+            TorchParametricSMAPE(idx, name=f"smape_{target_labels[idx]}", eps=1e-6)
             for idx in range(len(target_labels))
         ]
         metrics += [
-            TorchParametricR2(idx, name=f"r2_{target_labels[idx]}", eps=1) \
+            TorchParametricR2(idx, name=f"r2_{target_labels[idx]}", eps=1e-6)
             for idx in range(len(target_labels))
         ]
 
@@ -253,7 +258,7 @@ class TorchSearcher:
             learning_rate=trial.suggest_categorical("learning_rate", [1e-5, 1e-4, 1e-3]),
             optimizer="adam",
             loss_function="msle",
-            metrics=metrics
+            metrics=metrics,
         )
 
         if self.model_wrapper.dataset is None or self.batch_size != batch_size:
@@ -270,24 +275,12 @@ class TorchSearcher:
         path = os.path.dirname(self.db_path)
         callbacks = [
             EarlyStopping(
-                monitor="val_loss",
-                mode="min",
-                patience=5,
-                min_delta=0.0,
-                restore_best=False
+                monitor="val_loss", mode="min", patience=5, min_delta=0.0, restore_best=False
             ),
-            ModelCheckpoint(
-                dirpath=path,
-                monitor="val_loss",
-                mode="min"
-            )
+            ModelCheckpoint(dirpath=path, monitor="val_loss", mode="min"),
         ]
 
-        history = self.model_wrapper.fit(
-            train_settings,
-            callbacks=callbacks,
-            verbose=1
-        )
+        history = self.model_wrapper.fit(train_settings, callbacks=callbacks, verbose=1)
         return np.min(history["val"]["loss"])
 
     def gnn_search(
@@ -303,7 +296,7 @@ class TorchSearcher:
         n_trials=20,
         n_epochs=5,
         batch_size=None,
-        direction="minimize"
+        direction="minimize",
     ):
         self.num_epochs = n_epochs
         self.inputs_df = inputs_df
@@ -322,11 +315,12 @@ class TorchSearcher:
         db_uri = f"sqlite:///{self.db_path}"
 
         self.study = optuna.create_study(
+            sampler=optuna.samplers.TPESampler(),
             direction=direction,
             study_name=self.study_name,
             storage=db_uri,
         )
-        self.study.optimize(self.gnn_objective, n_trials=n_trials)
+        self.study.optimize(self.gnn_objective, n_trials=n_trials, show_progress_bar=True)
 
     def load_tuner(
         self,
@@ -337,7 +331,7 @@ class TorchSearcher:
         directory,
         project_name,
         val_inputs_df=None,
-        val_targets_df=None
+        val_targets_df=None,
     ):
         self.inputs_df = inputs_df
         self.targets_df = targets_df
@@ -349,7 +343,7 @@ class TorchSearcher:
         self.study_name = project_name
         self.db_path = os.path.join(directory, f"{project_name}.db")
         db_uri = f"sqlite:///{self.db_path}"
-        
+
         self.study = optuna.load_study(
             study_name=self.study_name,
             storage=db_uri,
@@ -358,21 +352,51 @@ class TorchSearcher:
     def best_params(self):
         return self.study.best_params if self.study else {}
 
+    def best_gnn_settings(self):
+        best_params = self.best_params()
+        bayesian_dense = [
+            best_params.get(f"bayesian_dense_{idx}", False)
+            for idx in range(best_params["dense_count"])
+        ]
+        gnn_settings = GNNSettings(
+            global_embedding_layers=[
+                best_params[f"global_embedding_{idx}"]
+                for idx in range(len(self.global_categorical_maps))
+            ],
+            seq_embedding_layers=[
+                best_params[f"seq_embedding_{idx}"]
+                for idx in range(len(self.sequential_categorical_maps))
+            ],
+            numerical_dense_layers=[
+                best_params[f"numerical_dense_{idx}"]
+                for idx in range(best_params["numerical_dense_count"])
+            ],
+            gconv_layers=[best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])],
+            dense_layers=[best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])],
+            dense_dropouts=[
+                best_params[f"dropout_{idx}"] for idx in range(best_params["dense_count"])
+            ],
+            bayesian_dense=bayesian_dense,
+            bayesian_output=any(bayesian_dense),
+        )
+        return gnn_settings
+
     def best_train_settings(self):
         best_params = self.best_params()
         train_settings = TrainSettings(
-            num_epochs= best_params.get("num_epochs", 20),
+            num_epochs=best_params.get("num_epochs", 20),
             batch_size=best_params.get("batch_size", 64),
             learning_rate=best_params.get("learning_rate", 1e-4),
             optimizer=best_params.get("optimizer", "adam"),
             loss_function=best_params.get("loss_function", "msle"),
             metrics=[
-                TorchParametricSMAPE(idx, name=f"smape_{idx}", eps=1) \
-                for idx in range(len(self.targets_df.columns))
-            ] + [
-                TorchParametricR2(idx, name=f"r2_{idx}", eps=1) \
+                TorchParametricSMAPE(idx, name=f"smape_{idx}", eps=1)
                 for idx in range(len(self.targets_df.columns))
             ]
+            + [
+                TorchParametricR2(idx, name=f"r2_{idx}", eps=1)
+                for idx in range(len(self.targets_df.columns))
+            ],
         )
         return train_settings
 
@@ -382,26 +406,31 @@ class TorchSearcher:
     def load_best(self):
         if self.study is None:
             raise ValueError("No study loaded. Please run gnn_search or load_tuner first.")
-        
+
         best_params = self.best_params()
+        bayesian_dense = [
+            best_params.get(f"bayesian_dense_{idx}", False)
+            for idx in range(best_params["dense_count"])
+        ]
         gnn_settings = GNNSettings(
             global_embedding_layers=[
-                best_params[f"global_embedding_{idx}"] for idx in range(len(self.global_categorical_maps))
+                best_params[f"global_embedding_{idx}"]
+                for idx in range(len(self.global_categorical_maps))
             ],
             seq_embedding_layers=[
-                best_params[f"seq_embedding_{idx}"] for idx in range(len(self.sequential_categorical_maps))
+                best_params[f"seq_embedding_{idx}"]
+                for idx in range(len(self.sequential_categorical_maps))
             ],
             numerical_dense_layers=[
-                best_params[f"numerical_dense_{idx}"] for idx in range(best_params["numerical_dense_count"])
+                best_params[f"numerical_dense_{idx}"]
+                for idx in range(best_params["numerical_dense_count"])
             ],
-            gconv_layers=[
-                best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])
-            ],
-            dense_layers=[
-                best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])
-            ],
+            gconv_layers=[best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])],
+            dense_layers=[best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])],
             dense_dropouts=[
                 best_params[f"dropout_{idx}"] for idx in range(best_params["dense_count"])
             ],
+            bayesian_dense=bayesian_dense,
+            bayesian_output=any(bayesian_dense),
         )
         self._set_model(gnn_settings)

@@ -175,7 +175,7 @@ def get_part_from_board(board_name):
     return supported_boards[board_name]["part"]
 
 
-# https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L198
+# https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L262
 def _validate_reuse_factor(n_in, n_out, rf):
     multfactor = min(n_in, rf)
     multiplier_limit = int(math.ceil((n_in * n_out) / float(multfactor)))
@@ -186,7 +186,7 @@ def _validate_reuse_factor(n_in, n_out, rf):
     return _assert
 
 
-# https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L213
+# https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L277
 def get_closest_reuse_factor(n_in, n_out, chosen_rf):
     """
     Returns closest value to chosen_rf.

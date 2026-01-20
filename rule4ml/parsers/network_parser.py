@@ -44,7 +44,7 @@ def config_from_keras_model(model, hls_config):
     hls_config = camel_keys_to_snake(hls_config)
 
     layers_data = []
-    for layer in model.layers:
+    for idx, layer in enumerate(model.layers):
         nested_activation = False
 
         class_name = layer.__class__.__name__
@@ -57,7 +57,13 @@ def config_from_keras_model(model, hls_config):
         layer_dict["class_name"] = class_name
         layer_dict["name"] = layer_name
 
-        if hasattr(
+        if class_name.lower() == "activation":
+            if idx == 0:
+                input_shape = model_input_shape
+            else:
+                input_shape = layers_data[-1]["output_shape"]
+
+        elif hasattr(
             layer, "input_shape"
         ):  # Keras 2, Sequential and Functional APIs (not including subclassing)
             input_shape = layer.input_shape
@@ -66,9 +72,9 @@ def config_from_keras_model(model, hls_config):
 
         elif hasattr(layer, "batch_shape"):  # Keras 3, InputLayer
             input_shape = layer.batch_shape
-        elif hasattr(
-            layer, "_build_shapes_dict"
-        ):  # Keras 3, other layers (best way we found, not documented)
+        elif (  # Keras 3, other layers (best way we found, not documented)
+            hasattr(layer, "_build_shapes_dict") and layer._build_shapes_dict is not None
+        ):
             input_shape = list(layer._build_shapes_dict.values())[0]
 
         else:
@@ -91,14 +97,15 @@ def config_from_keras_model(model, hls_config):
         layer_dict["output_shape"] = tuple(output_shape)
 
         # Tracking inbound layers can be useful for add/concatenate layers
-        inbound_nodes = layer.inbound_nodes
-        inbound_layers = []
-        for node in inbound_nodes:
-            if not isinstance(node.inbound_layers, (list, tuple)):
-                inbound_layers.append(node.inbound_layers)
-            else:
-                inbound_layers += node.inbound_layers
-        layer_dict["inbound_layers"] = [layer.name for layer in inbound_layers]
+        if hasattr(layer, "inbound_nodes"):
+            inbound_nodes = layer.inbound_nodes
+            inbound_layers = []
+            for node in inbound_nodes:
+                if not isinstance(node.inbound_layers, (list, tuple)):
+                    inbound_layers.append(node.inbound_layers)
+                else:
+                    inbound_layers += node.inbound_layers
+            layer_dict["inbound_layers"] = [layer.name for layer in inbound_layers]
 
         parameter_count = 0
         for weight_group in layer_weights:
