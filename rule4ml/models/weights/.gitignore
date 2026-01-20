@@ -1,5 +1,6 @@
 *
 !.gitignore
-
-!*_config.json
-!*.weights.h5
+!*/
+!**/*.config.json
+!**/*.weights.h5
+!**/*.weights.pt

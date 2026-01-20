@@ -1,0 +1,117 @@
+{
+  "global_numerical_labels": [
+    "bit_width",
+    "reuse_mean",
+    "dense_inputs_mean",
+    "dense_outputs_mean",
+    "dense_parameters_mean",
+    "dense_reuse_mean",
+    "dense_count",
+    "conv1d_inputs_mean",
+    "conv1d_outputs_mean",
+    "conv1d_parameters_mean",
+    "conv1d_filters_mean",
+    "conv1d_kernel_size_mean",
+    "conv1d_strides_mean",
+    "conv1d_reuse_mean",
+    "conv1d_count",
+    "conv2d_inputs_mean",
+    "conv2d_outputs_mean",
+    "conv2d_parameters_mean",
+    "conv2d_filters_mean",
+    "conv2d_kernel_size_mean",
+    "conv2d_strides_mean",
+    "conv2d_reuse_mean",
+    "conv2d_count",
+    "batchnormalization_inputs_mean",
+    "batchnormalization_outputs_mean",
+    "batchnormalization_parameters_mean",
+    "batchnormalization_count",
+    "add_count",
+    "concatenate_count",
+    "dropout_count",
+    "relu_count",
+    "sigmoid_count",
+    "tanh_count",
+    "softmax_inputs_mean",
+    "softmax_outputs_mean",
+    "softmax_count"
+  ],
+  "sequential_numerical_labels": [],
+  "global_categorical_maps": {
+    "strategy": {
+      "latency": 1,
+      "resource": 2
+    },
+    "board": {
+      "pynq-z2": 1,
+      "zcu102": 2,
+      "alveo-u200": 3,
+      "alveo-u250": 4
+    }
+  },
+  "sequential_categorical_maps": {},
+  "output_labels": [
+    "bram"
+  ],
+  "output_shape": [
+    null,
+    1
+  ],
+  "model_class": "KerasMLP",
+  "model_config": {
+    "name": "BRAM_MLP",
+    "settings": {
+      "dense_dropouts": [
+        0.25,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dense_layers": [
+        16,
+        16,
+        16,
+        16,
+        16,
+        16,
+        16,
+        16
+      ],
+      "embedding_layers": [
+        16,
+        4
+      ],
+      "numerical_dense_layers": [
+        32,
+        16,
+        16,
+        16
+      ]
+    },
+    "input_shape": [
+      null,
+      38
+    ],
+    "output_shape": [
+      null,
+      1
+    ],
+    "categorical_maps": {
+      "strategy": {
+        "latency": 1,
+        "resource": 2
+      },
+      "board": {
+        "alveo-u200": 3,
+        "alveo-u250": 4,
+        "pynq-z2": 1,
+        "zcu102": 2
+      }
+    }
+  }
+}
