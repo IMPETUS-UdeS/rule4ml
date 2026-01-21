@@ -29,6 +29,23 @@ def config_from_keras_model(model, hls_config):
         _type_: _description_
     """
 
+    hls_config = camel_keys_to_snake(hls_config)
+    layers_data = get_keras_layers_config(model)
+    layers_data = append_layers_reuse(layers_data, hls_config)
+    return layers_data
+
+
+def get_keras_layers_config(model):
+    """
+    _summary_
+
+    Args:
+        model (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
     if hasattr(model, "_build_input_shape") and model._build_input_shape is not None:  # Keras 2
         model_input_shape = model._build_input_shape
     elif hasattr(model, "_build_shapes_dict") and model._build_shapes_dict is not None:  # Keras 3
@@ -40,8 +57,6 @@ def config_from_keras_model(model, hls_config):
 
     dummy_input = tf.random.uniform((1, *model_input_shape[1:]))
     _ = model(dummy_input)
-
-    hls_config = camel_keys_to_snake(hls_config)
 
     layers_data = []
     for idx, layer in enumerate(model.layers):
@@ -147,22 +162,6 @@ def config_from_keras_model(model, hls_config):
             dtype = dtype["config"]["name"]
         layer_dict["dtype"] = dtype
 
-        reuse_factor = hls_config["model"]["reuse_factor"]
-        if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
-            reuse_factor = hls_config["layer_type"][class_name].get("reuse_factor", reuse_factor)
-        if "layer_name" in hls_config and layer.name in hls_config["layer_name"]:
-            reuse_factor = hls_config["layer_name"][layer.name].get("reuse_factor", reuse_factor)
-
-        layer_dict["reuse_factor"] = reuse_factor
-        if class_name in ["Dense", "QDense"]:
-            n_in = np.prod([x for x in input_shape if x is not None])
-            n_out = np.prod([x for x in output_shape if x is not None])
-            layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
-        elif class_name in ["Conv1D", "Conv2D", "QConv1D", "QConv2D"]:
-            n_in = layer_dict["channels"] * np.prod(layer_dict["kernel_size"])
-            n_out = layer_dict["filters"]
-            layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
-
         layers_data.append(layer_dict)
 
         if (
@@ -180,7 +179,6 @@ def config_from_keras_model(model, hls_config):
             activation_dict["trainable_parameters"] = 0
 
             activation_dict["dtype"] = layer_config["dtype"]
-            activation_dict["reuse_factor"] = reuse_factor
 
             layers_data.append(activation_dict)
 
@@ -250,6 +248,23 @@ def config_from_torch_model(model, hls_config):
         _type_: _description_
     """
 
+    hls_config = camel_keys_to_snake(hls_config)
+    layers_data = get_torch_layers_config(model)
+    layers_data = append_layers_reuse(layers_data, hls_config)
+    return layers_data
+
+
+def get_torch_layers_config(model):
+    """
+    _summary_
+
+    Args:
+        model (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
     if torch is None:
         raise ImportError("Failed to import module torch.")
 
@@ -261,8 +276,6 @@ def config_from_torch_model(model, hls_config):
         "BatchNorm1d": "BatchNormalization",
         "BatchNorm2d": "BatchNormalization",
     }
-
-    hls_config = camel_keys_to_snake(hls_config)
 
     layers_data = OrderedDict()
     model_layers = get_torch_layers(model)
@@ -277,14 +290,6 @@ def config_from_torch_model(model, hls_config):
         if node.op == "placeholder":
             class_name = "InputLayer"
 
-            reuse_factor = hls_config["model"]["reuse_factor"]
-            if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
-                reuse_factor = hls_config["layer_type"][class_name].get(
-                    "reuse_factor", reuse_factor
-                )
-            if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
-                reuse_factor = hls_config["layer_name"][node.name].get("reuse_factor", reuse_factor)
-
             layer_dict = {
                 "class_name": class_name,
                 "input_shape": (None,),
@@ -292,7 +297,6 @@ def config_from_torch_model(model, hls_config):
                 "parameters": 0,
                 "trainable_parameters": 0,
                 "dtype": "float32",
-                "reuse_factor": reuse_factor,
             }
 
         elif node.op == "call_module":
@@ -334,21 +338,6 @@ def config_from_torch_model(model, hls_config):
             else:
                 raise TypeError(f"Model has unexpected first layer of type {class_name}.")
 
-            reuse_factor = hls_config["model"]["reuse_factor"]
-            if "layer_type" in hls_config and mapped_class_name in hls_config["layer_type"]:
-                reuse_factor = hls_config["layer_type"][mapped_class_name].get(
-                    "reuse_factor", reuse_factor
-                )
-            if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
-                reuse_factor = hls_config["layer_name"][node.name].get("reuse_factor", reuse_factor)
-
-            layer_dict["reuse_factor"] = reuse_factor
-            if mapped_class_name in ["Dense"]:
-                n_in = np.prod([x for x in layer_dict["input_shape"] if x is not None])
-                n_out = np.prod([x for x in layer_dict["output_shape"] if x is not None])
-
-                layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
-
             module_count += 1
 
         elif node.op == "call_function":
@@ -378,7 +367,6 @@ def config_from_torch_model(model, hls_config):
             layer_dict["trainable_parameters"] = 0
 
             layer_dict["dtype"] = layers_data_values[idx - 1]["dtype"]
-            layer_dict["reuse_factor"] = reuse_factor
 
             layer_dict["class_name"] = torch_layer_mapping.get(class_name, class_name)
 
@@ -423,3 +411,38 @@ def get_torch_layers(model):
         layers += get_torch_layers(child)
 
     return layers
+
+
+def append_layers_reuse(model_config, hls_config):
+    """
+    _summary_
+
+    Args:
+        model_config (_type_): _description_
+        hls_config (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    for layer_config in model_config:
+        class_name = layer_config["class_name"]
+        layer_name = layer_config["name"]
+
+        reuse_factor = hls_config["model"]["reuse_factor"]
+        if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
+            reuse_factor = hls_config["layer_type"][class_name].get("reuse_factor", reuse_factor)
+        if "layer_name" in hls_config and layer_name in hls_config["layer_name"]:
+            reuse_factor = hls_config["layer_name"][layer_name].get("reuse_factor", reuse_factor)
+
+        layer_config["reuse_factor"] = reuse_factor
+        if class_name in ["Dense", "QDense"]:
+            n_in = np.prod([x for x in layer_config["input_shape"] if x is not None])
+            n_out = np.prod([x for x in layer_config["output_shape"] if x is not None])
+            layer_config["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+        elif class_name in ["Conv1D", "Conv2D", "QConv1D", "QConv2D"]:
+            n_in = layer_config["channels"] * np.prod(layer_config["kernel_size"])
+            n_out = layer_config["filters"]
+            layer_config["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+
+    return model_config
