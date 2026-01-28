@@ -169,6 +169,7 @@ def get_keras_layers_config(model):
         ):  # activation function wrapped in a layer other than "(Q)Activation", example: Dense(units=32, activation="relu")
             activation_dict = {}
             activation_dict["class_name"] = "Activation"
+            activation_dict["name"] = layer_name + "_activation"
 
             activation_dict["input_shape"] = output_shape
             activation_dict["output_shape"] = output_shape
@@ -425,8 +426,14 @@ def append_layers_reuse(model_config, hls_config):
         _type_: _description_
     """
 
-    for layer_config in model_config:
+    for idx, layer_config in enumerate(model_config):
         class_name = layer_config["class_name"]
+        if (
+            "name" not in layer_config
+            and idx > 0
+            and class_name == "Activation"
+        ):
+            layer_config["name"] = model_config[idx - 1].get("name", "") + "_activation"
         layer_name = layer_config["name"]
 
         reuse_factor = hls_config["model"]["reuse_factor"]

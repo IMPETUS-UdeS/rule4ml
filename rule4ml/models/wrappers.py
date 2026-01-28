@@ -3,6 +3,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from typing import Dict, List
 
 import keras
 import numpy as np
@@ -110,6 +111,15 @@ class BaseModelWrapper:
         self.sequential_categorical_maps = getattr(model, "sequential_categorical_maps", {})
 
         self.output_shape = getattr(model, "output_shape", ())
+
+    def get_categorical_values(self, key, fallback=[]) -> List:
+        categorical_maps = dict(self.global_categorical_maps)
+        categorical_maps.update(self.sequential_categorical_maps)
+        if key in categorical_maps:
+            map_keys = list(categorical_maps[key].keys())
+            return [k.lower() if isinstance(k, str) else k for k in map_keys]
+
+        return list(fallback)
 
     def build_inputs(self, inputs_df):
         if self.model is None:
@@ -259,6 +269,7 @@ class BaseModelWrapper:
     def predict(
         self,
         models_to_predict,
+        *,
         hls_configs,
         hls4ml_versions,
         vivado_versions,
@@ -923,28 +934,25 @@ class MultiModelWrapper:
             os.path.join(base_path, "INTERVAL"),
         ]
         for path in default_paths:
-            if not os.path.exists(path + ".config.json"):
+            config_path = f"{path}.config.json"
+            if not os.path.exists(config_path):
                 continue
 
-            with open(f"{path}.config.json") as f:
-                config = json.load(f)
-            class_name = config.get("model_class", None)
-            if class_name in [KerasMLP.__name__, KerasTransformer.__name__]:
-                if os.path.exists(f"{path}.weights.h5"):
-                    model_wrapper = KerasModelWrapper()
-                    model_wrapper.load(f"{path}.config.json", f"{path}.weights.h5")
-                    self.add_model_wrapper(model_wrapper)
-                else:
-                    raise FileNotFoundError(f"Weights file not found: {path}.weights.h5")
-            elif class_name in [TorchMLP.__name__, TorchGNN.__name__]:
-                if os.path.exists(f"{path}.weights.pt"):
-                    model_wrapper = TorchModelWrapper()
-                    model_wrapper.load(f"{path}.config.json", f"{path}.weights.pt")
-                    self.add_model_wrapper(model_wrapper)
-                else:
-                    raise FileNotFoundError(f"Weights file not found: {path}.weights.pt")
+            h5_path = f"{path}.weights.h5"
+            pt_path = f"{path}.weights.pt"
+            if os.path.exists(h5_path):
+                model_wrapper = KerasModelWrapper()
+                model_wrapper.load(config_path, h5_path)
+                self.add_model_wrapper(model_wrapper)
+            elif os.path.exists(pt_path):
+                model_wrapper = TorchModelWrapper()
+                model_wrapper.load(config_path, pt_path)
+                self.add_model_wrapper(model_wrapper)
             else:
-                raise NotImplementedError(f"Model class not supported: {class_name}")
+                raise FileNotFoundError(
+                    f"No weights file found for model at {config_path}. "
+                    "Expected .weights.h5 or .weights.pt"
+                )
 
     def predict(self, models_to_predict, **kwargs):
         """
@@ -1018,8 +1026,8 @@ class MultiModelWrapper:
         hls_configs_by_estimator = {}
         if hls_configs is None:
             for estimator_key, estimator_model in self._models.items():
-                estimator_boards = self._get_categorical_values(estimator_model, "board")
-                estimator_strategies = self._get_categorical_values(estimator_model, "strategy")
+                estimator_boards = estimator_model.get_categorical_values("board")
+                estimator_strategies = estimator_model.get_categorical_values("strategy")
                 hls_configs_by_estimator[estimator_key] = [
                     {
                         "model": {
@@ -1053,8 +1061,8 @@ class MultiModelWrapper:
         hls4ml_versions_by_estimator = {}
         if hls4ml_versions is None:
             for estimator_key, estimator_model in self._models.items():
-                hls4ml_versions_by_estimator[estimator_key] = self._get_categorical_values(
-                    estimator_model, "hls4ml_version"
+                hls4ml_versions_by_estimator[estimator_key] = estimator_model.get_categorical_values(
+                    "hls4ml_version"
                 )
         else:
             if isinstance(hls4ml_versions, str):
@@ -1067,8 +1075,8 @@ class MultiModelWrapper:
         vivado_versions_by_estimator = {}
         if vivado_versions is None:
             for estimator_key, estimator_model in self._models.items():
-                vivado_versions_by_estimator[estimator_key] = self._get_categorical_values(
-                    estimator_model, "vivado_version"
+                vivado_versions_by_estimator[estimator_key] = estimator_model.get_categorical_values(
+                    "vivado_version"
                 )
         else:
             if isinstance(vivado_versions, str):
@@ -1167,10 +1175,29 @@ class MultiModelWrapper:
 
         return outputs_df
 
-    def _get_categorical_values(self, model_wrapper, key, fallback=[]):
-        categorical_maps = getattr(model_wrapper, "global_categorical_maps", {}) or {}
-        if key in categorical_maps:
-            map_keys = list(categorical_maps[key].keys())
-            return [k.lower() if isinstance(k, str) else k for k in map_keys]
 
-        return list(fallback)
+def get_available_estimators() -> Dict[str, BaseModelWrapper]:
+    estimators = {}
+    weights_dir = os.path.join(os.path.dirname(__file__), "weights")
+    for root, dirs, files in os.walk(weights_dir):
+        for file in files:
+            if file.endswith(".config.json"):
+                config_path = os.path.join(root, file)
+                h5_path = config_path.replace(".config.json", ".weights.h5")
+                pt_path = config_path.replace(".config.json", ".weights.pt")
+                wrapper = None
+                if os.path.exists(h5_path):
+                    wrapper = KerasModelWrapper()
+                    wrapper.load(config_path, h5_path)
+                elif os.path.exists(pt_path):
+                    wrapper = TorchModelWrapper()
+                    wrapper.load(config_path, pt_path)
+                if wrapper:
+                    key = (
+                        os.path.dirname(
+                            os.path.relpath(config_path, weights_dir)
+                        ).replace(os.sep, "_")
+                    ) + "_" + wrapper.model.name
+                    estimators[key] = wrapper
+
+    return estimators
