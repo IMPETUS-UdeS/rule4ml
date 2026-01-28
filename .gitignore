@@ -39,6 +39,8 @@ ipython_config.py
 notebooks/**
 !notebooks/models
 !notebooks/tutorial.ipynb
+!notebooks/train.ipynb
+!notebooks/benchmark.ipynb
 **/hls4ml_prj*
 *.log
 *.out
