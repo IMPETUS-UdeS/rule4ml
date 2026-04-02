@@ -49,7 +49,7 @@ uv run autoresearch --branch-name ${BRANCH} --commit-hash ${HASH} > autoresearch
 
 **The goal is clear: Improve prediction accuracy over all targets (BRAM, DSP, FF, LUT, CYCLES, INTERVAL), using only input available before HLS synthesis.** Since the time budget is fixed, you don't need to worry about training time. Accuracy is the only objective.
 
-**Primary metrics**: mean SMAPE (lower is better) and mean R2 (higher is better), across all 6 targets. You also have access to the individual SMAPE and R2 values for each target, which should help analyze trade-offs and identify near-misses.
+**Primary metrics**: `mean R2` (higher is better) and `mean SMAPE` (lower is better), across all 6 targets. You also have access to the individual `SMAPE`, `R2` and `RMSE` values for each target, which should help analyze trade-offs and identify near-misses.
 
 **Creativity and exploration**: Do not let this become a hyperparameter-tuning-only exercise. The best improvements might come from creative, out-of-the-box changes to how the input is represented, the model architecture, or the training process. Don't be afraid to try bold ideas, even if they add complexity, as long as they have a chance of drastically improving the results. Some experiments can be simple tweaks too — use your judgment to decide what is worth trying.
 
@@ -129,9 +129,9 @@ Other columns exist in both files:
 
 ### Decision Logic
 
-- SMAPE decrease, RMSE decrease, **and** R2 increase over all targets is a **clear improvement**, always `keep`
-- Mean SMAPE and/or mean R2 improvement but with some target regressions is a **mixed result**. Use your judgment to decide whether to `keep` or `discard`.
-- In general, mixed results across targets and means are a `discard`. Do record the changes that improved targets in `ideas.tsv` with detailed notes
+- R2 increase **and** SMAPE decrease **and** RMSE decrease over all targets is a **clear improvement**, always `keep`
+- Mean SMAPE and/or mean R2 improvement but with some target regressions is a **mixed result**. Use your judgment to decide whether to `keep` or `discard`. Be cautious of SMAPE, since predictors can get decent scores by always predicting the mean, or a specific constant. R2 captures how well the model fits the variance in the data, while SMAPE captures relative error. RMSE can help identify if improvements are due to better handling of outliers or just overall better fit.
+- In general, mixed results across targets and means are a `discard`. Do record the changes that improved specific targets in `ideas.tsv` with detailed notes
 - If no improvement, `discard` and try a different angle
 - Occasionally, a radical change might result in an expected drop in one or several metrics. Again, use your judgment to decide if the change is worth keeping for future iterations. You can alway `discard` the change and record it as a near-miss in `ideas.tsv` with expanded notes on what you think went wrong and how it could be improved in the future
 
