@@ -1,0 +1,20 @@
+{
+  "env": {
+    "BASH_DEFAULT_TIMEOUT_MS": "14400000",
+    "BASH_MAX_TIMEOUT_MS": "14400000"
+  },
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Bash(*)",
+      "Edit(./*)",
+      "Read(./*)",
+      "Update(./*)",
+      "Write(./*)"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "Bash(sudo:*)"
+    ]
+  }
+}

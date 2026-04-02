@@ -1,6 +1,9 @@
+import os
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import itertools
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -22,29 +25,19 @@ try:
 except ImportError:
     onnx = None
 
-from rule4ml.models.architectures import (
-    KerasMCDropout,
-    KerasMLP,
-    KerasTransformer,
-    TorchGNN,
-    TorchMLP,
-)
+from rule4ml.models.architectures import (KerasMCDropout, KerasMLP,
+                                          KerasTransformer, TorchGNN, TorchMLP)
 from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.metrics import rmse, smape
 from rule4ml.models.scaling import *  # noqa: F403
 from rule4ml.models.utils import get_loss_from_str, get_optimizer_from_str
-from rule4ml.parsers.data_parser import (
-    boards_data,
-    get_global_inputs,
-    get_layers_data,
-    to_dataframe,
-)
-from rule4ml.parsers.network_parser import (
-    config_from_keras_model,
-    config_from_onnx_model,
-    config_from_torch_model,
-)
-from rule4ml.parsers.utils import camel_keys_to_snake, fixed_precision_to_bit_width, to_lower_keys
+from rule4ml.parsers.data_parser import (boards_data, get_global_inputs,
+                                         get_layers_data, to_dataframe)
+from rule4ml.parsers.network_parser import (config_from_keras_model,
+                                            config_from_onnx_model,
+                                            config_from_torch_model)
+from rule4ml.parsers.utils import (camel_keys_to_snake,
+                                   fixed_precision_to_bit_width, to_lower_keys)
 
 
 @dataclass

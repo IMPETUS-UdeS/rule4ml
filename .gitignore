@@ -43,9 +43,9 @@ notebooks/**
 *.log
 *.out
 secrets*
-
 _version.py
 format.py
+hls4ml/
 
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is

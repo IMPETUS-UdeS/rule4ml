@@ -2,5 +2,73 @@
 requires = ["setuptools>=64", "setuptools_scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "rule4ml"
+dynamic = ["version"]
+description = "Resource utilization and Latency Estimation for ML on FPGA"
+readme = "README.md"
+authors = [{ name = "IMPETUS Team", email = "impetus@usherbrooke.ca" }]
+license = { text = "GPL-3.0" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "scikit-learn",
+    "tensorflow>=2.15.1",
+    "keras",
+    "keras_tuner",
+    "torch",
+    "torch-geometric",
+    "optuna",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "matplotlib",
+    "pre-commit",
+    "pytest",
+    "pyarrow",
+]
+datagen = [
+    "hls4ml",
+    "psutil",
+    "py-cpuinfo",
+    "pyparsing",
+    "tensorflow==2.15.1",
+    "tf-keras==2.15.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+
+[tool.uv.sources]
+torch = { index = "pytorch-rocm" }
+torchvision = { index = "pytorch-rocm" }
+pytorch-triton-rocm = { index = "pytorch-rocm" }
+
 [tool.setuptools_scm]
 version_file = "rule4ml/_version.py"
+
+[tool.setuptools]
+include-package-data = true
+packages = { find = {} }
+
+[tool.setuptools.package-data]
+rule4ml = ["parsers/supported_boards.json"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["data_gen/*", "datasets/*", "notebooks/*", "tests/*"]
+
+[project.scripts]
+autoresearch = "autoresearch.train:main"

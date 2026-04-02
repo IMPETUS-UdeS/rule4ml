@@ -1,0 +1,18 @@
+shell_default_timeout_ms = 14400000
+
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+
+# BLOCK: Deny 'rm' and 'sudo' commands globally
+[[rules]]
+pattern = ["rm"]
+decision = "forbidden"
+
+[[rules]]
+pattern = ["sudo"]
+decision = "forbidden"
+
+# ALLOW: Explicitly permit all other bash-like operations
+[[rules]]
+pattern = ["*"]
+decision = "allow"

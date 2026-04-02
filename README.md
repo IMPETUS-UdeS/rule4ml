@@ -24,6 +24,7 @@ pip install rule4ml[datagen]
 ## Getting Started
 
 ### Tutorial
+
 To get started with `rule4ml`, please refer to the detailed Jupyter Notebook [tutorial](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks/tutorial.ipynb). This tutorial covers:
 
 - Using pre-trained estimators for resources and latency predictions.
@@ -31,6 +32,7 @@ To get started with `rule4ml`, please refer to the detailed Jupyter Notebook [tu
 - Training and testing your own predictors.
 
 ### Usage
+
 Here's a quick example of how to use `rule4ml` to estimate resources and latency for a given model:
 
 ```python
@@ -433,12 +435,15 @@ prediction_df.to_html("keras_example.html")
 </table>
 
 ## Datasets
+
 Training accurate predictors requires large datasets of synthesized neural networks. We used [hls4ml](https://github.com/fastmachinelearning/hls4ml) to synthesize neural networks generated with parameters randomly sampled from predefined ranges (defaults of data classes in the code). Our models' training data is publicly available at [https://borealisdata.ca/dataverse/rule4ml](https://borealisdata.ca/dataverse/rule4ml).
 
 Newer predictors were trained on `wa-hls4ml`, a bigger dataset including more architectures and parameter ranges. This dataset, along with the HLS project files, can be found at [https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml](https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml) and [https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml-projects](https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml-projects).
 
 ## Limitations
-In their current iteration, the predictors can process [Keras](https://keras.io/about/) or [PyTorch](https://pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html) models to generate FPGA resources (**BRAM**, **DSP**, **FF**, **LUT**) and latency (**Clock Cycles**) estimations for various synthesis configurations. However, the training models are limited to specific layers: **Dense/Linear**, **ReLU**, **Tanh**, **Sigmoid**, **Softmax**, **BatchNorm**, **Add**, **Concatenate**, and **Dropout**. They are also constrained by synthesis parameters, notably **clock_period** (10 ns) and **io_type** (io_parallel). Inputs outside these configurations may result in inaccurate predictions.
+
+In their current iteration, the predictors can process [Keras](https://keras.io/about/) or [PyTorch](https://pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html) models to generate FPGA resources (**BRAM**, **DSP**, **FF**, **LUT**) and latency (**Clock Cycles**, **Interval**) estimations for various synthesis configurations. However, the training models are limited to specific layers: **Dense/Linear**, **Conv1D/2D**, **ReLU**, **Tanh**, **Sigmoid**, **Softmax**, **BatchNorm**, **Add**, **Concatenate**, and **Dropout**. They are also constrained by synthesis parameters, notably **clock_period** (5ns, 10 ns) and **io_type** (io_parallel). Inputs outside these configurations may result in inaccurate predictions.
 
 ## License
+
 This project is licensed under the GPL-3.0 License. See the [LICENSE](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/LICENSE) file for details.
