@@ -1,1 +1,0 @@
-agentic_model	branch	commit	smape_mean	smape_bram	smape_dsp	smape_ff	smape_lut	smape_cycles	smape_interval	r2_mean	r2_bram	r2_dsp	r2_ff	r2_lut	r2_cycles	r2_interval	rmse_bram	rmse_dsp	rmse_ff	rmse_lut	rmse_cycles	rmse_interval	num_epochs	platform	vram_gb	time_budget	status	description
