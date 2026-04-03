@@ -32,6 +32,8 @@ EVERYTHING_SEED = 42
 JSON_BATCH_SIZE = 256
 JSON_MAX_WORKERS = 8
 
+FORCE_CPU = True
+
 def set_seed(seed: int = EVERYTHING_SEED) -> None:
     import random
     random.seed(seed)

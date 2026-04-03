@@ -5,7 +5,7 @@ import time
 import torch
 
 from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
-                                  TIME_BUDGET, build_input_tensors,
+                                  FORCE_CPU, TIME_BUDGET, build_input_tensors,
                                   build_inputs_df, evaluate,
                                   load_split_from_json, load_tensor_cache,
                                   make_dataloader, print_summary, set_seed,
@@ -190,7 +190,7 @@ def train_predictor(
     training_time = 0.0
     while True:
         predictor.train()
-        torch.cuda.synchronize() if torch.cuda.is_available() else None
+        torch.cuda.synchronize() if device.type == "cuda" else None
         t0 = time.time()
         for inputs, targets in train_loader:
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
@@ -200,7 +200,7 @@ def train_predictor(
             loss.backward()
             optimizer.step()
 
-        torch.cuda.synchronize() if torch.cuda.is_available() else None
+        torch.cuda.synchronize() if device.type == "cuda" else None
         t1 = time.time()
         training_time += t1 - t0
         progress = min(1.0, training_time / time_budget)
@@ -249,9 +249,10 @@ def main():
     arg_parser.add_argument("--commit-hash", type=str, help="Git commit hash")
     cli_args = arg_parser.parse_args()
 
-    current_device = torch.cuda.current_device() if torch.cuda.is_available() else ""
-    device = torch.device(f"cuda:{current_device}" if torch.cuda.is_available() else "cpu")
-    device_name = torch.cuda.get_device_name(current_device) if torch.cuda.is_available() else "CPU"
+    use_gpu = torch.cuda.is_available() and not FORCE_CPU
+    current_device = torch.cuda.current_device() if use_gpu else ""
+    device = torch.device(f"cuda:{current_device}" if use_gpu else "cpu")
+    device_name = torch.cuda.get_device_name(current_device) if use_gpu else "CPU"
 
     # On cache hit: skip all raw-data loading and reuse prebuilt tensors.
     # On cache miss: load all three splits from raw JSON, tensorize once, write to disk.
@@ -379,7 +380,7 @@ def main():
     total_seconds = time.time() - total_start
     peak_vram_mb = (
         torch.cuda.max_memory_allocated() / 1024 / 1024
-        if torch.cuda.is_available() else 0.0
+        if use_gpu else 0.0
     )
 
     metrics = evaluate(
