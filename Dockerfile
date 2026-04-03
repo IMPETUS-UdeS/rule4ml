@@ -1,0 +1,63 @@
+ARG GPU_TYPE=cuda
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04 AS base-cuda
+FROM rocm/dev-ubuntu-22.04:6.4-complete AS base-rocm
+
+FROM base-${GPU_TYPE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Redeclare GPU_TYPE for use in later stages
+ARG GPU_TYPE=cuda
+ARG REPO_URL
+ARG REPO_REF=agent
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Clone the repo from specified branch
+RUN git clone --branch ${REPO_REF} ${REPO_URL} .
+
+# Install uv and Node.js
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install agentic CLI tools (claude, codex, gemini)
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @google/gemini-cli
+RUN npm install -g @openai/codex
+
+# Add GPU-specific torch sources to pyproject.toml
+RUN if [ "$GPU_TYPE" = "cuda" ]; then \
+        printf '\n[[tool.uv.index]]\nname = "pytorch-cuda"\nurl = "https://download.pytorch.org/whl/cu128"\nexplicit = true\n\n[tool.uv.sources]\ntorch = { index = "pytorch-cuda" }\n' >> pyproject.toml; \
+    elif [ "$GPU_TYPE" = "rocm" ]; then \
+        printf '\n[[tool.uv.index]]\nname = "pytorch-rocm"\nurl = "https://download.pytorch.org/whl/rocm7.2"\n\n[tool.uv.sources]\ntorch = { index = "pytorch-rocm" }\npytorch-triton-rocm = { index = "pytorch-rocm" }\n' >> pyproject.toml; \
+    else \
+        echo "GPU_TYPE must be 'cuda' or 'rocm'" && exit 1; \
+    fi
+
+# Install python dependencies, move .venv out, then wipe the repo (re-cloned at runtime)
+RUN uv sync && \
+    mv /workspace/.venv /venv && \
+    mv /workspace/uv.lock /uv.lock && \
+    mv /workspace/pyproject.toml /pyproject.toml && \
+    rm -rf /workspace
+ENV VIRTUAL_ENV=/venv
+ENV PATH="/venv/bin:$PATH"
+
+# Persist build args as env vars for the entrypoint
+ENV REPO_URL=${REPO_URL}
+ENV REPO_REF=${REPO_REF}
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

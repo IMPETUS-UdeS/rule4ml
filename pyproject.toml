@@ -48,15 +48,6 @@ datagen = [
     "tf-keras==2.15.1",
 ]
 
-[[tool.uv.index]]
-name = "pytorch-rocm"
-url = "https://download.pytorch.org/whl/rocm7.2"
-
-[tool.uv.sources]
-torch = { index = "pytorch-rocm" }
-torchvision = { index = "pytorch-rocm" }
-pytorch-triton-rocm = { index = "pytorch-rocm" }
-
 [tool.setuptools_scm]
 version_file = "rule4ml/_version.py"
 
