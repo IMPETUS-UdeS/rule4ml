@@ -46,6 +46,7 @@ secrets*
 _version.py
 format.py
 hls4ml/
+uv.lock
 
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is

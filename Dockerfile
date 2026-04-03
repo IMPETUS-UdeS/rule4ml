@@ -44,11 +44,10 @@ RUN if [ "$GPU_TYPE" = "cuda" ]; then \
         echo "GPU_TYPE must be 'cuda' or 'rocm'" && exit 1; \
     fi
 
-# Install python dependencies, move .venv out, then wipe the repo (re-cloned at runtime)
+# Install python dependencies, move files, then wipe the repo
 RUN uv sync && \
     mv /workspace/.venv /venv && \
     mv /workspace/uv.lock /uv.lock && \
-    mv /workspace/pyproject.toml /pyproject.toml && \
     rm -rf /workspace
 ENV VIRTUAL_ENV=/venv
 ENV PATH="/venv/bin:$PATH"

@@ -16,19 +16,25 @@ fi
 if [ ! -e /workspace/uv.lock ]; then
     ln -s /uv.lock /workspace/uv.lock
 fi
-if [ ! -e /workspace/pyproject.toml ]; then
-    ln -s /pyproject.toml /workspace/pyproject.toml
+
+# Re-apply GPU-specific torch sources so uv run uses the pre-built venv
+if ! grep -q "tool.uv.sources" pyproject.toml; then
+    if [ "$GPU_TYPE" = "cuda" ]; then
+        printf '\n[[tool.uv.index]]\nname = "pytorch-cuda"\nurl = "https://download.pytorch.org/whl/cu128"\nexplicit = true\n\n[tool.uv.sources]\ntorch = { index = "pytorch-cuda" }\n' >> pyproject.toml; \
+    elif [ "$GPU_TYPE" = "rocm" ]; then
+        printf '\n[[tool.uv.index]]\nname = "pytorch-rocm"\nurl = "https://download.pytorch.org/whl/rocm7.2"\n\n[tool.uv.sources]\ntorch = { index = "pytorch-rocm" }\npytorch-triton-rocm = { index = "pytorch-rocm" }\n' >> pyproject.toml; \
+    fi
 fi
 
-# Set git identity and trust the workspace (mounted volume may be owned by a different user)
+# Set git identity and trust the workspace
 git config --global user.email "agent@autoresearch"
 git config --global user.name "Autoresearch Agent"
 git config --global --add safe.directory /workspace
 
 # Commit so git reset --hard never reverts the patches
-if ! git diff --cached --quiet || ! git diff --quiet pyproject.toml || ! git diff --quiet uv.lock; then
-    git add pyproject.toml uv.lock
-    git commit -m "pyproject.toml and uv.lock changes"
+if ! git diff --cached --quiet || ! git diff --quiet pyproject.toml; then
+    git add pyproject.toml
+    git commit -m "pyproject.toml GPU-specific patches"
 fi
 
 exec /bin/bash
