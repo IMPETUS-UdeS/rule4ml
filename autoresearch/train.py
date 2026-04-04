@@ -105,7 +105,14 @@ SEQUENTIAL_FEATURE_LABELS = [
 
 # Joint model: all 6 targets in a single predictor.
 # This gives the full 3600s budget to one model (~36 epochs vs 6 in baseline).
-TARGET_GROUPS = {"all": ALL_TARGETS}
+# Two-group split: dedicated model per domain.
+# Motivation: joint 6-target model improves R2 for resources but wrecks
+# CYCLES/INTERVAL SMAPE (35-38% vs 9-17% in baseline).
+# Each group gets 1800s (~18-20 epochs) and can specialise.
+TARGET_GROUPS = {
+    "resources": ["bram", "dsp", "ff", "lut"],
+    "timing": ["cycles", "interval"],
+}
 
 # --------------------------------------------------------------------------
 # Hyperparameters
@@ -141,18 +148,15 @@ def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> Torch
 # Losses
 # --------------------------------------------------------------------------
 
-def log_mae_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     """
-    L1 (MAE) in log1p space, averaged per target then across targets.
-    More robust to extreme outliers than MSLE (L2):
-      - MSLE weight ratio outlier/typical ≈ 1500x
-      - log-MAE weight ratio           ≈ 39x
-    This prevents cycles/interval extreme values from dominating,
-    while preserving meaningful gradient signal for large predictions.
+    Mean Squared Log Error, averaged per target then across targets.
+    Equivalent to MSE in log1p space — penalises relative errors which
+    aligns well with SMAPE-style evaluation.
     """
     log_pred = torch.log1p(torch.clamp(y_pred, min=0.0))
     log_true = torch.log1p(torch.clamp(y_true, min=0.0))
-    return torch.mean(torch.mean(torch.abs(log_pred - log_true), dim=0))
+    return torch.mean(torch.mean((log_pred - log_true) ** 2, dim=0))
 
 # --------------------------------------------------------------------------
 # Training
@@ -193,8 +197,9 @@ def train_predictor(
     optimizer = torch.optim.AdamW(predictor.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     # Cosine annealing: T_max is estimated as total_budget / (one epoch cost).
     # We use a generous T_max so the LR decays slowly. Restarts every ~20 epochs.
+    # T_0=10: fits ~2 full restarts within each group's ~18-20 epoch budget
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=20, T_mult=1, eta_min=1e-6
+        optimizer, T_0=10, T_mult=1, eta_min=1e-6
     )
 
     best_val_loss = float("inf")
@@ -211,7 +216,7 @@ def train_predictor(
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
             targets = targets.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            loss = log_mae_loss(predictor(inputs), targets)
+            loss = msle_loss(predictor(inputs), targets)
             loss.backward()
             optimizer.step()
 
@@ -226,7 +231,7 @@ def train_predictor(
             for inputs, targets in val_loader:
                 inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
                 targets = targets.to(device, non_blocking=True)
-                val_loss += log_mae_loss(predictor(inputs), targets).item()
+                val_loss += msle_loss(predictor(inputs), targets).item()
         val_loss /= max(len(val_loader), 1)
 
         if val_loss < best_val_loss - 1e-4:
