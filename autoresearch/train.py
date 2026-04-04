@@ -141,12 +141,18 @@ def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> Torch
 # Losses
 # --------------------------------------------------------------------------
 
-def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
-    """Per-target MSLE averaged across targets, so each target contributes equally."""
+def log_mae_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+    """
+    L1 (MAE) in log1p space, averaged per target then across targets.
+    More robust to extreme outliers than MSLE (L2):
+      - MSLE weight ratio outlier/typical ≈ 1500x
+      - log-MAE weight ratio           ≈ 39x
+    This prevents cycles/interval extreme values from dominating,
+    while preserving meaningful gradient signal for large predictions.
+    """
     log_pred = torch.log1p(torch.clamp(y_pred, min=0.0))
     log_true = torch.log1p(torch.clamp(y_true, min=0.0))
-    # Mean over batch per target, then mean over targets
-    return torch.mean(torch.mean((log_pred - log_true) ** 2, dim=0))
+    return torch.mean(torch.mean(torch.abs(log_pred - log_true), dim=0))
 
 # --------------------------------------------------------------------------
 # Training
@@ -205,7 +211,7 @@ def train_predictor(
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
             targets = targets.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            loss = msle_loss(predictor(inputs), targets)
+            loss = log_mae_loss(predictor(inputs), targets)
             loss.backward()
             optimizer.step()
 
@@ -220,7 +226,7 @@ def train_predictor(
             for inputs, targets in val_loader:
                 inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
                 targets = targets.to(device, non_blocking=True)
-                val_loss += msle_loss(predictor(inputs), targets).item()
+                val_loss += log_mae_loss(predictor(inputs), targets).item()
         val_loss /= max(len(val_loader), 1)
 
         if val_loss < best_val_loss - 1e-4:
