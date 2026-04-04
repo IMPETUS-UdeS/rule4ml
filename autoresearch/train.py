@@ -10,7 +10,7 @@ from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
                                   load_split_from_json, load_tensor_cache,
                                   make_dataloader, print_summary, set_seed,
                                   tensor_cache_key)
-from rule4ml.models.architectures import GNNSettings, TorchGNN
+from rule4ml.models.architectures import GNNSettings, TorchGNNWithGlobalInject
 from rule4ml.models.wrappers import TorchModelWrapper
 
 set_seed(EVERYTHING_SEED)
@@ -105,14 +105,9 @@ SEQUENTIAL_FEATURE_LABELS = [
 
 # Joint model: all 6 targets in a single predictor.
 # This gives the full 3600s budget to one model (~36 epochs vs 6 in baseline).
-# Two-group split: dedicated model per domain.
-# Motivation: joint 6-target model improves R2 for resources but wrecks
-# CYCLES/INTERVAL SMAPE (35-38% vs 9-17% in baseline).
-# Each group gets 1800s (~18-20 epochs) and can specialise.
-TARGET_GROUPS = {
-    "resources": ["bram", "dsp", "ff", "lut"],
-    "timing": ["cycles", "interval"],
-}
+# Joint model: all 6 targets in a single predictor (full 3600s budget).
+# Exp7: add global context injection into GNN nodes via TorchGNNWithGlobalInject.
+TARGET_GROUPS = {"all": ALL_TARGETS}
 
 # --------------------------------------------------------------------------
 # Hyperparameters
@@ -125,8 +120,8 @@ LEARNING_RATE = 1e-3
 # Models factories
 # --------------------------------------------------------------------------
 
-def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchGNN:
-    return TorchGNN(
+def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchGNNWithGlobalInject:
+    return TorchGNNWithGlobalInject(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
@@ -197,9 +192,9 @@ def train_predictor(
     optimizer = torch.optim.AdamW(predictor.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     # Cosine annealing: T_max is estimated as total_budget / (one epoch cost).
     # We use a generous T_max so the LR decays slowly. Restarts every ~20 epochs.
-    # T_0=10: fits ~2 full restarts within each group's ~18-20 epoch budget
+    # T_0=20: fits ~2 full restarts within the full ~40 epoch budget
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=1, eta_min=1e-6
+        optimizer, T_0=20, T_mult=1, eta_min=1e-6
     )
 
     best_val_loss = float("inf")

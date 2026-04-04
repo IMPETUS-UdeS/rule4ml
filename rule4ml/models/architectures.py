@@ -695,6 +695,9 @@ class TorchGNN(torch.nn.Module):
             edge_indices = torch_geometric.utils.to_undirected(edge_indices, num_nodes=ptr)
         edge_indices, _ = torch_geometric.utils.add_self_loops(edge_indices, num_nodes=ptr)
 
+        # Hook: subclasses can inject global context into node features before GNN.
+        x_seq = self._pre_gnn_hook(x_seq, batch, x_global_categorical, x_global_numerical)
+
         xs = []
         for gconv, norm in zip(self.gconvs, self.norms):
             x_seq = gconv(x_seq, edge_index=edge_indices)
@@ -733,10 +736,32 @@ class TorchGNN(torch.nn.Module):
             "sequential_categorical_maps": self.sequential_categorical_maps,
         }
 
+    def _pre_gnn_hook(self, x_seq, batch, x_global_categorical, x_global_numerical):
+        """No-op hook. Subclasses override to inject global context into node features."""
+        return x_seq
+
     @classmethod
     def from_config(cls, config):
         config["settings"] = GNNSettings.from_config(config["settings"])
         return cls(**config)
+
+
+class TorchGNNWithGlobalInject(TorchGNN):
+    """
+    TorchGNN variant that injects projected global context into every node
+    before the first GNN convolution (residual addition).
+
+    The existing g_projection layer (Linear → ReLU) is activated here.
+    Global features (strategy, board, bit_width, etc.) are broadcast to
+    all nodes in each graph, allowing message-passing to be conditioned on
+    global config from the very first convolution layer.
+    """
+
+    def _pre_gnn_hook(self, x_seq, batch, x_global_categorical, x_global_numerical):
+        g_token = torch.cat([*x_global_categorical, x_global_numerical], dim=-1)
+        g_projected = self.g_projection(g_token)   # (batch_size, gnn_initial_dim)
+        g_per_node = g_projected[batch]             # (total_nodes, gnn_initial_dim)
+        return x_seq + g_per_node                   # residual injection
 
 
 class KerasTransformerBlock(keras.layers.Layer):
