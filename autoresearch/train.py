@@ -184,7 +184,7 @@ def train_predictor(
 
     best_val_loss = float("inf")
     best_state = None
-    n_epochs = 1
+    n_epochs = 0
 
     progress = 0.0
     training_time = 0.0
@@ -224,7 +224,7 @@ def train_predictor(
         if progress < 1.0:
             n_epochs += 1
         print(
-            f"Epoch {n_epochs}, Overall progress: {progress:.2%}"
+            f"Epoch {n_epochs} done, Overall progress: {progress:.2%}"
             f", Training time: {training_time/60:.1f} min",
             flush=True
         )
