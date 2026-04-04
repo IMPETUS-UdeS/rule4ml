@@ -238,6 +238,10 @@ def train_predictor(
 
         scheduler.step()
 
+        # Periodically free fragmented GPU memory to reduce chance of ROCm driver hang
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
         if progress < 1.0:
             n_epochs += 1
         print(
