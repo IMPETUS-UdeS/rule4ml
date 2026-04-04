@@ -103,14 +103,16 @@ SEQUENTIAL_FEATURE_LABELS = [
 # or groups of targets as desired.
 # --------------------------------------------------------------------------
 
-TARGET_GROUPS = {t: [t] for t in ALL_TARGETS}
+# Joint model: all 6 targets in a single predictor.
+# This gives the full 3600s budget to one model (~36 epochs vs 6 in baseline).
+TARGET_GROUPS = {"all": ALL_TARGETS}
 
 # --------------------------------------------------------------------------
 # Hyperparameters
 # --------------------------------------------------------------------------
 
 BATCH_SIZE = 256
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 
 # --------------------------------------------------------------------------
 # Models factories
@@ -140,9 +142,11 @@ def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> Torch
 # --------------------------------------------------------------------------
 
 def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+    """Per-target MSLE averaged across targets, so each target contributes equally."""
     log_pred = torch.log1p(torch.clamp(y_pred, min=0.0))
     log_true = torch.log1p(torch.clamp(y_true, min=0.0))
-    return torch.mean((log_pred - log_true) ** 2)
+    # Mean over batch per target, then mean over targets
+    return torch.mean(torch.mean((log_pred - log_true) ** 2, dim=0))
 
 # --------------------------------------------------------------------------
 # Training
@@ -180,7 +184,12 @@ def train_predictor(
         pin_memory=pin_memory,
     )
 
-    optimizer = torch.optim.Adam(predictor.parameters(), lr=LEARNING_RATE)
+    optimizer = torch.optim.AdamW(predictor.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    # Cosine annealing: T_max is estimated as total_budget / (one epoch cost).
+    # We use a generous T_max so the LR decays slowly. Restarts every ~20 epochs.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=20, T_mult=1, eta_min=1e-6
+    )
 
     best_val_loss = float("inf")
     best_state = None
@@ -220,6 +229,8 @@ def train_predictor(
                 k: v.detach().cpu().clone()
                 for k, v in predictor.state_dict().items()
             }
+
+        scheduler.step()
 
         if progress < 1.0:
             n_epochs += 1
