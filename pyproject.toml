@@ -63,3 +63,11 @@ rule4ml = ["parsers/supported_boards.json"]
 
 [project.scripts]
 autoresearch = "autoresearch.train:main"
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+
+[tool.uv.sources]
+torch = { index = "pytorch-rocm" }
+pytorch-triton-rocm = { index = "pytorch-rocm" }
