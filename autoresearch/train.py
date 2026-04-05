@@ -14,7 +14,7 @@ from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
                                   load_split_from_json, load_tensor_cache,
                                   make_dataloader, print_summary, set_seed,
                                   tensor_cache_key)
-from rule4ml.models.architectures import GNNSettings, TorchTransformerPredictor
+from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
 from rule4ml.models.wrappers import TorchModelWrapper
 
 set_seed(EVERYTHING_SEED)
@@ -148,12 +148,13 @@ def augment_hls_raw_df(raw_df):
 # or groups of targets as desired.
 # --------------------------------------------------------------------------
 
-# Exp14: Add max-reuse global features targeting INTERVAL improvement.
-# The pipeline initiation interval (II) is bottlenecked by the layer with the highest
-# reuse factor — this is a direct physical relationship. Adding reuse_max (global),
-# dense_reuse_max, conv1d_reuse_max, conv2d_reuse_max gives the model direct access
-# to the bottleneck signal rather than just the mean reuse.
-# Same joint Transformer + MSLE + AdamW + cosine LR as exp13 (best run).
+# Exp16: Hybrid Transformer — resource cross-attn queries + CLS timing pooling.
+# Salvages per-target cross-attention from exp15: BRAM/DSP/FF/LUT use 4 learned query
+# vectors (each specialises its attention over the sequence); CYCLES/INTERVAL use the
+# CLS token output (proven reliable for timing relative accuracy).
+# Exp15 showed cross-attn dramatically improves resource SMAPE/R2 but collapses timing
+# SMAPE (timing queries over-specialise for large values). CLS pooling reliably handles
+# SMAPE for timing targets (5% in all baseline experiments).
 TARGET_GROUPS = {"all": ALL_TARGETS}
 
 # --------------------------------------------------------------------------
@@ -167,8 +168,8 @@ LEARNING_RATE = 1e-3
 # Models factories
 # --------------------------------------------------------------------------
 
-def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchTransformerPredictor:
-    return TorchTransformerPredictor(
+def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchTransformerHybridPredictor:
+    return TorchTransformerHybridPredictor(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
