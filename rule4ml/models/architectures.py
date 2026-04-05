@@ -859,7 +859,22 @@ class TorchTransformerPredictor(torch.nn.Module):
         self.device = device
         self.to(self.device)
 
+    # Maximum batch size for a single Transformer forward pass.
+    # prepare.py's predict() can call the model with the full test set (~93K samples),
+    # which would OOM on GPU (attention is O(B·T²)). We chunk internally.
+    _INFERENCE_CHUNK = 512
+
     def forward(self, inputs):
+        B = next(iter(inputs.values())).shape[0]
+        if B > self._INFERENCE_CHUNK:
+            return torch.cat(
+                [self._forward_chunk({k: v[i:i + self._INFERENCE_CHUNK] for k, v in inputs.items()})
+                 for i in range(0, B, self._INFERENCE_CHUNK)],
+                dim=0,
+            )
+        return self._forward_chunk(inputs)
+
+    def _forward_chunk(self, inputs):
         # ── Encode global features → [B, g_enc_dim] ──────────────────────────
         x_global_cat = [
             self.global_embeddings[key](inputs[key]).squeeze(1)
@@ -885,7 +900,6 @@ class TorchTransformerPredictor(torch.nn.Module):
 
         # ── Add positional encodings ──────────────────────────────────────────
         B, T, _ = x_seq.shape
-        # Position 0 → global token; positions 1..T → sequence tokens
         seq_pos = torch.arange(1, T + 1, device=x_seq.device).unsqueeze(0).expand(B, -1)
         x_seq = x_seq + self.pos_enc(seq_pos)                      # [B, T, d_model]
 
@@ -895,16 +909,13 @@ class TorchTransformerPredictor(torch.nn.Module):
         # ── Prepend global token → [B, 1+T, d_model] ─────────────────────────
         full_seq = torch.cat([g_token, x_seq], dim=1)              # [B, 1+T, d_model]
 
-        # src_key_padding_mask: True = ignore (padded); global token is never padded
         global_not_pad = torch.zeros(B, 1, dtype=torch.bool, device=seq_num.device)
         full_mask = torch.cat([global_not_pad, pad_mask], dim=1)   # [B, 1+T]
 
         # ── Transformer encoder ───────────────────────────────────────────────
         out = self.transformer(full_seq, src_key_padding_mask=full_mask)  # [B, 1+T, d_model]
 
-        # Take global token position as the pooled representation
         pooled = out[:, 0, :]                                      # [B, d_model]
-
         return self.head(pooled)                                    # [B, output_size]
 
 
