@@ -2,6 +2,7 @@ import argparse
 import os
 import time
 
+import numpy as np
 import torch
 
 from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
@@ -80,7 +81,7 @@ GLOBAL_FEATURE_LABELS = [
 SEQUENTIAL_FEATURE_LABELS = [
     # Categorical
     "layer_type",
-    # Numerical
+    # Numerical (original 14)
     "layer_input_size",
     "layer_output_size",
     "layer_parameter_count",
@@ -95,7 +96,47 @@ SEQUENTIAL_FEATURE_LABELS = [
     "layer_op_mult",
     "layer_op_lookup",
     "layer_op_logical",
+    # HLS-derived analytical features (exp9, 6 new)
+    "hls_multiplier_est",       # ceil(params / reuse) — proxy for DSP count per layer
+    "hls_uses_lut_table",       # 1 if sigmoid/tanh/softmax (lookup-table activation)
+    "hls_pipelined",            # 1 if reuse > 1 (pipelined, drives CYCLES/INTERVAL)
+    "log_hls_multiplier_est",   # log1p(hls_multiplier_est) — scale-invariant DSP signal
+    "log_layer_op_mult",        # log1p(layer_op_mult) — log-scale multiply operations
+    "log_layer_parameter_count",# log1p(layer_parameter_count) — log-scale weight count
 ]
+
+# Integer codes for activation layers that use HLS lookup tables (sigmoid=10, tanh=11, softmax=12)
+_HLS_LUT_TABLE_LAYER_TYPES = [10, 11, 12]
+
+
+def augment_hls_raw_df(raw_df):
+    """
+    Add 6 HLS-derived analytical features to each sample's sequential_inputs DataFrame.
+    Features are computed from existing raw (unnormalized) sequential data.
+    Call this on raw DataFrames (from load_split_from_json) before build_inputs_df().
+    """
+    def _add_features(seq_df):
+        params = seq_df["layer_parameter_count"].values.astype(float)
+        reuse = np.maximum(seq_df["layer_reuse"].values.astype(float), 1.0)
+        op_mult = seq_df["layer_op_mult"].values.astype(float)
+        layer_type = seq_df["layer_type"].values
+
+        multiplier_est = np.ceil(params / reuse)
+        uses_lut = np.isin(layer_type, _HLS_LUT_TABLE_LAYER_TYPES).astype(float)
+        pipelined = (seq_df["layer_reuse"].values > 1).astype(float)
+
+        seq_df = seq_df.copy()
+        seq_df["hls_multiplier_est"] = multiplier_est
+        seq_df["hls_uses_lut_table"] = uses_lut
+        seq_df["hls_pipelined"] = pipelined
+        seq_df["log_hls_multiplier_est"] = np.log1p(multiplier_est)
+        seq_df["log_layer_op_mult"] = np.log1p(op_mult)
+        seq_df["log_layer_parameter_count"] = np.log1p(params)
+        return seq_df
+
+    result = raw_df.copy()
+    result["sequential_inputs"] = result["sequential_inputs"].apply(_add_features)
+    return result
 
 # --------------------------------------------------------------------------
 # Targets
@@ -103,8 +144,11 @@ SEQUENTIAL_FEATURE_LABELS = [
 # or groups of targets as desired.
 # --------------------------------------------------------------------------
 
-# Joint model: all 6 targets in a single predictor.
-# This gives the full 3600s budget to one model (~36 epochs vs 6 in baseline).
+# Exp9: HLS-derived per-node analytical features.
+# 6 new sequential features added in-memory from existing data:
+# hls_multiplier_est (DSP count proxy), hls_uses_lut_table (LUT flag),
+# hls_pipelined (pipeline II flag), plus log1p variants for scale invariance.
+# Same joint model + MSLE + AdamW + cosine LR as exp2 (best run).
 TARGET_GROUPS = {"all": ALL_TARGETS}
 
 # --------------------------------------------------------------------------
@@ -232,6 +276,10 @@ def train_predictor(
 
         scheduler.step()
 
+        # Periodically free fragmented GPU memory to reduce chance of ROCm driver hang
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
         if progress < 1.0:
             n_epochs += 1
         print(
@@ -268,8 +316,10 @@ def main():
     # On cache hit: skip all raw-data loading and reuse prebuilt tensors.
     # On cache miss: load all three splits from raw JSON, tensorize once, write to disk.
     # The cache key is aligned with the hash prepare.predict() computes at lookup time.
+    # Include SEQUENTIAL_FEATURE_LABELS in the cache key so adding new sequential
+    # features automatically invalidates and rebuilds the cache.
     feature_hash = tensor_cache_key(
-        GLOBAL_FEATURE_LABELS + ["sequential_inputs"],
+        GLOBAL_FEATURE_LABELS + ["sequential_inputs"] + SEQUENTIAL_FEATURE_LABELS,
         GLOBAL_CATEGORICAL_MAPS.keys(),
         SEQUENTIAL_CATEGORICAL_MAPS.keys(),
     )
@@ -288,6 +338,7 @@ def main():
             GLOBAL_CATEGORICAL_MAPS,
             SEQUENTIAL_CATEGORICAL_MAPS,
         )
+        raw_test_df = augment_hls_raw_df(raw_test_df)
         test_inputs_df = build_inputs_df(
             raw_test_df,
             GLOBAL_FEATURE_LABELS,
@@ -315,6 +366,9 @@ def main():
         }
         for s, df in raw_splits.items():
             print(f"  {s}: {len(df)} samples", flush=True)
+
+        print("Adding HLS-derived sequential features...", flush=True)
+        raw_splits = {s: augment_hls_raw_df(df) for s, df in raw_splits.items()}
 
         inputs_df_splits_full = {
             s: build_inputs_df(df, GLOBAL_FEATURE_LABELS, SEQUENTIAL_FEATURE_LABELS)
