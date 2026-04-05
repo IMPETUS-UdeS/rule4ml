@@ -65,6 +65,7 @@ GLOBAL_FEATURE_LABELS = [
     "strategy", "board", "hls4ml_version", "vivado_version",
     # Numerical
     "bit_width", "reuse_mean",
+    "weight_bits_min", "weight_bits_max", "total_table_size",
     "dense_inputs_mean", "dense_outputs_mean", "dense_parameters_mean",
     "dense_reuse_mean", "dense_count",
     "conv1d_inputs_mean", "conv1d_outputs_mean", "conv1d_parameters_mean",

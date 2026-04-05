@@ -660,6 +660,35 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         fixed_ops.pop("layers")
     inputs.update(fixed_ops)
 
+    # Per-layer weight precision and activation table sizes from hls_config["LayerName"].
+    # weight_bits encodes quantized weight bitwidth → directly drives DSP multiplier cost.
+    # total_table_size is the sum of ROM sizes for LUT-based activation functions.
+    layer_name_config = hls_config.get("layer_name") or {}
+    weight_bits_vals = []
+    table_sizes = []
+    for lv in layer_name_config.values():
+        if not isinstance(lv, dict):
+            continue
+        prec = lv.get("precision") or {}
+        if isinstance(prec, dict):
+            w_str = prec.get("weight", "")
+            if w_str:
+                try:
+                    w_total, _ = fixed_precision_to_bit_width(w_str)
+                    weight_bits_vals.append(w_total)
+                except (ValueError, AttributeError):
+                    pass
+        ts = lv.get("table_size", 0)
+        if ts:
+            try:
+                table_sizes.append(int(ts))
+            except (TypeError, ValueError):
+                pass
+
+    inputs["weight_bits_min"] = float(min(weight_bits_vals)) if weight_bits_vals else float(total_bits)
+    inputs["weight_bits_max"] = float(max(weight_bits_vals)) if weight_bits_vals else float(total_bits)
+    inputs["total_table_size"] = float(sum(table_sizes))
+
     return inputs
 
 
