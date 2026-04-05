@@ -64,16 +64,16 @@ GLOBAL_FEATURE_LABELS = [
     # Categorical (must appear first to match global_input_shape computation)
     "strategy", "board", "hls4ml_version", "vivado_version",
     # Numerical
-    "bit_width", "reuse_mean",
+    "bit_width", "reuse_mean", "reuse_max",
     "weight_bits_min", "weight_bits_max", "total_table_size",
     "dense_inputs_mean", "dense_outputs_mean", "dense_parameters_mean",
-    "dense_reuse_mean", "dense_count",
+    "dense_reuse_mean", "dense_reuse_max", "dense_count",
     "conv1d_inputs_mean", "conv1d_outputs_mean", "conv1d_parameters_mean",
     "conv1d_filters_mean", "conv1d_kernel_size_mean", "conv1d_strides_mean",
-    "conv1d_reuse_mean", "conv1d_count",
+    "conv1d_reuse_mean", "conv1d_reuse_max", "conv1d_count",
     "conv2d_inputs_mean", "conv2d_outputs_mean", "conv2d_parameters_mean",
     "conv2d_filters_mean", "conv2d_kernel_size_mean", "conv2d_strides_mean",
-    "conv2d_reuse_mean", "conv2d_count",
+    "conv2d_reuse_mean", "conv2d_reuse_max", "conv2d_count",
     "batchnormalization_inputs_mean", "batchnormalization_outputs_mean",
     "batchnormalization_parameters_mean", "batchnormalization_count",
     "add_count", "concatenate_count", "dropout_count",
@@ -148,11 +148,12 @@ def augment_hls_raw_df(raw_df):
 # or groups of targets as desired.
 # --------------------------------------------------------------------------
 
-# Exp9: HLS-derived per-node analytical features.
-# 6 new sequential features added in-memory from existing data:
-# hls_multiplier_est (DSP count proxy), hls_uses_lut_table (LUT flag),
-# hls_pipelined (pipeline II flag), plus log1p variants for scale invariance.
-# Same joint model + MSLE + AdamW + cosine LR as exp2 (best run).
+# Exp14: Add max-reuse global features targeting INTERVAL improvement.
+# The pipeline initiation interval (II) is bottlenecked by the layer with the highest
+# reuse factor — this is a direct physical relationship. Adding reuse_max (global),
+# dense_reuse_max, conv1d_reuse_max, conv2d_reuse_max gives the model direct access
+# to the bottleneck signal rather than just the mean reuse.
+# Same joint Transformer + MSLE + AdamW + cosine LR as exp13 (best run).
 TARGET_GROUPS = {"all": ALL_TARGETS}
 
 # --------------------------------------------------------------------------

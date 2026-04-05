@@ -630,6 +630,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
     )
     extracted_features = unwrap_nested_dicts(adjusted_features)
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
+    reuse_factor_max = float(np.max([x["reuse_factor"] for x in model_config]))
 
     hls_config = camel_keys_to_snake(hls_config)
     precision = hls_config["model"]["precision"]
@@ -649,6 +650,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         "fractional_bits": fractional_bits,
         "global_reuse": hls_config["model"]["reuse_factor"],
         "reuse_mean": reuse_factor_mean,
+        "reuse_max": reuse_factor_max,
         "clock_period": kwargs.get("clock_period", None),
         "hls4ml_version": kwargs.get("hls4ml_version", None),
         "vivado_version": kwargs.get("vivado_version", None),
