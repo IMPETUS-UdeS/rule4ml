@@ -739,6 +739,175 @@ class TorchGNN(torch.nn.Module):
         return cls(**config)
 
 
+class TorchTransformerPredictor(torch.nn.Module):
+    """
+    Transformer-based FPGA resource predictor.
+
+    Treats each layer node as a sequence token. The global context vector
+    (strategy, board, etc.) is projected to d_model and prepended as a
+    learnable [CLS]-style token at position 0. Self-attention over the
+    full sequence (global + all layer tokens) is applied before pooling
+    the token[0] output for final prediction.
+
+    Drop-in replacement for TorchGNN — identical constructor signature.
+    """
+
+    def __init__(
+        self,
+        settings: GNNSettings,
+        global_input_shape,
+        sequential_input_shape,
+        output_shape,
+        global_categorical_maps,
+        sequential_categorical_maps,
+        name="TorchTransformerPredictor",
+        device=None,
+        d_model: int = 128,
+        nhead: int = 4,
+        num_layers: int = 3,
+        dim_feedforward: int = 256,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        # ── Global feature encoders ──────────────────────────────────────────
+        self.global_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(global_categorical_maps):
+            self.global_embeddings[f"g{idx}_{key}_embedding"] = torch.nn.Embedding(
+                num_embeddings=len(global_categorical_maps[key]) + 1,
+                embedding_dim=settings.global_embedding_layers[idx],
+            )
+
+        self.numerical_layers = torch.nn.ModuleDict()
+        g_num_dim = max(0, global_input_shape[-1] - len(global_categorical_maps))
+        g_in_dim = g_num_dim
+        if g_in_dim > 0:
+            for idx, units in enumerate(settings.numerical_dense_layers):
+                self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
+                    torch.nn.Linear(g_in_dim, units, bias=False)
+                )
+                g_in_dim = units
+
+        g_cat_dim = sum(settings.global_embedding_layers[:len(global_categorical_maps)])
+        g_enc_dim = g_cat_dim + g_in_dim
+        self.global_proj = torch.nn.Linear(g_enc_dim, d_model)
+
+        # ── Sequential (per-node) feature encoders ───────────────────────────
+        self.sequential_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(sequential_categorical_maps):
+            self.sequential_embeddings[f"s{idx}_{key}_embedding"] = torch.nn.Embedding(
+                num_embeddings=len(sequential_categorical_maps[key]) + 1,
+                embedding_dim=settings.seq_embedding_layers[idx],
+            )
+
+        s_cat_dim = sum(settings.seq_embedding_layers[:len(sequential_categorical_maps)])
+        s_num_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
+        node_in_dim = s_cat_dim + s_num_dim
+        self.node_proj = torch.nn.Linear(node_in_dim, d_model)
+
+        # ── Positional encoding (learned; position 0 = global token) ─────────
+        self.pos_enc = torch.nn.Embedding(256, d_model)
+
+        # ── Transformer encoder ───────────────────────────────────────────────
+        enc_layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,   # Pre-LN: more stable gradient flow
+        )
+        self.transformer = torch.nn.TransformerEncoder(
+            enc_layer, num_layers=num_layers,
+            norm=torch.nn.LayerNorm(d_model),
+            enable_nested_tensor=False,
+        )
+
+        # ── Output head ───────────────────────────────────────────────────────
+        head_layers = []
+        in_dim = d_model
+        for out_dim in settings.dense_layers:
+            head_layers.extend([torch.nn.Linear(in_dim, out_dim), torch.nn.ReLU()])
+            in_dim = out_dim
+        head_layers.append(torch.nn.Linear(in_dim, output_shape[-1]))
+        head_layers.append(torch.nn.Softplus())
+        self.head = torch.nn.Sequential(*head_layers)
+
+        # ── Bookkeeping (mirrors TorchGNN interface) ──────────────────────────
+        self.global_input_keys = {
+            "categorical": [name for name in self.global_embeddings.keys()],
+            "numerical": f"g{len(global_categorical_maps)}_numerical_layer",
+        }
+        self.sequential_input_keys = {
+            "categorical": [name for name in self.sequential_embeddings.keys()],
+            "numerical": f"s{len(sequential_categorical_maps)}_numerical_layer",
+        }
+        self.global_input_shape = global_input_shape
+        self.sequential_input_shape = sequential_input_shape
+        self.global_categorical_maps = global_categorical_maps
+        self.sequential_categorical_maps = sequential_categorical_maps
+        self.output_shape = output_shape
+        self.settings = settings
+        self.name = name
+        self.kl_loss = 0.0
+
+        if device is None:
+            if torch.cuda.is_available() and os.environ.get("CUDA_VISIBLE_DEVICES") not in ["", "-1"]:
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+        self.device = device
+        self.to(self.device)
+
+    def forward(self, inputs):
+        # ── Encode global features → [B, g_enc_dim] ──────────────────────────
+        x_global_cat = [
+            self.global_embeddings[key](inputs[key]).squeeze(1)
+            for key in self.global_embeddings.keys()
+        ]
+        x_global_num = inputs[self.global_input_keys["numerical"]]
+        for key in self.numerical_layers.keys():
+            x_global_num = self.numerical_layers[key](x_global_num)
+
+        g = torch.cat([*x_global_cat, x_global_num], dim=-1)       # [B, g_enc_dim]
+        g_token = self.global_proj(g).unsqueeze(1)                  # [B, 1, d_model]
+
+        # ── Encode per-node features → [B, T, node_in_dim] ───────────────────
+        seq_num = inputs[self.sequential_input_keys["numerical"]]   # [B, T, s_num_dim]
+        pad_mask = (seq_num == 0.0).all(dim=-1)                     # [B, T] True = padded
+
+        x_seq_cat = [
+            self.sequential_embeddings[key](inputs[key]).squeeze(2)
+            for key in self.sequential_embeddings.keys()
+        ]                                                           # list of [B, T, emb_dim]
+        x_seq = torch.cat([*x_seq_cat, seq_num], dim=-1)           # [B, T, node_in_dim]
+        x_seq = self.node_proj(x_seq)                              # [B, T, d_model]
+
+        # ── Add positional encodings ──────────────────────────────────────────
+        B, T, _ = x_seq.shape
+        # Position 0 → global token; positions 1..T → sequence tokens
+        seq_pos = torch.arange(1, T + 1, device=x_seq.device).unsqueeze(0).expand(B, -1)
+        x_seq = x_seq + self.pos_enc(seq_pos)                      # [B, T, d_model]
+
+        g_pos = torch.zeros(B, 1, dtype=torch.long, device=g_token.device)
+        g_token = g_token + self.pos_enc(g_pos)                    # [B, 1, d_model]
+
+        # ── Prepend global token → [B, 1+T, d_model] ─────────────────────────
+        full_seq = torch.cat([g_token, x_seq], dim=1)              # [B, 1+T, d_model]
+
+        # src_key_padding_mask: True = ignore (padded); global token is never padded
+        global_not_pad = torch.zeros(B, 1, dtype=torch.bool, device=seq_num.device)
+        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)   # [B, 1+T]
+
+        # ── Transformer encoder ───────────────────────────────────────────────
+        out = self.transformer(full_seq, src_key_padding_mask=full_mask)  # [B, 1+T, d_model]
+
+        # Take global token position as the pooled representation
+        pooled = out[:, 0, :]                                      # [B, d_model]
+
+        return self.head(pooled)                                    # [B, output_size]
+
+
 class KerasTransformerBlock(keras.layers.Layer):
     """
     _summary_

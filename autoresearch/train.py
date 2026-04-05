@@ -2,6 +2,9 @@ import argparse
 import os
 import time
 
+# Must be set before torch/HSA runtime initializes to prevent ROCm GPU hangs on RDNA3
+os.environ.setdefault("HSA_ENABLE_SDMA", "0")
+
 import numpy as np
 import torch
 
@@ -11,7 +14,7 @@ from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
                                   load_split_from_json, load_tensor_cache,
                                   make_dataloader, print_summary, set_seed,
                                   tensor_cache_key)
-from rule4ml.models.architectures import GNNSettings, TorchGNN
+from rule4ml.models.architectures import GNNSettings, TorchTransformerPredictor
 from rule4ml.models.wrappers import TorchModelWrapper
 
 set_seed(EVERYTHING_SEED)
@@ -162,15 +165,15 @@ LEARNING_RATE = 1e-3
 # Models factories
 # --------------------------------------------------------------------------
 
-def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchGNN:
-    return TorchGNN(
+def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchTransformerPredictor:
+    return TorchTransformerPredictor(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
             numerical_dense_layers=[32],
-            gconv_layers=[128, 64],
-            dense_layers=[128, 128, 64],
-            dense_dropouts=[0.2, 0.2],
+            gconv_layers=[128, 64],   # unused by Transformer but kept for GNNSettings compat
+            dense_layers=[128, 64],   # Transformer output head: d_model→128→64→output
+            dense_dropouts=[],
         ),
         global_input_shape=(None, len(GLOBAL_FEATURE_LABELS)),
         sequential_input_shape=(None, len(SEQUENTIAL_FEATURE_LABELS)),
@@ -179,6 +182,11 @@ def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> Torch
         sequential_categorical_maps=SEQUENTIAL_CATEGORICAL_MAPS,
         name=name,
         device=device,
+        d_model=128,
+        nhead=4,
+        num_layers=3,
+        dim_feedforward=256,
+        dropout=0.1,
     )
 
 # --------------------------------------------------------------------------
@@ -243,7 +251,6 @@ def train_predictor(
     training_time = 0.0
     while True:
         predictor.train()
-        torch.cuda.synchronize() if device.type == "cuda" else None
         t0 = time.time()
         for inputs, targets in train_loader:
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
@@ -251,6 +258,7 @@ def train_predictor(
             optimizer.zero_grad(set_to_none=True)
             loss = msle_loss(predictor(inputs), targets)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(predictor.parameters(), max_norm=1.0)
             optimizer.step()
 
         torch.cuda.synchronize() if device.type == "cuda" else None
