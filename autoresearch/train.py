@@ -2,6 +2,10 @@ import argparse
 import os
 import time
 
+# Must be set before torch/HSA runtime initializes to prevent ROCm GPU hangs on RDNA3
+os.environ.setdefault("HSA_ENABLE_SDMA", "0")
+
+import numpy as np
 import torch
 
 from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
@@ -10,7 +14,7 @@ from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
                                   load_split_from_json, load_tensor_cache,
                                   make_dataloader, print_summary, set_seed,
                                   tensor_cache_key)
-from rule4ml.models.architectures import GNNSettings, TorchGNNWithGlobalInject
+from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
 from rule4ml.models.wrappers import TorchModelWrapper
 
 set_seed(EVERYTHING_SEED)
@@ -60,15 +64,16 @@ GLOBAL_FEATURE_LABELS = [
     # Categorical (must appear first to match global_input_shape computation)
     "strategy", "board", "hls4ml_version", "vivado_version",
     # Numerical
-    "bit_width", "reuse_mean",
+    "bit_width", "reuse_mean", "reuse_max",
+    "weight_bits_min", "weight_bits_max", "total_table_size",
     "dense_inputs_mean", "dense_outputs_mean", "dense_parameters_mean",
-    "dense_reuse_mean", "dense_count",
+    "dense_reuse_mean", "dense_reuse_max", "dense_count",
     "conv1d_inputs_mean", "conv1d_outputs_mean", "conv1d_parameters_mean",
     "conv1d_filters_mean", "conv1d_kernel_size_mean", "conv1d_strides_mean",
-    "conv1d_reuse_mean", "conv1d_count",
+    "conv1d_reuse_mean", "conv1d_reuse_max", "conv1d_count",
     "conv2d_inputs_mean", "conv2d_outputs_mean", "conv2d_parameters_mean",
     "conv2d_filters_mean", "conv2d_kernel_size_mean", "conv2d_strides_mean",
-    "conv2d_reuse_mean", "conv2d_count",
+    "conv2d_reuse_mean", "conv2d_reuse_max", "conv2d_count",
     "batchnormalization_inputs_mean", "batchnormalization_outputs_mean",
     "batchnormalization_parameters_mean", "batchnormalization_count",
     "add_count", "concatenate_count", "dropout_count",
@@ -80,7 +85,7 @@ GLOBAL_FEATURE_LABELS = [
 SEQUENTIAL_FEATURE_LABELS = [
     # Categorical
     "layer_type",
-    # Numerical
+    # Numerical (original 14)
     "layer_input_size",
     "layer_output_size",
     "layer_parameter_count",
@@ -95,7 +100,47 @@ SEQUENTIAL_FEATURE_LABELS = [
     "layer_op_mult",
     "layer_op_lookup",
     "layer_op_logical",
+    # HLS-derived analytical features (exp9, 6 new)
+    "hls_multiplier_est",       # ceil(params / reuse) — proxy for DSP count per layer
+    "hls_uses_lut_table",       # 1 if sigmoid/tanh/softmax (lookup-table activation)
+    "hls_pipelined",            # 1 if reuse > 1 (pipelined, drives CYCLES/INTERVAL)
+    "log_hls_multiplier_est",   # log1p(hls_multiplier_est) — scale-invariant DSP signal
+    "log_layer_op_mult",        # log1p(layer_op_mult) — log-scale multiply operations
+    "log_layer_parameter_count",# log1p(layer_parameter_count) — log-scale weight count
 ]
+
+# Integer codes for activation layers that use HLS lookup tables (sigmoid=10, tanh=11, softmax=12)
+_HLS_LUT_TABLE_LAYER_TYPES = [10, 11, 12]
+
+
+def augment_hls_raw_df(raw_df):
+    """
+    Add 6 HLS-derived analytical features to each sample's sequential_inputs DataFrame.
+    Features are computed from existing raw (unnormalized) sequential data.
+    Call this on raw DataFrames (from load_split_from_json) before build_inputs_df().
+    """
+    def _add_features(seq_df):
+        params = seq_df["layer_parameter_count"].values.astype(float)
+        reuse = np.maximum(seq_df["layer_reuse"].values.astype(float), 1.0)
+        op_mult = seq_df["layer_op_mult"].values.astype(float)
+        layer_type = seq_df["layer_type"].values
+
+        multiplier_est = np.ceil(params / reuse)
+        uses_lut = np.isin(layer_type, _HLS_LUT_TABLE_LAYER_TYPES).astype(float)
+        pipelined = (seq_df["layer_reuse"].values > 1).astype(float)
+
+        seq_df = seq_df.copy()
+        seq_df["hls_multiplier_est"] = multiplier_est
+        seq_df["hls_uses_lut_table"] = uses_lut
+        seq_df["hls_pipelined"] = pipelined
+        seq_df["log_hls_multiplier_est"] = np.log1p(multiplier_est)
+        seq_df["log_layer_op_mult"] = np.log1p(op_mult)
+        seq_df["log_layer_parameter_count"] = np.log1p(params)
+        return seq_df
+
+    result = raw_df.copy()
+    result["sequential_inputs"] = result["sequential_inputs"].apply(_add_features)
+    return result
 
 # --------------------------------------------------------------------------
 # Targets
@@ -103,10 +148,13 @@ SEQUENTIAL_FEATURE_LABELS = [
 # or groups of targets as desired.
 # --------------------------------------------------------------------------
 
-# Joint model: all 6 targets in a single predictor.
-# This gives the full 3600s budget to one model (~36 epochs vs 6 in baseline).
-# Joint model: all 6 targets in a single predictor (full 3600s budget).
-# Exp7: add global context injection into GNN nodes via TorchGNNWithGlobalInject.
+# Exp16: Hybrid Transformer — resource cross-attn queries + CLS timing pooling.
+# Salvages per-target cross-attention from exp15: BRAM/DSP/FF/LUT use 4 learned query
+# vectors (each specialises its attention over the sequence); CYCLES/INTERVAL use the
+# CLS token output (proven reliable for timing relative accuracy).
+# Exp15 showed cross-attn dramatically improves resource SMAPE/R2 but collapses timing
+# SMAPE (timing queries over-specialise for large values). CLS pooling reliably handles
+# SMAPE for timing targets (5% in all baseline experiments).
 TARGET_GROUPS = {"all": ALL_TARGETS}
 
 # --------------------------------------------------------------------------
@@ -120,15 +168,15 @@ LEARNING_RATE = 1e-3
 # Models factories
 # --------------------------------------------------------------------------
 
-def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchGNNWithGlobalInject:
-    return TorchGNNWithGlobalInject(
+def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchTransformerHybridPredictor:
+    return TorchTransformerHybridPredictor(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
             numerical_dense_layers=[32],
-            gconv_layers=[128, 64],
-            dense_layers=[128, 128, 64],
-            dense_dropouts=[0.2, 0.2],
+            gconv_layers=[128, 64],   # unused by Transformer but kept for GNNSettings compat
+            dense_layers=[128, 64],   # Transformer output head: d_model→128→64→output
+            dense_dropouts=[],
         ),
         global_input_shape=(None, len(GLOBAL_FEATURE_LABELS)),
         sequential_input_shape=(None, len(SEQUENTIAL_FEATURE_LABELS)),
@@ -137,6 +185,11 @@ def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> Torch
         sequential_categorical_maps=SEQUENTIAL_CATEGORICAL_MAPS,
         name=name,
         device=device,
+        d_model=128,
+        nhead=4,
+        num_layers=3,
+        dim_feedforward=256,
+        dropout=0.1,
     )
 
 # --------------------------------------------------------------------------
@@ -205,7 +258,6 @@ def train_predictor(
     training_time = 0.0
     while True:
         predictor.train()
-        torch.cuda.synchronize() if device.type == "cuda" else None
         t0 = time.time()
         for inputs, targets in train_loader:
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
@@ -213,6 +265,7 @@ def train_predictor(
             optimizer.zero_grad(set_to_none=True)
             loss = msle_loss(predictor(inputs), targets)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(predictor.parameters(), max_norm=1.0)
             optimizer.step()
 
         torch.cuda.synchronize() if device.type == "cuda" else None
@@ -278,8 +331,10 @@ def main():
     # On cache hit: skip all raw-data loading and reuse prebuilt tensors.
     # On cache miss: load all three splits from raw JSON, tensorize once, write to disk.
     # The cache key is aligned with the hash prepare.predict() computes at lookup time.
+    # Include SEQUENTIAL_FEATURE_LABELS in the cache key so adding new sequential
+    # features automatically invalidates and rebuilds the cache.
     feature_hash = tensor_cache_key(
-        GLOBAL_FEATURE_LABELS + ["sequential_inputs"],
+        GLOBAL_FEATURE_LABELS + ["sequential_inputs"] + SEQUENTIAL_FEATURE_LABELS,
         GLOBAL_CATEGORICAL_MAPS.keys(),
         SEQUENTIAL_CATEGORICAL_MAPS.keys(),
     )
@@ -298,6 +353,7 @@ def main():
             GLOBAL_CATEGORICAL_MAPS,
             SEQUENTIAL_CATEGORICAL_MAPS,
         )
+        raw_test_df = augment_hls_raw_df(raw_test_df)
         test_inputs_df = build_inputs_df(
             raw_test_df,
             GLOBAL_FEATURE_LABELS,
@@ -325,6 +381,9 @@ def main():
         }
         for s, df in raw_splits.items():
             print(f"  {s}: {len(df)} samples", flush=True)
+
+        print("Adding HLS-derived sequential features...", flush=True)
+        raw_splits = {s: augment_hls_raw_df(df) for s, df in raw_splits.items()}
 
         inputs_df_splits_full = {
             s: build_inputs_df(df, GLOBAL_FEATURE_LABELS, SEQUENTIAL_FEATURE_LABELS)
