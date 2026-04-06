@@ -1030,6 +1030,9 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
             dropout=dropout,
             batch_first=True,
         )
+        self.resource_cls_residual = torch.nn.Parameter(
+            torch.full((self._N_RESOURCE, 1), 0.25)
+        )
         self.resource_heads = torch.nn.ModuleList()
         for _ in range(self._N_RESOURCE):
             head_layers = []
@@ -1123,19 +1126,23 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
 
         enc_out = self.transformer(full_seq, src_key_padding_mask=full_mask)  # [B, 1+T, d_model]
 
+        cls_out = enc_out[:, 0, :]                                   # [B, d_model]
+
         # ── Resource branch: cross-attention from 4 learned query vectors ─────
         r_queries = self.resource_queries.unsqueeze(0).expand(B, -1, -1)  # [B, 4, d_model]
         r_ctx, _ = self.resource_cross_attn(
             r_queries, enc_out, enc_out,
             key_padding_mask=full_mask,
         )                                                            # [B, 4, d_model]
+        # Blend in the global CLS summary so each resource head starts from a
+        # stable baseline before specializing via its query-specific attention.
+        r_ctx = r_ctx + self.resource_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
         resource_preds = torch.cat(
             [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
             dim=-1,
         )                                                            # [B, 4]
 
         # ── Timing branch: CLS token pooling ─────────────────────────────────
-        cls_out = enc_out[:, 0, :]                                   # [B, d_model]
         timing_preds = self.timing_head(cls_out)                     # [B, 2]
 
         # ── Combine in target order: [bram,dsp,ff,lut,cycles,interval] ────────
