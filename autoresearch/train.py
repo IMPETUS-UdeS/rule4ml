@@ -394,7 +394,7 @@ def main():
 
         # Use a throw-away wrapper/GNN just to define input structure for build_inputs()
         cpu_dev = torch.device("cpu")
-        _ref_gnn = make_gnn(output_size=len(ALL_TARGETS), device=cpu_dev, name="ref")
+        _ref_gnn = make_gnn(output_size=1, device=cpu_dev, name="ref")
         _ref_wrapper = TorchModelWrapper()
         _ref_wrapper.set_model(_ref_gnn)
 
