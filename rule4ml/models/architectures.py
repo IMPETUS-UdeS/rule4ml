@@ -1149,6 +1149,234 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         return torch.cat([resource_preds, timing_preds], dim=-1)     # [B, 6]
 
 
+class TorchTransformerFullQueryPredictor(torch.nn.Module):
+    """
+    Full per-target cross-attention predictor with CLS residual anchoring.
+
+    All 6 targets (BRAM/DSP/FF/LUT/CYCLES/INTERVAL) use per-target learned query
+    vectors for cross-attention specialization, but each query output is blended
+    with the CLS token via a learned per-target scalar residual weight.
+
+    Resource queries: init residual=0.25 (matches proven exp18 setting).
+    Timing queries:   init residual=0.75 (strong CLS anchor to prevent SMAPE collapse).
+
+    Motivation: exp18 proved that CLS residual on resource queries dramatically improves
+    SMAPE (4.27% vs 5.21%). The timing branch currently uses raw CLS, which works well
+    for SMAPE but may leave R2 improvement on the table. Per-timing queries with a
+    heavy CLS anchor should allow specialization without the SMAPE collapse seen in
+    exp15 (where timing queries had no residual anchor).
+    """
+
+    _N_RESOURCE = 4
+    _N_TIMING = 2
+    _INFERENCE_CHUNK = 512
+
+    def __init__(
+        self,
+        settings: GNNSettings,
+        global_input_shape,
+        sequential_input_shape,
+        output_shape,
+        global_categorical_maps,
+        sequential_categorical_maps,
+        name="TorchTransformerFullQueryPredictor",
+        device=None,
+        d_model: int = 128,
+        nhead: int = 4,
+        num_layers: int = 3,
+        dim_feedforward: int = 256,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        # ── Global feature encoders ──────────────────────────────────────────
+        self.global_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(global_categorical_maps):
+            self.global_embeddings[f"g{idx}_{key}_embedding"] = torch.nn.Embedding(
+                num_embeddings=len(global_categorical_maps[key]) + 1,
+                embedding_dim=settings.global_embedding_layers[idx],
+            )
+
+        self.numerical_layers = torch.nn.ModuleDict()
+        g_num_dim = max(0, global_input_shape[-1] - len(global_categorical_maps))
+        g_in_dim = g_num_dim
+        if g_in_dim > 0:
+            for idx, units in enumerate(settings.numerical_dense_layers):
+                self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
+                    torch.nn.Linear(g_in_dim, units, bias=False)
+                )
+                g_in_dim = units
+
+        g_cat_dim = sum(settings.global_embedding_layers[:len(global_categorical_maps)])
+        g_enc_dim = g_cat_dim + g_in_dim
+        self.global_proj = torch.nn.Linear(g_enc_dim, d_model)
+
+        # ── Sequential (per-node) feature encoders ───────────────────────────
+        self.sequential_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(sequential_categorical_maps):
+            self.sequential_embeddings[f"s{idx}_{key}_embedding"] = torch.nn.Embedding(
+                num_embeddings=len(sequential_categorical_maps[key]) + 1,
+                embedding_dim=settings.seq_embedding_layers[idx],
+            )
+
+        s_cat_dim = sum(settings.seq_embedding_layers[:len(sequential_categorical_maps)])
+        s_num_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
+        node_in_dim = s_cat_dim + s_num_dim
+        self.node_proj = torch.nn.Linear(node_in_dim, d_model)
+
+        # ── Positional encoding ───────────────────────────────────────────────
+        self.pos_enc = torch.nn.Embedding(256, d_model)
+
+        # ── Transformer encoder ───────────────────────────────────────────────
+        enc_layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = torch.nn.TransformerEncoder(
+            enc_layer, num_layers=num_layers,
+            norm=torch.nn.LayerNorm(d_model),
+            enable_nested_tensor=False,
+        )
+
+        # ── Shared cross-attention (used by both resource and timing branches) ─
+        self.cross_attn = torch.nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=nhead,
+            dropout=dropout,
+            batch_first=True,
+        )
+
+        # ── Resource branch: 4 learned query vectors + CLS residual (α=0.25) ──
+        self.resource_queries = torch.nn.Parameter(torch.randn(self._N_RESOURCE, d_model))
+        self.resource_cls_residual = torch.nn.Parameter(
+            torch.full((self._N_RESOURCE, 1), 0.25)
+        )
+        self.resource_heads = torch.nn.ModuleList()
+        for _ in range(self._N_RESOURCE):
+            head_layers = []
+            in_dim = d_model
+            for out_dim in settings.dense_layers:
+                head_layers.extend([torch.nn.Linear(in_dim, out_dim), torch.nn.ReLU()])
+                in_dim = out_dim
+            head_layers.extend([torch.nn.Linear(in_dim, 1), torch.nn.Softplus()])
+            self.resource_heads.append(torch.nn.Sequential(*head_layers))
+
+        # ── Timing branch: 2 learned query vectors + CLS residual (α=0.75) ───
+        self.timing_queries = torch.nn.Parameter(torch.randn(self._N_TIMING, d_model))
+        self.timing_cls_residual = torch.nn.Parameter(
+            torch.full((self._N_TIMING, 1), 0.75)
+        )
+        self.timing_heads = torch.nn.ModuleList()
+        for _ in range(self._N_TIMING):
+            head_layers = []
+            in_dim = d_model
+            for out_dim in settings.dense_layers:
+                head_layers.extend([torch.nn.Linear(in_dim, out_dim), torch.nn.ReLU()])
+                in_dim = out_dim
+            head_layers.extend([torch.nn.Linear(in_dim, 1), torch.nn.Softplus()])
+            self.timing_heads.append(torch.nn.Sequential(*head_layers))
+
+        # ── Bookkeeping ───────────────────────────────────────────────────────
+        self.global_input_keys = {
+            "categorical": [name for name in self.global_embeddings.keys()],
+            "numerical": f"g{len(global_categorical_maps)}_numerical_layer",
+        }
+        self.sequential_input_keys = {
+            "categorical": [name for name in self.sequential_embeddings.keys()],
+            "numerical": f"s{len(sequential_categorical_maps)}_numerical_layer",
+        }
+        self.global_input_shape = global_input_shape
+        self.sequential_input_shape = sequential_input_shape
+        self.global_categorical_maps = global_categorical_maps
+        self.sequential_categorical_maps = sequential_categorical_maps
+        self.output_shape = output_shape
+        self.settings = settings
+        self.name = name
+        self.kl_loss = 0.0
+
+        if device is None:
+            if torch.cuda.is_available() and os.environ.get("CUDA_VISIBLE_DEVICES") not in ["", "-1"]:
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+        self.device = device
+        self.to(self.device)
+
+    def forward(self, inputs):
+        B = next(iter(inputs.values())).shape[0]
+        if B > self._INFERENCE_CHUNK:
+            return torch.cat(
+                [self._forward_chunk({k: v[i:i + self._INFERENCE_CHUNK] for k, v in inputs.items()})
+                 for i in range(0, B, self._INFERENCE_CHUNK)],
+                dim=0,
+            )
+        return self._forward_chunk(inputs)
+
+    def _forward_chunk(self, inputs):
+        # ── Encode global → [B, 1, d_model] ──────────────────────────────────
+        x_global_cat = [
+            self.global_embeddings[key](inputs[key]).squeeze(1)
+            for key in self.global_embeddings.keys()
+        ]
+        x_global_num = inputs[self.global_input_keys["numerical"]]
+        for key in self.numerical_layers.keys():
+            x_global_num = self.numerical_layers[key](x_global_num)
+
+        g = torch.cat([*x_global_cat, x_global_num], dim=-1)
+        g_token = self.global_proj(g).unsqueeze(1)                  # [B, 1, d_model]
+
+        # ── Encode per-node → [B, T, d_model] ────────────────────────────────
+        seq_num = inputs[self.sequential_input_keys["numerical"]]   # [B, T, s_num_dim]
+        pad_mask = (seq_num == 0.0).all(dim=-1)                     # [B, T] True = padded
+
+        x_seq_cat = [
+            self.sequential_embeddings[key](inputs[key]).squeeze(2)
+            for key in self.sequential_embeddings.keys()
+        ]
+        x_seq = torch.cat([*x_seq_cat, seq_num], dim=-1)
+        x_seq = self.node_proj(x_seq)                               # [B, T, d_model]
+
+        # ── Positional encodings ──────────────────────────────────────────────
+        B, T, _ = x_seq.shape
+        seq_pos = torch.arange(1, T + 1, device=x_seq.device).unsqueeze(0).expand(B, -1)
+        x_seq = x_seq + self.pos_enc(seq_pos)
+        g_pos = torch.zeros(B, 1, dtype=torch.long, device=g_token.device)
+        g_token = g_token + self.pos_enc(g_pos)
+
+        # ── Self-attention over [global + sequence] ───────────────────────────
+        full_seq = torch.cat([g_token, x_seq], dim=1)              # [B, 1+T, d_model]
+        global_not_pad = torch.zeros(B, 1, dtype=torch.bool, device=seq_num.device)
+        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)   # [B, 1+T]
+
+        enc_out = self.transformer(full_seq, src_key_padding_mask=full_mask)  # [B, 1+T, d_model]
+        cls_out = enc_out[:, 0, :]                                  # [B, d_model]
+
+        # ── Resource branch: cross-attention + CLS residual (α≈0.25) ─────────
+        r_queries = self.resource_queries.unsqueeze(0).expand(B, -1, -1)  # [B, 4, d_model]
+        r_ctx, _ = self.cross_attn(r_queries, enc_out, enc_out, key_padding_mask=full_mask)
+        r_ctx = r_ctx + self.resource_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
+        resource_preds = torch.cat(
+            [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
+            dim=-1,
+        )                                                            # [B, 4]
+
+        # ── Timing branch: cross-attention + CLS residual (α≈0.75) ──────────
+        t_queries = self.timing_queries.unsqueeze(0).expand(B, -1, -1)   # [B, 2, d_model]
+        t_ctx, _ = self.cross_attn(t_queries, enc_out, enc_out, key_padding_mask=full_mask)
+        t_ctx = t_ctx + self.timing_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
+        timing_preds = torch.cat(
+            [head(t_ctx[:, i, :]) for i, head in enumerate(self.timing_heads)],
+            dim=-1,
+        )                                                            # [B, 2]
+
+        # ── Combine in target order: [bram,dsp,ff,lut,cycles,interval] ────────
+        return torch.cat([resource_preds, timing_preds], dim=-1)    # [B, 6]
+
+
 class KerasTransformerBlock(keras.layers.Layer):
     """
     _summary_
