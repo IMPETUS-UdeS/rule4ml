@@ -23,9 +23,17 @@ WORKDIR /workspace
 # Clone the repo from specified branch
 RUN git clone --branch ${REPO_REF} ${REPO_URL} .
 
-# Install uv and Node.js
+# Install uv and huggingface CLI
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN curl -LsSf https://hf.co/cli/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
+
+# Download wa-hls4ml dataset
+RUN mkdir -p /workspace/datasets/huggingface/wa-hls4ml/
+RUN hf download --type dataset fastmachinelearning/wa-hls4ml \
+    --local-dir /workspace/datasets/huggingface/wa-hls4ml/
+
+# Install nodejs
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
@@ -48,6 +56,7 @@ RUN if [ "$GPU_TYPE" = "cuda" ]; then \
 RUN uv sync && \
     mv /workspace/.venv /venv && \
     mv /workspace/uv.lock /uv.lock && \
+    mv /workspace/datasets /datasets && \
     rm -rf /workspace
 ENV VIRTUAL_ENV=/venv
 ENV PATH="/venv/bin:$PATH"

@@ -9,12 +9,15 @@ fi
 
 cd /workspace
 
-# Link the pre-built venv, uv.lock and pyproject.toml 
+# Link the pre-built venv, uv.lock and datasets folder 
 if [ ! -e /workspace/.venv ]; then
     ln -s /venv /workspace/.venv
 fi
 if [ ! -e /workspace/uv.lock ]; then
     ln -s /uv.lock /workspace/uv.lock
+fi
+if [ ! -e /workspace/datasets ]; then
+    ln -s /datasets /workspace/datasets
 fi
 
 # Re-apply GPU-specific torch sources so uv run uses the pre-built venv
