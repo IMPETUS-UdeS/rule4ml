@@ -104,7 +104,7 @@ def fixed_precision_to_bit_width(precision: str):
         _type_: _description_
     """
 
-    match = re.match(r"(ap_)?fixed<(\d+),\s*(\d+)>", precision.lower())
+    match = re.match(r"(ap_)?fixed<(\d+),\s*(\d+)", precision.lower())
     if not match:
         raise ValueError(f"Invalid format: {precision}, expecting \"ap_fixed<a, b>\"")
 

@@ -14,7 +14,7 @@ from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
                                   load_split_from_json, load_tensor_cache,
                                   make_dataloader, print_summary, set_seed,
                                   tensor_cache_key)
-from rule4ml.models.architectures import GNNSettings, TorchTransformerFullQueryPredictor
+from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
 from rule4ml.models.wrappers import TorchModelWrapper
 
 set_seed(EVERYTHING_SEED)
@@ -65,7 +65,7 @@ GLOBAL_FEATURE_LABELS = [
     "strategy", "board", "hls4ml_version", "vivado_version",
     # Numerical
     "bit_width", "reuse_mean", "reuse_max",
-    "weight_bits_min", "weight_bits_max", "total_table_size",
+    "weight_bits_min", "weight_bits_max", "weight_bits_mean", "total_table_size",
     "dense_inputs_mean", "dense_outputs_mean", "dense_parameters_mean",
     "dense_reuse_mean", "dense_reuse_max", "dense_count",
     "conv1d_inputs_mean", "conv1d_outputs_mean", "conv1d_parameters_mean",
@@ -100,6 +100,8 @@ SEQUENTIAL_FEATURE_LABELS = [
     "layer_op_mult",
     "layer_op_lookup",
     "layer_op_logical",
+    # From data_parser (exp20)
+    "layer_weight_bits",        # per-layer weight bit width (from hls_config LayerName)
     # HLS-derived analytical features (exp9, 6 new)
     "hls_multiplier_est",       # ceil(params / reuse) — proxy for DSP count per layer
     "hls_uses_lut_table",       # 1 if sigmoid/tanh/softmax (lookup-table activation)
@@ -107,15 +109,22 @@ SEQUENTIAL_FEATURE_LABELS = [
     "log_hls_multiplier_est",   # log1p(hls_multiplier_est) — scale-invariant DSP signal
     "log_layer_op_mult",        # log1p(layer_op_mult) — log-scale multiply operations
     "log_layer_parameter_count",# log1p(layer_parameter_count) — log-scale weight count
+    # DSP routing features (exp20)
+    "hls_dsp_eligible",         # 1 if layer_weight_bits <= 18 (fits in DSP48E2 B input)
+    "hls_dsp_mult_est",         # DSP-routed multiplications per layer
+    "log_hls_dsp_mult_est",     # log1p(hls_dsp_mult_est)
 ]
 
 # Integer codes for activation layers that use HLS lookup tables (sigmoid=10, tanh=11, softmax=12)
 _HLS_LUT_TABLE_LAYER_TYPES = [10, 11, 12]
 
 
+# Xilinx DSP48E2 B-input max width: 18 bits. Weights <= 18 bits fit and use DSPs.
+_DSP_WEIGHT_BITS_THRESHOLD = 18
+
 def augment_hls_raw_df(raw_df):
     """
-    Add 6 HLS-derived analytical features to each sample's sequential_inputs DataFrame.
+    Add HLS-derived analytical features to each sample's sequential_inputs DataFrame.
     Features are computed from existing raw (unnormalized) sequential data.
     Call this on raw DataFrames (from load_split_from_json) before build_inputs_df().
     """
@@ -124,10 +133,14 @@ def augment_hls_raw_df(raw_df):
         reuse = np.maximum(seq_df["layer_reuse"].values.astype(float), 1.0)
         op_mult = seq_df["layer_op_mult"].values.astype(float)
         layer_type = seq_df["layer_type"].values
+        weight_bits = seq_df["layer_weight_bits"].values.astype(float)
 
         multiplier_est = np.ceil(params / reuse)
         uses_lut = np.isin(layer_type, _HLS_LUT_TABLE_LAYER_TYPES).astype(float)
         pipelined = (seq_df["layer_reuse"].values > 1).astype(float)
+        # DSP routing: layers with weight_bits <= threshold map multiplications to DSPs
+        dsp_eligible = (weight_bits <= _DSP_WEIGHT_BITS_THRESHOLD).astype(float)
+        dsp_mult_est = multiplier_est * dsp_eligible
 
         seq_df = seq_df.copy()
         seq_df["hls_multiplier_est"] = multiplier_est
@@ -136,6 +149,9 @@ def augment_hls_raw_df(raw_df):
         seq_df["log_hls_multiplier_est"] = np.log1p(multiplier_est)
         seq_df["log_layer_op_mult"] = np.log1p(op_mult)
         seq_df["log_layer_parameter_count"] = np.log1p(params)
+        seq_df["hls_dsp_eligible"] = dsp_eligible
+        seq_df["hls_dsp_mult_est"] = dsp_mult_est
+        seq_df["log_hls_dsp_mult_est"] = np.log1p(dsp_mult_est)
         return seq_df
 
     result = raw_df.copy()
@@ -148,12 +164,12 @@ def augment_hls_raw_df(raw_df):
 # or groups of targets as desired.
 # --------------------------------------------------------------------------
 
-# Exp19: Full per-target cross-attention + CLS residual anchoring.
-# All 6 targets get per-target cross-attn query vectors. Resource queries keep the
-# proven CLS residual (α=0.25, exp18). Timing queries use a heavier CLS anchor (α=0.75)
-# to prevent SMAPE collapse while still allowing per-target specialization.
-# Hypothesis: timing queries can improve R2 via specialized attention while the strong
-# CLS residual prevents the over-specialization that collapsed CYCLES/INTERVAL SMAPE in exp15.
+# Exp20: DSP-gated precision features.
+# Adds per-layer weight bit width (layer_weight_bits) from hls_config LayerName,
+# with global weight_bits_mean. Derived per-layer: hls_dsp_eligible (1 if weight_bits<=18),
+# hls_dsp_mult_est (DSP-routed multiplications per layer), log_hls_dsp_mult_est.
+# Hypothesis: splitting hls_multiplier_est into DSP-routed vs LUT-routed components
+# gives the model explicit per-layer routing information, improving DSP R2 (currently 0.62).
 TARGET_GROUPS = {"all": ALL_TARGETS}
 
 # --------------------------------------------------------------------------
@@ -167,8 +183,8 @@ LEARNING_RATE = 1e-3
 # Models factories
 # --------------------------------------------------------------------------
 
-def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchTransformerFullQueryPredictor:
-    return TorchTransformerFullQueryPredictor(
+def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchTransformerHybridPredictor:
+    return TorchTransformerHybridPredictor(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map

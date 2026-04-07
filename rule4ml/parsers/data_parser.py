@@ -373,13 +373,16 @@ def get_global_data(parsed_data, resource_key=None, normalize=False, max_workers
     return meta, inputs, targets
 
 
-def get_layers_data(model_config, target_depth=None):
+def get_layers_data(model_config, target_depth=None, layer_name_config=None, default_bits=16):
     """
     Processes the layers data of a model.
 
     Args:
-        model_data (dict): The model data containing configuration and layer information.
+        model_config: list of layer config dicts
         target_depth (int, optional): The target depth for padding the layers data.
+        layer_name_config (dict, optional): Mapping of layer_name → hls_config entry with
+            precision info. Used to extract per-layer weight bit width.
+        default_bits (int): Fallback weight bit width when no per-layer entry is found.
 
     Returns:
         list: A list of processed layer data dictionaries.
@@ -389,6 +392,9 @@ def get_layers_data(model_config, target_depth=None):
     fixed_ops = get_network_fixed_ops(model_config)
     if "layers" in fixed_ops:
         layers_fixed_ops = fixed_ops["layers"]
+
+    if layer_name_config is None:
+        layer_name_config = {}
 
     layers_data = []
     for idx, layer_config in enumerate(model_config):
@@ -436,6 +442,21 @@ def get_layers_data(model_config, target_depth=None):
         # layer_use_bias = 1 if layer_config.get("use_bias", False) else 0
         reuse_factor = layer_config["reuse_factor"]
 
+        # Per-layer weight bit width: look up in layer_name_config, fall back to default.
+        layer_name = layer_config.get("name", "")
+        layer_weight_bits = default_bits
+        lnc_entry = layer_name_config.get(layer_name) or layer_name_config.get(layer_name.lower())
+        if isinstance(lnc_entry, dict):
+            prec = lnc_entry.get("precision") or {}
+            if isinstance(prec, dict):
+                w_str = prec.get("weight", "")
+                if w_str and w_str != "auto":
+                    try:
+                        w_total, _ = fixed_precision_to_bit_width(w_str)
+                        layer_weight_bits = w_total
+                    except (ValueError, AttributeError):
+                        pass
+
         data = {
             "layer_type": layer_type.lower(),
             "layer_input_size": input_size,
@@ -452,6 +473,7 @@ def get_layers_data(model_config, target_depth=None):
             "layer_op_mult": layers_fixed_ops[idx].get("mult", 0),
             "layer_op_logical": layers_fixed_ops[idx].get("logical", 0),
             "layer_op_lookup": layers_fixed_ops[idx].get("lookup", 0),
+            "layer_weight_bits": float(layer_weight_bits),
         }
         layers_data.append(data)
 
@@ -471,7 +493,27 @@ def process_model_batch(model_batch, max_model_depth):
         if not model_data:
             continue
 
-        layers_data = get_layers_data(model_data["model_config"], target_depth=max_model_depth)
+        # Extract per-layer precision config and global default bits for layer_weight_bits feature.
+        hls_config = model_data.get("hls_config") or {}
+        hls_snake = camel_keys_to_snake(hls_config)
+        layer_name_config = hls_snake.get("layer_name") or {}
+        # Global default precision (e.g., "fixed<16,6>") → default bit width
+        global_prec = (hls_snake.get("model") or {}).get("precision", "")
+        if not isinstance(global_prec, str):
+            global_prec = (global_prec or {}).get("default", "") if isinstance(global_prec, dict) else ""
+        default_bits = 16
+        if global_prec:
+            try:
+                default_bits, _ = fixed_precision_to_bit_width(global_prec)
+            except (ValueError, AttributeError):
+                pass
+
+        layers_data = get_layers_data(
+            model_data["model_config"],
+            target_depth=max_model_depth,
+            layer_name_config=layer_name_config,
+            default_bits=default_bits,
+        )
         result.append(layers_data)
     return result
 
@@ -689,6 +731,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
     inputs["weight_bits_min"] = float(min(weight_bits_vals)) if weight_bits_vals else float(total_bits)
     inputs["weight_bits_max"] = float(max(weight_bits_vals)) if weight_bits_vals else float(total_bits)
+    inputs["weight_bits_mean"] = float(np.mean(weight_bits_vals)) if weight_bits_vals else float(total_bits)
     inputs["total_table_size"] = float(sum(table_sizes))
 
     return inputs
