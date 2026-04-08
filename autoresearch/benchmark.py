@@ -100,6 +100,8 @@ def main():
             max_workers=JSON_MAX_WORKERS,
         )
         df["architecture"] = df["model_name"].apply(get_architecture_name)
+        unique_architectures = df["architecture"].unique()
+
         inputs_df = build_inputs_df(df, global_feature_labels, sequential_feature_labels)
         targets_df = df[target_labels]
 

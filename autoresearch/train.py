@@ -167,8 +167,6 @@ SEQUENTIAL_FEATURE_LABELS = [
     # DSP routing features (exp20)
     "layer_dsp_eligible",  # 1 if layer_weight_bits <= 18 (fits in DSP48E2 B input)
     "layer_dsp_multiplier",  # DSP-routed multiplications per layer
-    # Activation precision features (exp22)
-    "layer_result_bits",  # per-layer result bit width (from hls_config LayerName)
 ]
 
 # --------------------------------------------------------------------------

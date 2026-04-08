@@ -8,36 +8,35 @@ metadata:
 
 # Empirical Insights
 
-**Last updated**: experiment 21 baseline (commit 9db5f79)
+**Last updated**: exp22 (commit dd44902) — SMAPE eps fix applied
 
-**Best result**: mean SMAPE 1.79 (exp20, 8f2466c), mean R2 0.923 (exp20)
+**Best result**: mean SMAPE 1.79 with inflated SMAPE (eps=1 bug), true SMAPE ~6.3 with corrected eps
 
 ## Architecture Insights
 
 - Hybrid Transformer (CLS + query attention) with learned CLS residual for resource targets works well
 - DSP-gated features (layer_dsp_eligible, layer_dsp_multiplier) dramatically improved DSP predictions
-- Deeper Transformer (4 layers vs 3) should help DSP R2 according to idea-043
+- Per-layer reuse_factor override is same class of fix as precision parsing — both correct cascading errors
 
 ## Feature Insights
 
-- Per-layer weight_bits from precision parsing (exp20) was the breakthrough: DSP SMAPE 4.41→0.74
-- Per-layer result_bits (idea-046) and per-layer reuse_factor override (idea-047) are untested high-priority features
-- LUT-routed mult (hls_lut_mult_est) caused regression — most layers are DSP-eligible, adding noise
+- Per-layer weight_bits from precision parsing (exp20) was the breakthrough for DSP
+- Per-layer result_bits caused SMAPE regression (likely noise/collinearity with weight_bits) — discard
+- Per-layer reuse_factor override gave modest improvement — keep for future iterations
+- SMAPE eps=1.0 was inflating scores by ~3-4x for normalized targets — now corrected to eps=0.1
 
 ## Loss Function Insights
 
 - MSLE remains the primary working loss; SMAPE direct loss saturates for extreme values
-- L1 in log space (log-MAE) crashed due to ROCm GPU hang (exp6)
 
 ## Target-Specific Insights
 
-- DSP and LUT are strongest (R2 > 0.98), BRAM/FF moderate (R2 0.96-0.98), CYCLES/INTERVAL weakest (R2 ~0.80)
-- CYCLES/INTERVAL may benefit from per-layer reuse override fixes (idea-047)
-- FF has highest SMAPE (1.84) among resource targets — architecture or feature change needed
+- BRAM/DSP have highest SMAPE with corrected eps (19.0, 8.3) — need targeted improvement
+- CYCLES/INTERVAL have lowest SMAPE (1.6-1.7) — already well-predicted
+- FF/LUT intermediate SMAPE (3.6-3.8)
 
 ## Promising Directions
 
-1. **idea-047** (high priority): Per-layer reuse_factor override from hls_config — may fix CYCLES/INTERVAL
-2. **idea-043** (medium): Deeper Transformer (4 layers) for better DSP R2
-3. **idea-046** (high): Per-layer result_bits for activation precision — complements weight_bits breakthrough
-4. **idea-044** (high, radical): Auxiliary per-token HLS prediction heads for multi-task supervision
+1. **Lower SMAPE target**: Focus on BRAM (worst target, SMAPE 19.0) — architecture change or targeted features
+2. **idea-044** (high, radical): Auxiliary per-token HLS prediction heads for multi-task supervision
+3. **idea-043** (medium): Deeper Transformer (4 layers) for better DSP R2
