@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import r2_score
 
-from rule4ml.models.wrappers import TorchModelWrapper
+from rule4ml.models.wrappers import BaseModelWrapper, TorchModelWrapper
 from rule4ml.parsers.data_parser import json_to_df, read_from_json
 
 # --------------------------------------------------------------------------
@@ -229,7 +229,7 @@ def load_checkpoint(
 
 @torch.inference_mode()
 def predict(
-    wrapper,
+    wrapper: BaseModelWrapper,
     inputs_df: pd.DataFrame,
 ) -> np.ndarray:
     """

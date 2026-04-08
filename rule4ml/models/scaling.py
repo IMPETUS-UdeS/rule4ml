@@ -97,12 +97,14 @@ class BoardPercentScaler(BaseScaler):
             return board
 
     def transform(self, target_row, input_row):
+        print(f"BoardPercentScaler.transform called with target_row: {target_row}, input_row: {input_row}")
         out = {}
         board_name = input_row.get("board")
         board_name = self._get_board_name(board_name)
         if board_name in self.available_resources:
             available = self.available_resources[board_name]
             for k, v in target_row.items():
+                out[k] = v  # default to identity
                 if k.lower() in available:
                     out[k] = v / available[k.lower()] * 100.0
         return out
@@ -114,10 +116,12 @@ class BoardPercentScaler(BaseScaler):
         if board_name in self.available_resources:
             available = self.available_resources[board_name]
             for k, z in target_row.items():
+                out[k] = z  # default to identity
                 if k.lower() in available:
                     out[k] = z * available[k.lower()] / 100.0
         else:
             print("Board not found in available resources:", board_name)
+
         return out
 
     def to_config(self):

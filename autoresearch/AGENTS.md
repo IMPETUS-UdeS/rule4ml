@@ -189,7 +189,7 @@ The experiment runs on the dedicated branch.
 5. Implement the experiment — modify `autoresearch/train.py` and create any supporting files, classes, functions needed.
 6. git commit and get the short hash
 7. Run the experiment with the issued command
-8. Check the log once after 60 seconds to ensure it's running and not crashing immediately. **DO NOT SPAM CHECK COMMANDS** — trust the code to run and wait for the running process to finish
+8. Check the log once after 120 seconds to ensure it's running and not crashing immediately. **DO NOT SPAM CHECK COMMANDS** — trust the code to run and wait for the running process to finish
 9. While waiting, use a portion of `TIME_BUDGET` (few minutes tops, **NOT THE ENTIRE** `TIME_BUDGET`) to plan future ideas, review the codebase for new angles, or inspect the training data and available resources. Record findings in `ideas.tsv` or `issues.tsv`.
 10. Poll for completion: `while kill -0 $PID 2>/dev/null; do sleep 60; done; echo "Done"`. Read out the results using `grep` on `autoresearch/runs/${BRANCH}-${HASH}.log`
 11. If the output is empty, the run likely crashed. Run `tail -n 50 autoresearch/runs/${BRANCH}-${HASH}.log` to read the stack trace and attempt a fix. If you cannot fix it after a few attempts, give up and report to the human.

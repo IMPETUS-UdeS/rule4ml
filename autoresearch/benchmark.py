@@ -9,9 +9,9 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow verbose logging
 import numpy as np
 import torch
 
-from autoresearch.prepare import (DATA_DIR, FORCE_CPU, JSON_BATCH_SIZE,
-                                  JSON_MAX_WORKERS, build_inputs_df, predict,
-                                  print_summary, r2, rmse, smape)
+from autoresearch.prepare import (FORCE_CPU, JSON_BATCH_SIZE, JSON_MAX_WORKERS,
+                                  build_inputs_df, get_split_json_patterns,
+                                  predict, print_summary, r2, rmse, smape)
 from rule4ml.models.wrappers import (BaseModelWrapper, KerasModelWrapper,
                                      TorchModelWrapper)
 from rule4ml.parsers.data_parser import (get_global_data, get_sequential_data,
@@ -42,11 +42,16 @@ def load_wrappers(path: str, device: torch.device) -> Sequence[BaseModelWrapper]
 
 def main():
     arg_parser = argparse.ArgumentParser(
-        description="Evaluate a saved checkpoint on exemplar models"
+        description="Evaluate a saved wrapper on models"
     )
     arg_parser.add_argument(
         "wrappers_dir", type=str,
         help="Path to the wrappers directory containing the saved configs and weights"
+    )
+    arg_parser.add_argument(
+        "--split", type=str,
+        choices=["train", "val", "test", "exemplar"], required=True,
+        help="Which data split to evaluate on. One of (train, val, test, exemplar)"
     )
     cli_args = arg_parser.parse_args()
 
@@ -61,14 +66,12 @@ def main():
         return
 
     json_data = read_from_json(
-        os.path.join(
-            DATA_DIR, "exemplar", "*exemplar_models.json"
-        ),
+        get_split_json_patterns(cli_args.split),
         batch_size=JSON_BATCH_SIZE,
         max_workers=JSON_MAX_WORKERS,
     )
     meta_data, global_inputs, targets = get_global_data(
-        json_data, normalize=True, max_workers=JSON_MAX_WORKERS
+        json_data, normalize=False, max_workers=JSON_MAX_WORKERS
     )
     sequential_inputs = get_sequential_data(json_data, max_workers=JSON_MAX_WORKERS)
 

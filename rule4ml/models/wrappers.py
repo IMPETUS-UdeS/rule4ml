@@ -228,6 +228,8 @@ class BaseModelWrapper:
         prediction = self._model_predict(inputs, 0, mc_dropout=mc_dropout, verbose=verbose)
         total_time = time.time() - start_time
 
+        print(f"Sample pred_row (raw model output): {prediction[0]}")
+
         if self.scaler:
             prediction = np.asarray(
                 [

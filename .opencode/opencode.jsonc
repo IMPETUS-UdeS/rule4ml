@@ -3,9 +3,7 @@
   "model": "GLM-5.1",
   "instructions": ["autoresearch/AGENTS.md"],
   "permission": {
-    "edit": "allow",
-    "websearch": "allow",
-    "bash": { "*": "allow", "rm *": "deny", "sudo *": "deny" },
-    "skill": { "*": "allow" }
+    "*": "allow",
+    "bash": { "rm *": "deny", "sudo *": "deny" }
   }
 }
