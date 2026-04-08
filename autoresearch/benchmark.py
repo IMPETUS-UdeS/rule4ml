@@ -18,6 +18,13 @@ from rule4ml.parsers.data_parser import (get_global_data, get_sequential_data,
                                          read_from_json, to_dataframe)
 
 
+def get_architecture_name(model_name):
+    architecture = str(model_name.split("_")[0].split("/")[-1])
+    if architecture.lower() in ["model", "2layer", "3layer", "latency", "resource"]:
+        architecture = "dense"
+    return architecture
+
+
 def load_wrappers(path: str, device: torch.device) -> Sequence[BaseModelWrapper]:
     """Scan directory for *.config.json and load matching wrappers."""
     wrappers = []
@@ -92,6 +99,7 @@ def main():
             targets=targets,
             max_workers=JSON_MAX_WORKERS,
         )
+        df["architecture"] = df["model_name"].apply(get_architecture_name)
         inputs_df = build_inputs_df(df, global_feature_labels, sequential_feature_labels)
         targets_df = df[target_labels]
 
