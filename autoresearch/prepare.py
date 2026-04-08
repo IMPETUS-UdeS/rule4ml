@@ -154,12 +154,18 @@ def make_dataloader(
 # Metrics
 # --------------------------------------------------------------------------
 
-def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1.0) -> float:
+def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-10) -> float:
     y_true = np.asarray(y_true, dtype=float).ravel()
     y_pred = np.asarray(y_pred, dtype=float).ravel()
-    return float(
-        np.mean(2.0 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + eps)) * 100
-    )
+
+    numerator = 2.0 * np.abs(y_pred - y_true)
+    denominator = np.abs(y_true) + np.abs(y_pred)
+    
+    # Handle exact zeros: perfect prediction when both are 0
+    mask = (y_true == 0) & (y_pred == 0)
+    result = np.where(mask, 0.0, numerator / np.maximum(denominator, eps))
+
+    return float(np.mean(result) * 100)
 
 def r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=float).ravel()
