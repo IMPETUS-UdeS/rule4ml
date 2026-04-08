@@ -2,20 +2,33 @@ import argparse
 import os
 import time
 
-os.environ.setdefault("HSA_ENABLE_SDMA", "0")  # Set before torch/HSA runtime initializes to prevent ROCm GPU hangs on RDNA3
+os.environ.setdefault(
+    "HSA_ENABLE_SDMA", "0"
+)  # Set before torch/HSA runtime initializes to prevent ROCm GPU hangs on RDNA3
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow verbose logging
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
-                                  FORCE_CPU, TIME_BUDGET, build_input_tensors,
-                                  build_inputs_df, evaluate, load_checkpoint,
-                                  load_split_from_json, load_tensor_cache,
-                                  make_dataloader, print_summary,
-                                  save_checkpoint, set_seed, tensor_cache_key)
-from rule4ml.models.architectures import (GNNSettings,
-                                          TorchTransformerHybridPredictor)
+from autoresearch.prepare import (
+    ALL_TARGETS,
+    CACHE_DIR,
+    EVERYTHING_SEED,
+    FORCE_CPU,
+    TIME_BUDGET,
+    build_input_tensors,
+    build_inputs_df,
+    evaluate,
+    load_checkpoint,
+    load_split_from_json,
+    load_tensor_cache,
+    make_dataloader,
+    print_summary,
+    save_checkpoint,
+    set_seed,
+    tensor_cache_key,
+)
+from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
 from rule4ml.models.wrappers import TorchModelWrapper
 
 set_seed(EVERYTHING_SEED)
@@ -29,9 +42,18 @@ GLOBAL_CATEGORICAL_MAPS = {
     "board": {"pynq-z2": 1, "zcu102": 2, "alveo-u200": 3, "alveo-u250": 4},
     "hls4ml_version": {"0.8.1": 1, "1.1.0": 2},
     "vivado_version": {
-        "2019.1": 1, "2019.2": 2, "2020.1": 3, "2020.2": 4,
-        "2021.1": 5, "2021.2": 6, "2022.1": 7, "2022.2": 8,
-        "2023.1": 9, "2023.2": 10, "2024.1": 11, "2024.2": 12,
+        "2019.1": 1,
+        "2019.2": 2,
+        "2020.1": 3,
+        "2020.2": 4,
+        "2021.1": 5,
+        "2021.2": 6,
+        "2022.1": 7,
+        "2022.2": 8,
+        "2023.1": 9,
+        "2023.2": 10,
+        "2024.1": 11,
+        "2024.2": 12,
     },
 }
 
@@ -63,24 +85,59 @@ SEQUENTIAL_CATEGORICAL_MAPS = {
 
 GLOBAL_FEATURE_LABELS = [
     # Categorical (must appear first to match global_input_shape computation)
-    "strategy", "board", "hls4ml_version", "vivado_version",
+    "strategy",
+    "board",
+    "hls4ml_version",
+    "vivado_version",
     # Numerical
-    "bit_width", "reuse_mean", "reuse_max",
-    "weight_bits_min", "weight_bits_max", "weight_bits_mean", "total_table_size",
-    "dense_inputs_mean", "dense_outputs_mean", "dense_parameters_mean",
-    "dense_reuse_mean", "dense_reuse_max", "dense_count",
-    "conv1d_inputs_mean", "conv1d_outputs_mean", "conv1d_parameters_mean",
-    "conv1d_filters_mean", "conv1d_kernel_size_mean", "conv1d_strides_mean",
-    "conv1d_reuse_mean", "conv1d_reuse_max", "conv1d_count",
-    "conv2d_inputs_mean", "conv2d_outputs_mean", "conv2d_parameters_mean",
-    "conv2d_filters_mean", "conv2d_kernel_size_mean", "conv2d_strides_mean",
-    "conv2d_reuse_mean", "conv2d_reuse_max", "conv2d_count",
-    "batchnormalization_inputs_mean", "batchnormalization_outputs_mean",
-    "batchnormalization_parameters_mean", "batchnormalization_count",
-    "add_count", "concatenate_count", "dropout_count",
-    "relu_count", "sigmoid_count", "tanh_count",
-    "softmax_inputs_mean", "softmax_outputs_mean", "softmax_count",
-    "total_add", "total_mult", "total_lookup", "total_logical",
+    "bit_width",
+    "reuse_mean",
+    "reuse_max",
+    "weight_bits_min",
+    "weight_bits_max",
+    "weight_bits_mean",
+    "total_table_size",
+    "dense_inputs_mean",
+    "dense_outputs_mean",
+    "dense_parameters_mean",
+    "dense_reuse_mean",
+    "dense_reuse_max",
+    "dense_count",
+    "conv1d_inputs_mean",
+    "conv1d_outputs_mean",
+    "conv1d_parameters_mean",
+    "conv1d_filters_mean",
+    "conv1d_kernel_size_mean",
+    "conv1d_strides_mean",
+    "conv1d_reuse_mean",
+    "conv1d_reuse_max",
+    "conv1d_count",
+    "conv2d_inputs_mean",
+    "conv2d_outputs_mean",
+    "conv2d_parameters_mean",
+    "conv2d_filters_mean",
+    "conv2d_kernel_size_mean",
+    "conv2d_strides_mean",
+    "conv2d_reuse_mean",
+    "conv2d_reuse_max",
+    "conv2d_count",
+    "batchnormalization_inputs_mean",
+    "batchnormalization_outputs_mean",
+    "batchnormalization_parameters_mean",
+    "batchnormalization_count",
+    "add_count",
+    "concatenate_count",
+    "dropout_count",
+    "relu_count",
+    "sigmoid_count",
+    "tanh_count",
+    "softmax_inputs_mean",
+    "softmax_outputs_mean",
+    "softmax_count",
+    "total_add",
+    "total_mult",
+    "total_lookup",
+    "total_logical",
 ]
 
 SEQUENTIAL_FEATURE_LABELS = [
@@ -110,6 +167,8 @@ SEQUENTIAL_FEATURE_LABELS = [
     # DSP routing features (exp20)
     "layer_dsp_eligible",  # 1 if layer_weight_bits <= 18 (fits in DSP48E2 B input)
     "layer_dsp_multiplier",  # DSP-routed multiplications per layer
+    # Activation precision features (exp22)
+    "layer_result_bits",  # per-layer result bit width (from hls_config LayerName)
 ]
 
 # --------------------------------------------------------------------------
@@ -132,13 +191,19 @@ LEARNING_RATE = 1e-3
 # Models factories
 # --------------------------------------------------------------------------
 
-def make_predictor(output_size: int, device: torch.device, name: str) -> TorchTransformerHybridPredictor:
+
+def make_predictor(
+    output_size: int, device: torch.device, name: str
+) -> TorchTransformerHybridPredictor:
     return TorchTransformerHybridPredictor(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
             numerical_dense_layers=[32],
-            gconv_layers=[128, 64],  # unused by Transformer but kept for GNNSettings compat
+            gconv_layers=[
+                128,
+                64,
+            ],  # unused by Transformer but kept for GNNSettings compat
             dense_layers=[128, 64],  # Transformer output head: d_model→128→64→output
             dense_dropouts=[],
         ),
@@ -156,9 +221,11 @@ def make_predictor(output_size: int, device: torch.device, name: str) -> TorchTr
         dropout=0.1,
     )
 
+
 # --------------------------------------------------------------------------
 # Losses
 # --------------------------------------------------------------------------
+
 
 def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     """
@@ -170,9 +237,11 @@ def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     log_true = torch.log1p(torch.clamp(y_true, min=0.0))
     return torch.mean(torch.mean((log_pred - log_true) ** 2, dim=0))
 
+
 # --------------------------------------------------------------------------
 # Training
 # --------------------------------------------------------------------------
+
 
 def train_predictor(
     group_name: str,
@@ -212,7 +281,9 @@ def train_predictor(
         pin_memory=pin_memory,
     )
 
-    optimizer = torch.optim.AdamW(predictor.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(
+        predictor.parameters(), lr=LEARNING_RATE, weight_decay=1e-4
+    )
 
     # Cosine annealing: T_max is estimated as total_budget / (one epoch cost).
     # We use a generous T_max so the LR decays slowly. Restarts every ~20 epochs.
@@ -271,12 +342,20 @@ def train_predictor(
             best_val_loss = val_loss
             save_checkpoint(
                 os.path.join(checkpoints_dir, f"{group_name}_best.pt"),
-                n_epochs, predictor, optimizer, scheduler, best_val_loss,
+                n_epochs,
+                predictor,
+                optimizer,
+                scheduler,
+                best_val_loss,
             )
 
         save_checkpoint(
             os.path.join(checkpoints_dir, f"{group_name}_latest.pt"),
-            n_epochs, predictor, optimizer, scheduler, best_val_loss,
+            n_epochs,
+            predictor,
+            optimizer,
+            scheduler,
+            best_val_loss,
         )
 
         scheduler.step()
@@ -288,8 +367,8 @@ def train_predictor(
         n_epochs += 1
         print(
             f"Epoch {n_epochs} done, Overall progress: {progress:.2%}"
-            f", Training time: {training_time/60:.1f} min",
-            flush=True
+            f", Training time: {training_time / 60:.1f} min",
+            flush=True,
         )
 
         if progress >= 1.0:
@@ -297,22 +376,31 @@ def train_predictor(
 
     load_checkpoint(
         os.path.join(checkpoints_dir, f"{group_name}_best.pt"),
-        predictor, optimizer=None, lr_scheduler=None, device=device
+        predictor,
+        optimizer=None,
+        lr_scheduler=None,
+        device=device,
     )
     wrapper.save(log_dir)
 
     return wrapper, n_epochs, training_time
 
+
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+
 
 def main():
     total_start = time.time()
 
     arg_parser = argparse.ArgumentParser(description="Train FPGA resource predictors")
-    arg_parser.add_argument("--branch-name", required=True, type=str, help="Git branch name")
-    arg_parser.add_argument("--commit-hash", required=True, type=str, help="Git commit hash")
+    arg_parser.add_argument(
+        "--branch-name", required=True, type=str, help="Git branch name"
+    )
+    arg_parser.add_argument(
+        "--commit-hash", required=True, type=str, help="Git commit hash"
+    )
     cli_args = arg_parser.parse_args()
 
     use_gpu = torch.cuda.is_available() and not FORCE_CPU
@@ -356,14 +444,11 @@ def main():
         n_test = len(raw_test_df)
 
         print(
-            f"  train: {n_train} | val: {n_val}"
-            f" | test: {n_test} samples (from cache)",
-            flush=True)
-    else:
-        print(
-            "Tensor cache not found, rebuilding splits from raw JSON...",
-            flush=True
+            f"  train: {n_train} | val: {n_val} | test: {n_test} samples (from cache)",
+            flush=True,
         )
+    else:
+        print("Tensor cache not found, rebuilding splits from raw JSON...", flush=True)
         raw_splits = {
             s: load_split_from_json(
                 s,
@@ -384,17 +469,25 @@ def main():
         # Use a throw-away wrapper/GNN just to define input structure for build_inputs()
         # Use the full output size (6) so hybrid predictors don't get a negative n_timing dim.
         cpu_dev = torch.device("cpu")
-        _ref_gnn = make_predictor(output_size=len(ALL_TARGETS), device=cpu_dev, name="ref")
+        _ref_gnn = make_predictor(
+            output_size=len(ALL_TARGETS), device=cpu_dev, name="ref"
+        )
         _ref_wrapper = TorchModelWrapper()
         _ref_wrapper.set_model(_ref_gnn)
         _ref_wrapper.set_input_labels(
             [f for f in GLOBAL_FEATURE_LABELS if f not in GLOBAL_CATEGORICAL_MAPS],
-            [f for f in SEQUENTIAL_FEATURE_LABELS if f not in SEQUENTIAL_CATEGORICAL_MAPS],
+            [
+                f
+                for f in SEQUENTIAL_FEATURE_LABELS
+                if f not in SEQUENTIAL_CATEGORICAL_MAPS
+            ],
         )
 
         print("Tensorizing splits (cached after the first run)...", flush=True)
         input_tensors_splits = {
-            s: build_input_tensors(_ref_wrapper, inputs_df_splits_full[s], device=cpu_dev)
+            s: build_input_tensors(
+                _ref_wrapper, inputs_df_splits_full[s], device=cpu_dev
+            )
             for s in ("train", "val")
         }
         target_tensors_all = {
@@ -427,8 +520,7 @@ def main():
     branch_name = cli_args.branch_name
     commit_hash = cli_args.commit_hash
     base_log_dir = os.path.join(
-        os.path.dirname(__file__), "runs",
-        branch_name, commit_hash
+        os.path.dirname(__file__), "runs", branch_name, commit_hash
     )
     os.makedirs(base_log_dir, exist_ok=True)
 
@@ -443,7 +535,7 @@ def main():
         print(
             f"\nTraining '{group_name}': targets={group_targets}"
             f", budget={per_group_budget:.0f}s",
-            flush=True
+            flush=True,
         )
         group_idx = [ALL_TARGETS.index(t) for t in group_targets]
         group_target_tensors = {
@@ -467,10 +559,7 @@ def main():
         test_inputs_df,
         test_targets_df,
     )
-    peak_vram_mb = (
-        torch.cuda.max_memory_allocated() / 1024 / 1024
-        if use_gpu else 0.0
-    )
+    peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024 if use_gpu else 0.0
     total_seconds = time.time() - total_start
 
     print_summary(

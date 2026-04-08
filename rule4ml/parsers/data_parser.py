@@ -472,6 +472,7 @@ def get_layers_data(
         # Per-layer weight bit width and reuse_factor override: look up in layer_name_config, fall back to defaults.
         layer_name = layer_config.get("name", "")
         layer_weight_bits = default_bits
+        layer_result_bits = default_bits
         lnc_entry = layer_name_config.get(layer_name) or layer_name_config.get(
             layer_name.lower()
         )
@@ -483,6 +484,13 @@ def get_layers_data(
                     try:
                         w_total, _ = fixed_precision_to_bit_width(w_str)
                         layer_weight_bits = float(w_total)
+                    except (ValueError, AttributeError):
+                        pass
+                r_str = prec.get("result", "")
+                if r_str and r_str != "auto":
+                    try:
+                        r_total, _ = fixed_precision_to_bit_width(r_str)
+                        layer_result_bits = float(r_total)
                     except (ValueError, AttributeError):
                         pass
             rf_override = lnc_entry.get("reuse_factor")
@@ -515,6 +523,7 @@ def get_layers_data(
             "layer_op_logical": layers_fixed_ops[idx].get("logical", 0),
             "layer_op_lookup": layers_fixed_ops[idx].get("lookup", 0),
             "layer_weight_bits": layer_weight_bits,
+            "layer_result_bits": layer_result_bits,
             "layer_multiplier": multiplier_estimation,
             "layer_uses_lut_table": uses_lut_table,
             "layer_pipelined": pipelined,
