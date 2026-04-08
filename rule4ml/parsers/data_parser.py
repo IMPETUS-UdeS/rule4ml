@@ -60,8 +60,14 @@ default_vivado_map = {
     "2024.2": 12,
 }
 
-HLS_LUT_TABLE_LAYERS = ["sigmoid", "tanh", "softmax"]  # Activation layers that use HLS lookup tables
-DSP_WEIGHT_BITS_THRESHOLD = 18  # Xilinx DSP48E2 B-input max width: 18 bits. Weights <= 18 bits fit and use DSPs
+HLS_LUT_TABLE_LAYERS = [
+    "sigmoid",
+    "tanh",
+    "softmax",
+]  # Activation layers that use HLS lookup tables
+DSP_WEIGHT_BITS_THRESHOLD = (
+    18  # Xilinx DSP48E2 B-input max width: 18 bits. Weights <= 18 bits fit and use DSPs
+)
 
 
 @dataclass
@@ -156,7 +162,9 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
 
     output_shape = np.asarray(parsed_data["model_config"][-1]["output_shape"]).flatten()
     output_size = np.prod([x for x in output_shape if x is not None])
-    if (data_filter.min_output_size > 0 and output_size < data_filter.min_output_size) or (
+    if (
+        data_filter.min_output_size > 0 and output_size < data_filter.min_output_size
+    ) or (
         data_filter.max_output_size > 0 and output_size > data_filter.max_output_size
     ):
         return False
@@ -166,8 +174,12 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
     softmax_count = 0
     for idx, layer_data in enumerate(parsed_data["model_config"]):
         reuse_factor = layer_data["reuse_factor"]
-        if (data_filter.min_reuse_factor > 0 and reuse_factor < data_filter.min_reuse_factor) or (
-            data_filter.max_reuse_factor > 0 and reuse_factor > data_filter.max_reuse_factor
+        if (
+            data_filter.min_reuse_factor > 0
+            and reuse_factor < data_filter.min_reuse_factor
+        ) or (
+            data_filter.max_reuse_factor > 0
+            and reuse_factor > data_filter.max_reuse_factor
         ):
             return False
 
@@ -195,8 +207,12 @@ def filter_match(parsed_data, data_filter: ParsedDataFilter):
     if len(include_layers) > 0:
         return False
 
-    if (data_filter.min_softmax_count > 0 and softmax_count < data_filter.min_softmax_count) or (
-        data_filter.max_softmax_count > 0 and softmax_count > data_filter.max_softmax_count
+    if (
+        data_filter.min_softmax_count > 0
+        and softmax_count < data_filter.min_softmax_count
+    ) or (
+        data_filter.max_softmax_count > 0
+        and softmax_count > data_filter.max_softmax_count
     ):
         return False
 
@@ -267,7 +283,7 @@ def read_json_files(filenames):
                     data = [data]
                 json_data.extend(data)
         except Exception as e:
-            raise ValueError(f"Error reading JSON file \"{filename}\": {e}")
+            raise ValueError(f'Error reading JSON file "{filename}": {e}')
 
     return json_data
 
@@ -307,7 +323,9 @@ def read_from_json(
     # Optionally filter the json data
     if data_filter is not None:
         json_data = [
-            model_data for model_data in json_data if filter_match(model_data, data_filter)
+            model_data
+            for model_data in json_data
+            if filter_match(model_data, data_filter)
         ]
 
     return json_data
@@ -351,18 +369,23 @@ def process_global_batch(model_batch, resource_key, normalize):
 
         norm_board = hls_config["board"] if normalize else None
         batch_targets.append(
-            unwrap_nested_dicts(get_prediction_targets(model_data, resource_key, norm_board))
+            unwrap_nested_dicts(
+                get_prediction_targets(model_data, resource_key, norm_board)
+            )
         )
 
     return batch_meta, batch_inputs, batch_targets
 
 
-def get_global_data(parsed_data, resource_key=None, normalize=False, max_workers=1, batch_size=128):
+def get_global_data(
+    parsed_data, resource_key=None, normalize=False, max_workers=1, batch_size=128
+):
     batches = list(batch_iterable(parsed_data, batch_size))
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(process_global_batch, b, resource_key, normalize) for b in batches
+            executor.submit(process_global_batch, b, resource_key, normalize)
+            for b in batches
         ]
 
         # Flatten the batched results
@@ -376,7 +399,9 @@ def get_global_data(parsed_data, resource_key=None, normalize=False, max_workers
     return meta, inputs, targets
 
 
-def get_layers_data(model_config, target_depth=None, layer_name_config=None, default_bits=16):
+def get_layers_data(
+    model_config, target_depth=None, layer_name_config=None, default_bits=16
+):
     """
     Processes the layers data of a model.
 
@@ -442,13 +467,14 @@ def get_layers_data(model_config, target_depth=None, layer_name_config=None, def
         else:
             layer_stride_height = layer_stride_width = layer_strides
 
-        # layer_use_bias = 1 if layer_config.get("use_bias", False) else 0
         reuse_factor = layer_config["reuse_factor"]
 
-        # Per-layer weight bit width: look up in layer_name_config, fall back to default.
+        # Per-layer weight bit width and reuse_factor override: look up in layer_name_config, fall back to defaults.
         layer_name = layer_config.get("name", "")
         layer_weight_bits = default_bits
-        lnc_entry = layer_name_config.get(layer_name) or layer_name_config.get(layer_name.lower())
+        lnc_entry = layer_name_config.get(layer_name) or layer_name_config.get(
+            layer_name.lower()
+        )
         if isinstance(lnc_entry, dict):
             prec = lnc_entry.get("precision") or {}
             if isinstance(prec, dict):
@@ -459,7 +485,13 @@ def get_layers_data(model_config, target_depth=None, layer_name_config=None, def
                         layer_weight_bits = float(w_total)
                     except (ValueError, AttributeError):
                         pass
-        
+            rf_override = lnc_entry.get("reuse_factor")
+            if rf_override is not None:
+                try:
+                    reuse_factor = int(rf_override)
+                except (ValueError, TypeError):
+                    pass
+
         multiplier_estimation = np.ceil(float(layer_parameters) / float(reuse_factor))
         uses_lut_table = float(layer_type in HLS_LUT_TABLE_LAYERS)
         pipelined = float(reuse_factor > 1)
@@ -514,7 +546,11 @@ def process_model_batch(model_batch, max_model_depth):
         # Extract per-layer precision config and global default bits for layer_weight_bits feature
         global_prec = (hls_snake.get("model") or {}).get("precision", "")
         if not isinstance(global_prec, str):
-            global_prec = (global_prec or {}).get("default", "") if isinstance(global_prec, dict) else ""
+            global_prec = (
+                (global_prec or {}).get("default", "")
+                if isinstance(global_prec, dict)
+                else ""
+            )
         default_bits = 16
         if global_prec:
             try:
@@ -539,7 +575,9 @@ def get_sequential_data(parsed_data, max_workers=1, batch_size=128):
     batches = list(batch_iterable(parsed_data, batch_size))
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_model_batch, b, max_model_depth) for b in batches]
+        futures = [
+            executor.submit(process_model_batch, b, max_model_depth) for b in batches
+        ]
         results = [r for f in futures for r in f.result()]
 
     return results
@@ -562,71 +600,281 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
     features_to_extract = {
         "dense": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "reuse": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "parameters": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "reuse": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "conv1d": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "filters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "kernel_size": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "strides": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "reuse": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "parameters": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "filters": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "kernel_size": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "strides": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "reuse": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "conv2d": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "filters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "kernel_size": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "strides": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "reuse": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "parameters": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "filters": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "kernel_size": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "strides": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "reuse": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "batchnormalization": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "parameters": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "parameters": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "add": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "concatenate": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "dropout": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "relu": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "sigmoid": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "tanh": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
         "softmax": {
-            "inputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
-            "outputs": {"mean": 0, "min": np.inf, "min_idx": 0, "max": -np.inf, "max_idx": 0},
+            "inputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
+            "outputs": {
+                "mean": 0,
+                "min": np.inf,
+                "min_idx": 0,
+                "max": -np.inf,
+                "max_idx": 0,
+            },
             "count": 0,
         },
     }
@@ -744,9 +992,15 @@ def get_global_inputs(model_config, hls_config, **kwargs):
             except (TypeError, ValueError):
                 pass
 
-    inputs["weight_bits_min"] = float(min(weight_bits_vals)) if weight_bits_vals else float(total_bits)
-    inputs["weight_bits_max"] = float(max(weight_bits_vals)) if weight_bits_vals else float(total_bits)
-    inputs["weight_bits_mean"] = float(np.mean(weight_bits_vals)) if weight_bits_vals else float(total_bits)
+    inputs["weight_bits_min"] = (
+        float(min(weight_bits_vals)) if weight_bits_vals else float(total_bits)
+    )
+    inputs["weight_bits_max"] = (
+        float(max(weight_bits_vals)) if weight_bits_vals else float(total_bits)
+    )
+    inputs["weight_bits_mean"] = (
+        float(np.mean(weight_bits_vals)) if weight_bits_vals else float(total_bits)
+    )
     inputs["total_table_size"] = float(sum(table_sizes))
 
     return inputs
@@ -810,7 +1064,9 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
         # }
 
         targets = {
-            "bram": max(1 / max_bram, (bram / max_bram)) * 100 if bram is not None else None,
+            "bram": max(1 / max_bram, (bram / max_bram)) * 100
+            if bram is not None
+            else None,
             "dsp": max(1 / max_dsp, (dsp / max_dsp)) * 100 if dsp is not None else None,
             "ff": max(1 / max_ff, (ff / max_ff)) * 100 if ff is not None else None,
             "lut": max(1 / max_lut, (lut / max_lut)) * 100 if lut is not None else None,
