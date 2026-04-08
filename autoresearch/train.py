@@ -387,6 +387,10 @@ def main():
         _ref_gnn = make_predictor(output_size=len(ALL_TARGETS), device=cpu_dev, name="ref")
         _ref_wrapper = TorchModelWrapper()
         _ref_wrapper.set_model(_ref_gnn)
+        _ref_wrapper.set_input_labels(
+            [f for f in GLOBAL_FEATURE_LABELS if f not in GLOBAL_CATEGORICAL_MAPS],
+            [f for f in SEQUENTIAL_FEATURE_LABELS if f not in SEQUENTIAL_CATEGORICAL_MAPS],
+        )
 
         print("Tensorizing splits (cached after the first run)...", flush=True)
         input_tensors_splits = {
@@ -409,7 +413,7 @@ def main():
                     "source": "json_to_df",
                     "split_lengths": {
                         s: len(next(iter(input_tensors_splits[s].values())))
-                        for s in ("train", "val", "test")
+                        for s in ("train", "val")
                     },
                 },
             },
