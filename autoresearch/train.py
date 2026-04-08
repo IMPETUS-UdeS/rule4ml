@@ -214,7 +214,7 @@ def make_predictor(
         device=device,
         d_model=128,
         nhead=4,
-        num_layers=3,
+        num_layers=4,  # exp23: 4 layers vs 3 (idea-043)
         dim_feedforward=256,
         dropout=0.1,
     )
