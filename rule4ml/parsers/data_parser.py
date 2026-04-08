@@ -60,6 +60,9 @@ default_vivado_map = {
     "2024.2": 12,
 }
 
+HLS_LUT_TABLE_LAYERS = ["sigmoid", "tanh", "softmax"]  # Activation layers that use HLS lookup tables
+DSP_WEIGHT_BITS_THRESHOLD = 18  # Xilinx DSP48E2 B-input max width: 18 bits. Weights <= 18 bits fit and use DSPs
+
 
 @dataclass
 class ParsedDataFilter:
@@ -453,9 +456,15 @@ def get_layers_data(model_config, target_depth=None, layer_name_config=None, def
                 if w_str and w_str != "auto":
                     try:
                         w_total, _ = fixed_precision_to_bit_width(w_str)
-                        layer_weight_bits = w_total
+                        layer_weight_bits = float(w_total)
                     except (ValueError, AttributeError):
                         pass
+        
+        multiplier_estimation = np.ceil(float(layer_parameters) / float(reuse_factor))
+        uses_lut_table = float(layer_type in HLS_LUT_TABLE_LAYERS)
+        pipelined = float(reuse_factor > 1)
+        dsp_eligible = float(layer_weight_bits <= DSP_WEIGHT_BITS_THRESHOLD)
+        dsp_multiplier_estimation = multiplier_estimation * dsp_eligible
 
         data = {
             "layer_type": layer_type.lower(),
@@ -473,7 +482,12 @@ def get_layers_data(model_config, target_depth=None, layer_name_config=None, def
             "layer_op_mult": layers_fixed_ops[idx].get("mult", 0),
             "layer_op_logical": layers_fixed_ops[idx].get("logical", 0),
             "layer_op_lookup": layers_fixed_ops[idx].get("lookup", 0),
-            "layer_weight_bits": float(layer_weight_bits),
+            "layer_weight_bits": layer_weight_bits,
+            "layer_multiplier": multiplier_estimation,
+            "layer_uses_lut_table": uses_lut_table,
+            "layer_pipelined": pipelined,
+            "layer_dsp_eligible": dsp_eligible,
+            "layer_dsp_multiplier": dsp_multiplier_estimation,
         }
         layers_data.append(data)
 
@@ -493,11 +507,11 @@ def process_model_batch(model_batch, max_model_depth):
         if not model_data:
             continue
 
-        # Extract per-layer precision config and global default bits for layer_weight_bits feature.
         hls_config = model_data.get("hls_config") or {}
         hls_snake = camel_keys_to_snake(hls_config)
         layer_name_config = hls_snake.get("layer_name") or {}
-        # Global default precision (e.g., "fixed<16,6>") → default bit width
+
+        # Extract per-layer precision config and global default bits for layer_weight_bits feature
         global_prec = (hls_snake.get("model") or {}).get("precision", "")
         if not isinstance(global_prec, str):
             global_prec = (global_prec or {}).get("default", "") if isinstance(global_prec, dict) else ""
@@ -515,6 +529,7 @@ def process_model_batch(model_batch, max_model_depth):
             default_bits=default_bits,
         )
         result.append(layers_data)
+
     return result
 
 

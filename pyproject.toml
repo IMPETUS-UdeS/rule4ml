@@ -71,3 +71,4 @@ pytorch-triton-rocm = { index = "pytorch-rocm" }
 
 [project.scripts]
 autoresearch = "autoresearch.train:main"
+benchmark = "autoresearch.benchmark:main"

@@ -8,6 +8,8 @@ This is your Operating Manual to do your own research.
 2. **Create the branch**: `git checkout -b agent-<tag>` from the base `agent` branch. This new branch is where you will experiment.
 3. **Read the in-scope files**: Read these files for project context:
     - `autoresearch/prepare.py` — fixed constants, data loading, evaluation harness. **Do not modify.**
+    - `autoresearch/benchmark.py` — benchmarking that the human manually runs on promising kept experiments. **Do not modify.**
+    - `autoresearch/plots.ipynb` — visualization notebook to analyze evolution of experiments over time. **Do not modify.**
     - `autoresearch/train.py` — baseline training script. Your primary entry point.
     - `rule4ml/models/architectures.py` — model class definitions. Keep existing archtitectures as reference and add new ones as needed.
     - `rule4ml/models/wrappers.py` — training wrappers and dataset building.
@@ -192,8 +194,9 @@ The experiment runs on the dedicated branch.
 10. Poll for completion: `while kill -0 $PID 2>/dev/null; do sleep 60; done; echo "Done"`. Read out the results using `grep` on `autoresearch/runs/${BRANCH}-${HASH}.log`
 11. If the output is empty, the run likely crashed. Run `tail -n 50 autoresearch/runs/${BRANCH}-${HASH}.log` to read the stack trace and attempt a fix. If you cannot fix it after a few attempts, give up and report to the human.
 12. Record the results in `results.tsv`. Update `ideas.tsv` if an existing idea was tried. Update `issues.tsv` if a non-breaking issue was encountered. **Do not commit the TSV files — leave them untracked by git.**
-13. If the all-target metrics improve, keep the commit and continue building on it.
-14. Otherwise, you git reset back to where you started
+13. **Update `ml-insights` skill**: update `autoresearch/ml-insights/SKILL.md` with any new findings — what worked, what didn't, target-specific observations, and update the "Last updated" line and best result metrics. The `autoresearch/ml-insights` directory is symlinked to your local configuration's `ml-insights` skill and is your evolving memory across sessions. Keep it concise so it can be loaded quickly. Remove stale content; prefer synthesized lessons over per-experiment narratives.
+14. If the all-target metrics improve, keep the commit and continue building on it.
+15. Otherwise, you git reset back to where you started
 
 **Timeout**: If a run significantly exceeds `TIME_BUDGET` (2 times or more) with no progress logged, kill it and treat it as a failure.
 

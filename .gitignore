@@ -127,3 +127,4 @@ format.py
 hls4ml/
 uv.lock
 !.gemini/.env
+*secret*

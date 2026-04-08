@@ -1,9 +1,6 @@
-import os
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
 import itertools
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -26,7 +23,10 @@ except ImportError:
     onnx = None
 
 from rule4ml.models.architectures import (KerasMCDropout, KerasMLP,
-                                          KerasTransformer, TorchGNN, TorchMLP)
+                                          KerasTransformer, TorchGNN, TorchMLP,
+                                          TorchTransformerFullQueryPredictor,
+                                          TorchTransformerHybridPredictor,
+                                          TorchTransformerPredictor)
 from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.metrics import rmse, smape
 from rule4ml.models.scaling import *  # noqa: F403
@@ -46,13 +46,13 @@ class TrainSettings:
     _summary_
 
     Args: (all optional, default values inside data class)
-        num_epochs (int): _description_
-        batch_size (int): _description_
-        learning_rate (float): _description_
+        num_epochs (int): number of training epochs
+        batch_size (int): training batch size
+        learning_rate (float): learning rate for the optimizer
 
-        optimizer (str): _description_
-        loss_function (str): _description_
-        metrics (list): _description_
+        optimizer (str): optimizer name or instance
+        loss_function (str): loss function name or instance
+        metrics (list): List of metric names or instances
     """
 
     # Default settings
@@ -105,6 +105,13 @@ class BaseModelWrapper:
 
         self.output_shape = getattr(model, "output_shape", ())
 
+    def set_input_labels(self, global_numerical_labels, sequential_numerical_labels):
+        self.global_numerical_labels = global_numerical_labels
+        self.sequential_numerical_labels = sequential_numerical_labels
+
+    def set_output_labels(self, output_labels):
+        self.output_labels = output_labels
+
     def get_categorical_values(self, key, fallback=[]) -> List:
         categorical_maps = dict(self.global_categorical_maps)
         categorical_maps.update(self.sequential_categorical_maps)
@@ -117,6 +124,11 @@ class BaseModelWrapper:
     def build_inputs(self, inputs_df):
         if self.model is None:
             raise Exception("A model needs to be set or loaded before building inputs.")
+        if (
+            not self.global_numerical_labels
+            or not self.sequential_numerical_labels
+        ):
+            raise Exception("Input labels need to be set before building inputs.")
 
         input_dict = {}
         for key, label in zip(
@@ -124,13 +136,7 @@ class BaseModelWrapper:
         ):
             input_dict[key] = inputs_df[label].values
 
-        global_numerical_inputs_df = inputs_df.drop(
-            self.global_categorical_maps.keys(), axis=1
-        ).select_dtypes(
-            exclude=[object]
-        )  # excluding nested "sequential_inputs" Series
-        self.global_numerical_labels = global_numerical_inputs_df.columns.values
-
+        global_numerical_inputs_df = inputs_df[self.global_numerical_labels]
         input_dict[self.global_input_keys["numerical"]] = global_numerical_inputs_df.values
 
         if "sequential_inputs" in inputs_df:
@@ -147,16 +153,9 @@ class BaseModelWrapper:
                     .select_dtypes(exclude=[object])
                     .values
                 ).values
-                seq_numerical_inputs = np.asarray([arr for arr in seq_numerical_inputs])
-
-                self.sequential_numerical_labels = (
-                    seq_inputs_series.iloc[0]
-                    .drop(self.sequential_categorical_maps.keys(), axis=1)
-                    .select_dtypes(exclude=[object])
-                    .columns.values
+                input_dict[self.sequential_input_keys["numerical"]] = np.asarray(
+                    [arr for arr in seq_numerical_inputs]
                 )
-
-                input_dict[self.sequential_input_keys["numerical"]] = seq_numerical_inputs
 
         return input_dict
 
@@ -242,18 +241,17 @@ class BaseModelWrapper:
                 ]
             )
 
-        if verbose > 1:
+        if targets is not None:
             r2 = r2_score(targets, prediction, force_finite=False)
-            print(f"R2 Score: {r2:.2f}")
-
             smape_value = smape(targets, prediction)
-            print(f"SMAPE: {smape_value:.2f}%")
-
             rmse_value = rmse(targets, prediction)
-            print(f"RMSE: {rmse_value:.2f}")
-
             avg_inference_time = total_time / len(inputs_df)
-            print(f"Average Inference Time: {avg_inference_time:.2E} seconds")
+
+            if verbose > 1:
+                print(f"R2 Score: {r2:.2f}")
+                print(f"SMAPE: {smape_value:.2f}%")
+                print(f"RMSE: {rmse_value:.2f}")
+                print(f"Average Inference Time: {avg_inference_time:.2E} seconds")
 
             return prediction, r2, smape_value, rmse_value, avg_inference_time
 
@@ -774,7 +772,7 @@ class TorchModelWrapper(BaseModelWrapper):
             return outputs.detach().cpu().numpy()
 
     def _save_weights(self, save_dir):
-        weights_path = os.path.join(save_dir, f"{self.model.name}_weights.pt")
+        weights_path = os.path.join(save_dir, f"{self.model.name}.weights.pt")
         torch.save(self.model.state_dict(), weights_path)
 
     def _load_weights(self, weights_path):

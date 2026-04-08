@@ -21,12 +21,10 @@ if [ ! -e /workspace/datasets ]; then
 fi
 
 # Re-apply GPU-specific torch sources so uv run uses the pre-built venv
-if ! grep -q "tool.uv.sources" pyproject.toml; then
-    if [ "$GPU_TYPE" = "cuda" ]; then
-        printf '\n[[tool.uv.index]]\nname = "pytorch-cuda"\nurl = "https://download.pytorch.org/whl/cu128"\nexplicit = true\n\n[tool.uv.sources]\ntorch = { index = "pytorch-cuda" }\n' >> pyproject.toml; \
-    elif [ "$GPU_TYPE" = "rocm" ]; then
-        printf '\n[[tool.uv.index]]\nname = "pytorch-rocm"\nurl = "https://download.pytorch.org/whl/rocm7.2"\n\n[tool.uv.sources]\ntorch = { index = "pytorch-rocm" }\npytorch-triton-rocm = { index = "pytorch-rocm" }\n' >> pyproject.toml; \
-    fi
+if [ "$GPU_TYPE" = "cuda" ]; then
+    uv add --index pytorch-cuda=https://download.pytorch.org/whl/cu128 torch; \
+elif [ "$GPU_TYPE" = "rocm" ]; then
+    uv add --index pytorch-rocm=https://download.pytorch.org/whl/rocm7.2 torch pytorch-triton-rocm; \
 fi
 
 # Set git identity and trust the workspace

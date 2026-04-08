@@ -2,19 +2,20 @@ import argparse
 import os
 import time
 
-# Must be set before torch/HSA runtime initializes to prevent ROCm GPU hangs on RDNA3
-os.environ.setdefault("HSA_ENABLE_SDMA", "0")
+os.environ.setdefault("HSA_ENABLE_SDMA", "0")  # Set before torch/HSA runtime initializes to prevent ROCm GPU hangs on RDNA3
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow verbose logging
 
-import numpy as np
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
                                   FORCE_CPU, TIME_BUDGET, build_input_tensors,
-                                  build_inputs_df, evaluate,
+                                  build_inputs_df, evaluate, load_checkpoint,
                                   load_split_from_json, load_tensor_cache,
-                                  make_dataloader, print_summary, set_seed,
-                                  tensor_cache_key)
-from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
+                                  make_dataloader, print_summary,
+                                  save_checkpoint, set_seed, tensor_cache_key)
+from rule4ml.models.architectures import (GNNSettings,
+                                          TorchTransformerHybridPredictor)
 from rule4ml.models.wrappers import TorchModelWrapper
 
 set_seed(EVERYTHING_SEED)
@@ -101,62 +102,15 @@ SEQUENTIAL_FEATURE_LABELS = [
     "layer_op_lookup",
     "layer_op_logical",
     # From data_parser (exp20)
-    "layer_weight_bits",        # per-layer weight bit width (from hls_config LayerName)
+    "layer_weight_bits",  # per-layer weight bit width (from hls_config LayerName)
     # HLS-derived analytical features (exp9, 6 new)
-    "hls_multiplier_est",       # ceil(params / reuse) — proxy for DSP count per layer
-    "hls_uses_lut_table",       # 1 if sigmoid/tanh/softmax (lookup-table activation)
-    "hls_pipelined",            # 1 if reuse > 1 (pipelined, drives CYCLES/INTERVAL)
-    "log_hls_multiplier_est",   # log1p(hls_multiplier_est) — scale-invariant DSP signal
-    "log_layer_op_mult",        # log1p(layer_op_mult) — log-scale multiply operations
-    "log_layer_parameter_count",# log1p(layer_parameter_count) — log-scale weight count
+    "layer_multiplier",  # ceil(params / reuse) — proxy for DSP count per layer
+    "layer_uses_lut_table",  # 1 if sigmoid/tanh/softmax (lookup-table activation)
+    "layer_pipelined",  # 1 if reuse > 1 (pipelined, drives CYCLES/INTERVAL)
     # DSP routing features (exp20)
-    "hls_dsp_eligible",         # 1 if layer_weight_bits <= 18 (fits in DSP48E2 B input)
-    "hls_dsp_mult_est",         # DSP-routed multiplications per layer
-    "log_hls_dsp_mult_est",     # log1p(hls_dsp_mult_est)
+    "layer_dsp_eligible",  # 1 if layer_weight_bits <= 18 (fits in DSP48E2 B input)
+    "layer_dsp_multiplier",  # DSP-routed multiplications per layer
 ]
-
-# Integer codes for activation layers that use HLS lookup tables (sigmoid=10, tanh=11, softmax=12)
-_HLS_LUT_TABLE_LAYER_TYPES = [10, 11, 12]
-
-
-# Xilinx DSP48E2 B-input max width: 18 bits. Weights <= 18 bits fit and use DSPs.
-_DSP_WEIGHT_BITS_THRESHOLD = 18
-
-def augment_hls_raw_df(raw_df):
-    """
-    Add HLS-derived analytical features to each sample's sequential_inputs DataFrame.
-    Features are computed from existing raw (unnormalized) sequential data.
-    Call this on raw DataFrames (from load_split_from_json) before build_inputs_df().
-    """
-    def _add_features(seq_df):
-        params = seq_df["layer_parameter_count"].values.astype(float)
-        reuse = np.maximum(seq_df["layer_reuse"].values.astype(float), 1.0)
-        op_mult = seq_df["layer_op_mult"].values.astype(float)
-        layer_type = seq_df["layer_type"].values
-        weight_bits = seq_df["layer_weight_bits"].values.astype(float)
-
-        multiplier_est = np.ceil(params / reuse)
-        uses_lut = np.isin(layer_type, _HLS_LUT_TABLE_LAYER_TYPES).astype(float)
-        pipelined = (seq_df["layer_reuse"].values > 1).astype(float)
-        # DSP routing: layers with weight_bits <= threshold map multiplications to DSPs
-        dsp_eligible = (weight_bits <= _DSP_WEIGHT_BITS_THRESHOLD).astype(float)
-        dsp_mult_est = multiplier_est * dsp_eligible
-
-        seq_df = seq_df.copy()
-        seq_df["hls_multiplier_est"] = multiplier_est
-        seq_df["hls_uses_lut_table"] = uses_lut
-        seq_df["hls_pipelined"] = pipelined
-        seq_df["log_hls_multiplier_est"] = np.log1p(multiplier_est)
-        seq_df["log_layer_op_mult"] = np.log1p(op_mult)
-        seq_df["log_layer_parameter_count"] = np.log1p(params)
-        seq_df["hls_dsp_eligible"] = dsp_eligible
-        seq_df["hls_dsp_mult_est"] = dsp_mult_est
-        seq_df["log_hls_dsp_mult_est"] = np.log1p(dsp_mult_est)
-        return seq_df
-
-    result = raw_df.copy()
-    result["sequential_inputs"] = result["sequential_inputs"].apply(_add_features)
-    return result
 
 # --------------------------------------------------------------------------
 # Targets
@@ -164,13 +118,8 @@ def augment_hls_raw_df(raw_df):
 # or groups of targets as desired.
 # --------------------------------------------------------------------------
 
-# Exp20: DSP-gated precision features.
-# Adds per-layer weight bit width (layer_weight_bits) from hls_config LayerName,
-# with global weight_bits_mean. Derived per-layer: hls_dsp_eligible (1 if weight_bits<=18),
-# hls_dsp_mult_est (DSP-routed multiplications per layer), log_hls_dsp_mult_est.
-# Hypothesis: splitting hls_multiplier_est into DSP-routed vs LUT-routed components
-# gives the model explicit per-layer routing information, improving DSP R2 (currently 0.62).
 TARGET_GROUPS = {"all": ALL_TARGETS}
+NORMALIZE_TARGETS = True
 
 # --------------------------------------------------------------------------
 # Hyperparameters
@@ -183,14 +132,14 @@ LEARNING_RATE = 1e-3
 # Models factories
 # --------------------------------------------------------------------------
 
-def make_gnn(output_size: int, device: torch.device, name: str = "GNN") -> TorchTransformerHybridPredictor:
+def make_predictor(output_size: int, device: torch.device, name: str) -> TorchTransformerHybridPredictor:
     return TorchTransformerHybridPredictor(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
             numerical_dense_layers=[32],
-            gconv_layers=[128, 64],   # unused by Transformer but kept for GNNSettings compat
-            dense_layers=[128, 64],   # Transformer output head: d_model→128→64→output
+            gconv_layers=[128, 64],  # unused by Transformer but kept for GNNSettings compat
+            dense_layers=[128, 64],  # Transformer output head: d_model→128→64→output
             dense_dropouts=[],
         ),
         global_input_shape=(None, len(GLOBAL_FEATURE_LABELS)),
@@ -231,15 +180,21 @@ def train_predictor(
     input_tensors_splits: dict,  # {"train": {key: Tensor}, "val": {key: Tensor}}
     target_tensors: dict,  # {"train": Tensor(N, len(group_targets)), "val": Tensor}
     time_budget: float,
+    base_log_dir: str,
     device: torch.device,
 ) -> tuple:
-    predictor = make_gnn(
+    predictor = make_predictor(
         output_size=len(group_targets),
         device=device,
-        name=f"{'-'.join(t.upper() for t in group_targets)}_GNN",
+        name=f"{'-'.join(t.upper() for t in group_targets)}_Transformer",
     )
     wrapper = TorchModelWrapper()
     wrapper.set_model(predictor)
+    wrapper.set_input_labels(
+        [f for f in GLOBAL_FEATURE_LABELS if f not in GLOBAL_CATEGORICAL_MAPS],
+        [f for f in SEQUENTIAL_FEATURE_LABELS if f not in SEQUENTIAL_CATEGORICAL_MAPS],
+    )
+    wrapper.set_output_labels(group_targets)
 
     pin_memory = device.type == "cuda"
     train_loader = make_dataloader(
@@ -258,6 +213,7 @@ def train_predictor(
     )
 
     optimizer = torch.optim.AdamW(predictor.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+
     # Cosine annealing: T_max is estimated as total_budget / (one epoch cost).
     # We use a generous T_max so the LR decays slowly. Restarts every ~20 epochs.
     # T_0=20: fits ~2 full restarts within the full ~40 epoch budget
@@ -265,14 +221,22 @@ def train_predictor(
         optimizer, T_0=20, T_mult=1, eta_min=1e-6
     )
 
-    best_val_loss = float("inf")
-    best_state = None
-    n_epochs = 0
+    log_dir = os.path.join(base_log_dir, group_name)
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir=log_dir)
 
+    checkpoints_dir = os.path.join(log_dir, "checkpoints")
+    os.makedirs(checkpoints_dir, exist_ok=True)
+
+    n_epochs = 0
     progress = 0.0
     training_time = 0.0
+    best_val_loss = float("inf")
+
     while True:
+        running_loss = 0.0
         predictor.train()
+
         t0 = time.time()
         for inputs, targets in train_loader:
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
@@ -283,10 +247,15 @@ def train_predictor(
             torch.nn.utils.clip_grad_norm_(predictor.parameters(), max_norm=1.0)
             optimizer.step()
 
+            running_loss += loss.item()
+
         torch.cuda.synchronize() if device.type == "cuda" else None
         t1 = time.time()
         training_time += t1 - t0
         progress = min(1.0, training_time / time_budget)
+
+        epoch_loss = running_loss / len(train_loader)
+        writer.add_scalar("Loss/Train", epoch_loss, n_epochs)
 
         predictor.eval()
         val_loss = 0.0
@@ -296,13 +265,19 @@ def train_predictor(
                 targets = targets.to(device, non_blocking=True)
                 val_loss += msle_loss(predictor(inputs), targets).item()
         val_loss /= max(len(val_loader), 1)
+        writer.add_scalar("Loss/Val", val_loss, n_epochs)
 
-        if val_loss < best_val_loss - 1e-4:
+        if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_state = {
-                k: v.detach().cpu().clone()
-                for k, v in predictor.state_dict().items()
-            }
+            save_checkpoint(
+                os.path.join(checkpoints_dir, f"{group_name}_best.pt"),
+                n_epochs, predictor, optimizer, scheduler, best_val_loss,
+            )
+
+        save_checkpoint(
+            os.path.join(checkpoints_dir, f"{group_name}_latest.pt"),
+            n_epochs, predictor, optimizer, scheduler, best_val_loss,
+        )
 
         scheduler.step()
 
@@ -310,8 +285,7 @@ def train_predictor(
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-        if progress < 1.0:
-            n_epochs += 1
+        n_epochs += 1
         print(
             f"Epoch {n_epochs} done, Overall progress: {progress:.2%}"
             f", Training time: {training_time/60:.1f} min",
@@ -321,8 +295,11 @@ def train_predictor(
         if progress >= 1.0:
             break
 
-    if best_state is not None:
-        predictor.load_state_dict(best_state)
+    load_checkpoint(
+        os.path.join(checkpoints_dir, f"{group_name}_best.pt"),
+        predictor, optimizer=None, lr_scheduler=None, device=device
+    )
+    wrapper.save(log_dir)
 
     return wrapper, n_epochs, training_time
 
@@ -334,8 +311,8 @@ def main():
     total_start = time.time()
 
     arg_parser = argparse.ArgumentParser(description="Train FPGA resource predictors")
-    arg_parser.add_argument("--branch-name", type=str, help="Git branch name")
-    arg_parser.add_argument("--commit-hash", type=str, help="Git commit hash")
+    arg_parser.add_argument("--branch-name", required=True, type=str, help="Git branch name")
+    arg_parser.add_argument("--commit-hash", required=True, type=str, help="Git commit hash")
     cli_args = arg_parser.parse_args()
 
     use_gpu = torch.cuda.is_available() and not FORCE_CPU
@@ -352,13 +329,14 @@ def main():
         GLOBAL_FEATURE_LABELS + ["sequential_inputs"] + SEQUENTIAL_FEATURE_LABELS,
         GLOBAL_CATEGORICAL_MAPS.keys(),
         SEQUENTIAL_CATEGORICAL_MAPS.keys(),
+        NORMALIZE_TARGETS,
     )
-    cache_path = os.path.join(CACHE_DIR, f"tensors_{feature_hash}.pt")
+    cache_path = os.path.join(CACHE_DIR, f"{feature_hash}_train_val.pt")
 
     cached = load_tensor_cache(cache_path)
     if cached is not None:
         print(f"Loading tensor cache: {cache_path}", flush=True)
-        input_tensors_splits = cached["inputs"]  # {split: {key: Tensor}}
+        input_tensors_splits = cached["inputs"]
         target_tensors_all = cached["targets"]
         n_train = cached["meta"]["split_lengths"]["train"]
         n_val = cached["meta"]["split_lengths"]["val"]
@@ -367,8 +345,8 @@ def main():
             "test",
             GLOBAL_CATEGORICAL_MAPS,
             SEQUENTIAL_CATEGORICAL_MAPS,
+            normalize=NORMALIZE_TARGETS,
         )
-        raw_test_df = augment_hls_raw_df(raw_test_df)
         test_inputs_df = build_inputs_df(
             raw_test_df,
             GLOBAL_FEATURE_LABELS,
@@ -391,14 +369,12 @@ def main():
                 s,
                 GLOBAL_CATEGORICAL_MAPS,
                 SEQUENTIAL_CATEGORICAL_MAPS,
+                normalize=NORMALIZE_TARGETS,
             )
             for s in ("train", "val", "test")
         }
         for s, df in raw_splits.items():
             print(f"  {s}: {len(df)} samples", flush=True)
-
-        print("Adding HLS-derived sequential features...", flush=True)
-        raw_splits = {s: augment_hls_raw_df(df) for s, df in raw_splits.items()}
 
         inputs_df_splits_full = {
             s: build_inputs_df(df, GLOBAL_FEATURE_LABELS, SEQUENTIAL_FEATURE_LABELS)
@@ -408,14 +384,14 @@ def main():
         # Use a throw-away wrapper/GNN just to define input structure for build_inputs()
         # Use the full output size (6) so hybrid predictors don't get a negative n_timing dim.
         cpu_dev = torch.device("cpu")
-        _ref_gnn = make_gnn(output_size=len(ALL_TARGETS), device=cpu_dev, name="ref")
+        _ref_gnn = make_predictor(output_size=len(ALL_TARGETS), device=cpu_dev, name="ref")
         _ref_wrapper = TorchModelWrapper()
         _ref_wrapper.set_model(_ref_gnn)
 
         print("Tensorizing splits (cached after the first run)...", flush=True)
         input_tensors_splits = {
-            s: build_input_tensors(_ref_wrapper, df, device=cpu_dev)
-            for s, df in inputs_df_splits_full.items()
+            s: build_input_tensors(_ref_wrapper, inputs_df_splits_full[s], device=cpu_dev)
+            for s in ("train", "val")
         }
         target_tensors_all = {
             s: torch.tensor(raw_splits[s][ALL_TARGETS].values, dtype=torch.float32)
@@ -444,6 +420,14 @@ def main():
         test_inputs_df = inputs_df_splits_full["test"]
         test_targets_df = raw_splits["test"][ALL_TARGETS]
 
+    branch_name = cli_args.branch_name
+    commit_hash = cli_args.commit_hash
+    base_log_dir = os.path.join(
+        os.path.dirname(__file__), "runs",
+        branch_name, commit_hash
+    )
+    os.makedirs(base_log_dir, exist_ok=True)
+
     n_groups = len(TARGET_GROUPS)
     per_group_budget = TIME_BUDGET / n_groups
 
@@ -467,24 +451,24 @@ def main():
             input_tensors_splits=input_tensors_splits,
             target_tensors=group_target_tensors,
             time_budget=per_group_budget,
+            base_log_dir=base_log_dir,
             device=device,
         )
         num_epochs[group_name] = epochs
         trained_wrappers.append((wrapper, group_targets))
         training_seconds += training_time
 
-    total_seconds = time.time() - total_start
-    peak_vram_mb = (
-        torch.cuda.max_memory_allocated() / 1024 / 1024
-        if use_gpu else 0.0
-    )
-
     metrics = evaluate(
         trained_wrappers,
         test_inputs_df,
         test_targets_df,
-        device,
     )
+    peak_vram_mb = (
+        torch.cuda.max_memory_allocated() / 1024 / 1024
+        if use_gpu else 0.0
+    )
+    total_seconds = time.time() - total_start
+
     print_summary(
         metrics=metrics,
         num_epochs=num_epochs,

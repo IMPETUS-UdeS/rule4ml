@@ -25,8 +25,8 @@ RUN git clone --branch ${REPO_REF} ${REPO_URL} .
 
 # Install uv and huggingface CLI
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-RUN curl -LsSf https://hf.co/cli/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
+RUN uv tool install huggingface_hub[cli]
 
 # Download wa-hls4ml dataset
 RUN mkdir -p /workspace/datasets/huggingface/wa-hls4ml/
@@ -45,11 +45,9 @@ RUN npm install -g @openai/codex
 
 # Add GPU-specific torch sources to pyproject.toml
 RUN if [ "$GPU_TYPE" = "cuda" ]; then \
-        printf '\n[[tool.uv.index]]\nname = "pytorch-cuda"\nurl = "https://download.pytorch.org/whl/cu128"\nexplicit = true\n\n[tool.uv.sources]\ntorch = { index = "pytorch-cuda" }\n' >> pyproject.toml; \
+        uv add --index pytorch-cuda=https://download.pytorch.org/whl/cu128 torch; \
     elif [ "$GPU_TYPE" = "rocm" ]; then \
-        printf '\n[[tool.uv.index]]\nname = "pytorch-rocm"\nurl = "https://download.pytorch.org/whl/rocm7.2"\n\n[tool.uv.sources]\ntorch = { index = "pytorch-rocm" }\npytorch-triton-rocm = { index = "pytorch-rocm" }\n' >> pyproject.toml; \
-    else \
-        echo "GPU_TYPE must be 'cuda' or 'rocm'" && exit 1; \
+        uv add --index pytorch-rocm=https://download.pytorch.org/whl/rocm7.2 torch pytorch-triton-rocm; \
     fi
 
 # Install python dependencies, move files, then wipe the repo

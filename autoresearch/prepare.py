@@ -1,7 +1,7 @@
 import hashlib
 import json
 import os
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -47,17 +47,6 @@ def set_seed(seed: int = EVERYTHING_SEED) -> None:
 # Data loading
 # --------------------------------------------------------------------------
 
-def load_split(split: str) -> pd.DataFrame:
-    path = os.path.join(DATA_DIR, split, "data.feather")
-    df = pd.read_feather(path)
-    df["sequential_inputs"] = df["sequential_inputs"].apply(json.loads)
-    df["sequential_inputs"] = df["sequential_inputs"].apply(
-        lambda x: pd.DataFrame(x) if isinstance(x, list) else x
-    )
-    df[ALL_TARGETS] = df[ALL_TARGETS].apply(pd.to_numeric, errors="coerce")
-    return df.dropna(subset=ALL_TARGETS).reset_index(drop=True)
-
-
 def get_split_json_patterns(split: str) -> list[str]:
     split_dir = os.path.join(DATA_DIR, split)
     return [
@@ -71,11 +60,11 @@ def get_split_json_patterns(split: str) -> list[str]:
         os.path.join(split_dir, "*exemplar_models.json"),
     ]
 
-
 def load_split_from_json(
     split: str,
     global_categorical_maps: dict,
     sequential_categorical_maps: dict,
+    normalize: bool,
 ) -> pd.DataFrame:
     json_data = read_from_json(
         get_split_json_patterns(split),
@@ -86,7 +75,7 @@ def load_split_from_json(
         json_data,
         global_categorical_maps,
         sequential_categorical_maps,
-        normalize=True,
+        normalize=normalize,
         max_workers=JSON_MAX_WORKERS,
     )
     df[ALL_TARGETS] = df[ALL_TARGETS].apply(pd.to_numeric, errors="coerce")
@@ -97,7 +86,7 @@ def load_tensor_cache(cache_path: str) -> dict | None:
         return None
 
     cached = torch.load(cache_path, weights_only=False, map_location="cpu")
-    required_input_splits = ("train", "val", "test")
+    required_input_splits = ("train", "val")
     required_target_splits = ("train", "val")
     if (
         "inputs" not in cached
@@ -172,12 +161,10 @@ def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1.0) -> float:
         np.mean(2.0 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + eps)) * 100
     )
 
-
 def r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=float).ravel()
     y_pred = np.asarray(y_pred, dtype=float).ravel()
     return float(r2_score(y_true, y_pred))
-
 
 def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=float).ravel()
@@ -185,10 +172,10 @@ def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
 
 # --------------------------------------------------------------------------
-# Cache utilities
+# Utilities
 # --------------------------------------------------------------------------
 
-def tensor_cache_key(feature_cols: list, global_cat_keys, seq_cat_keys) -> str:
+def tensor_cache_key(feature_cols: list, global_cat_keys, seq_cat_keys, normalize) -> str:
     """
     Compute the 12-hex cache key shared by predict() and train.py's cache writer.
     Defining it once here ensures both sides always produce the same filename.
@@ -197,8 +184,44 @@ def tensor_cache_key(feature_cols: list, global_cat_keys, seq_cat_keys) -> str:
         list(feature_cols)
         + sorted(global_cat_keys)
         + sorted(seq_cat_keys)
+        + [normalize]
     ).encode())
     return h.hexdigest()[:12]
+
+def save_checkpoint(
+    path: str,
+    epoch: int,
+    model: torch.nn.Module,
+    optimizer: Optional[torch.optim.Optimizer],
+    lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+    best_loss: float
+):
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+        "lr_scheduler_state_dict": lr_scheduler.state_dict() if lr_scheduler is not None else None,
+        "best_loss": best_loss,
+    }, path)
+
+def load_checkpoint(
+    path: str,
+    model: torch.nn.Module,
+    optimizer: Optional[torch.optim.Optimizer],
+    lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+    device: torch.device
+) -> Tuple[int, float]:
+    checkpoint = torch.load(path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if optimizer is not None:
+        if checkpoint.get("optimizer_state_dict") is None:
+            raise ValueError("Checkpoint is missing optimizer state dict.")
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if lr_scheduler is not None:
+        if checkpoint.get("lr_scheduler_state_dict") is None:
+            raise ValueError("Checkpoint is missing lr_scheduler state dict.")
+        lr_scheduler.load_state_dict(checkpoint["lr_scheduler_state_dict"])
+    return checkpoint["epoch"], checkpoint["best_loss"]
 
 # --------------------------------------------------------------------------
 # Inference
@@ -208,8 +231,6 @@ def tensor_cache_key(feature_cols: list, global_cat_keys, seq_cat_keys) -> str:
 def predict(
     wrapper,
     inputs_df: pd.DataFrame,
-    device: torch.device,
-    use_cache: bool = True,
 ) -> np.ndarray:
     """
     Inference helper. Strips any leaked target columns from inputs_df before
@@ -218,37 +239,13 @@ def predict(
     Available to the agent for use during training (e.g. validation monitoring),
     but also called internally by evaluate() so the agent cannot override how
     the final test-set predictions are produced.
-
-    When use_cache=True, checks CACHE_DIR for pre-built input tensors keyed by
-    the DataFrame's column names and the wrapper's categorical map keys. On a
-    cache hit the heavy build_inputs() call is skipped entirely.
     """
     safe_inputs = inputs_df.drop(
         columns=[c for c in ALL_TARGETS if c in inputs_df.columns]
     )
 
-    if use_cache:
-        _h = tensor_cache_key(
-            safe_inputs.columns.tolist(),
-            wrapper.global_categorical_maps.keys(),
-            wrapper.sequential_categorical_maps.keys(),
-        )
-        _cache_path = os.path.join(CACHE_DIR, f"tensors_{_h}.pt")
-
-        if os.path.exists(_cache_path):
-            _cached = torch.load(_cache_path, weights_only=False, map_location="cpu")
-            n = len(safe_inputs)
-            for split_tensors in _cached["inputs"].values():
-                first = next(iter(split_tensors.values()))
-                if len(first) == n:
-                    inputs = {k: v.to(device) for k, v in split_tensors.items()}
-                    wrapper.model.eval()
-                    return wrapper.model(inputs).detach().cpu().numpy()
-
-    # No cache, build from DataFrame
     wrapper.model.eval()
-    inputs = build_input_tensors(wrapper, safe_inputs, device)
-    return wrapper.model(inputs).detach().cpu().numpy()
+    return wrapper.predict_from_df(safe_inputs)
 
 # --------------------------------------------------------------------------
 # Evaluation
@@ -258,13 +255,11 @@ def evaluate(
     wrappers: List[Tuple],
     test_inputs_df: pd.DataFrame,
     test_targets_df: pd.DataFrame,
-    device: torch.device,
 ) -> dict:
     """
     Locked evaluation. Calls predict() internally for each trained model group
     with use_cache=False, so final test predictions are always rebuilt from the
-    provided test features. Target columns accidentally included in
-    test_inputs_df are stripped before inference.
+    provided test features.
 
     Args:
         wrappers: List of (wrapper, group_targets) tuples, one per trained group.
@@ -284,7 +279,7 @@ def evaluate(
 
     predictions = {}
     for wrapper, group_targets in wrappers:
-        preds = predict(wrapper, test_inputs_df, device, use_cache=False)
+        preds = predict(wrapper, test_inputs_df)
         for i, target in enumerate(group_targets):
             if target in predictions:
                 raise ValueError(f"Duplicate prediction target during evaluation: {target}")
@@ -323,15 +318,15 @@ def evaluate(
 
 def print_summary(
     metrics: dict,
-    num_epochs: dict,
-    training_seconds: float,
-    total_seconds: float,
-    peak_vram_mb: float,
-    platform: str,
+    num_epochs: Optional[dict] = None,
+    training_seconds: Optional[float] = None,
+    total_seconds: Optional[float] = None,
+    peak_vram_mb: Optional[float] = None,
+    platform: Optional[str] = None,
     col_width: int = 23,
 ) -> None:
     """
-    Print the standard experiment summary consumed by AGENTS.md log-parsing steps.
+    Print the experiment summary.
     """
 
     def line(key: str, val: str) -> str:
@@ -353,9 +348,16 @@ def print_summary(
         v = metrics.get(f"rmse_{t}")
         if v is not None:
             lines.append(line(f"rmse_{t}", f"{v:.2f}"))
-    lines.append(line("num_epochs", json.dumps(num_epochs)))
-    lines.append(line("training_seconds", f"{training_seconds:.2f}"))
-    lines.append(line("total_seconds", f"{total_seconds:.2f}"))
-    lines.append(line("peak_vram_mb", f"{peak_vram_mb:.2f}"))
-    lines.append(line("platform", platform))
+
+    if num_epochs is not None:
+        lines.append(line("num_epochs", json.dumps(num_epochs)))
+    if training_seconds is not None:
+        lines.append(line("training_seconds", f"{training_seconds:.2f}"))
+    if total_seconds is not None:
+        lines.append(line("total_seconds", f"{total_seconds:.2f}"))
+    if peak_vram_mb is not None:
+        lines.append(line("peak_vram_mb", f"{peak_vram_mb:.2f}"))
+    if platform is not None:
+        lines.append(line("platform", platform))
+
     print("\n".join(lines), flush=True)

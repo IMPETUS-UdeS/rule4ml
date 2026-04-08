@@ -1,7 +1,4 @@
 import os
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3" 
-
 from dataclasses import dataclass, field
 
 import keras
@@ -938,8 +935,7 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
     Motivation: exp15 (TorchTransformerMultiQueryPredictor) showed that per-target
     cross-attention dramatically improves resource prediction (BRAM SMAPE -1.6pp,
     LUT RMSE -2.3) but causes timing SMAPE to collapse (CYCLES 5→12%) because the
-    timing queries over-specialise for large-valued samples. The CLS token is known
-    to work well for timing prediction in all previous experiments.
+    timing queries over-specialise for large-valued samples.
     """
 
     # Resource target count: [bram, dsp, ff, lut] = 4
@@ -1068,6 +1064,11 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         self.output_shape = output_shape
         self.settings = settings
         self.name = name
+        self.d_model = d_model
+        self.nhead = nhead
+        self.num_layers = num_layers
+        self.dim_feedforward = dim_feedforward
+        self.dropout = dropout
         self.kl_loss = 0.0
 
         if device is None:
@@ -1147,6 +1148,27 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
 
         # ── Combine in target order: [bram,dsp,ff,lut,cycles,interval] ────────
         return torch.cat([resource_preds, timing_preds], dim=-1)     # [B, 6]
+
+    def to_config(self):
+        return {
+            "name": self.name,
+            "settings": self.settings.to_config(),
+            "global_input_shape": self.global_input_shape,
+            "sequential_input_shape": self.sequential_input_shape,
+            "output_shape": self.output_shape,
+            "global_categorical_maps": self.global_categorical_maps,
+            "sequential_categorical_maps": self.sequential_categorical_maps,
+            "d_model": self.d_model,
+            "nhead": self.nhead,
+            "num_layers": self.num_layers,
+            "dim_feedforward": self.dim_feedforward,
+            "dropout": self.dropout,
+        }
+
+    @classmethod
+    def from_config(cls, config):
+        config["settings"] = GNNSettings.from_config(config["settings"])
+        return cls(**config)
 
 
 class TorchTransformerFullQueryPredictor(torch.nn.Module):
@@ -1296,6 +1318,11 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
         self.output_shape = output_shape
         self.settings = settings
         self.name = name
+        self.d_model = d_model
+        self.nhead = nhead
+        self.num_layers = num_layers
+        self.dim_feedforward = dim_feedforward
+        self.dropout = dropout
         self.kl_loss = 0.0
 
         if device is None:
@@ -1375,6 +1402,27 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
 
         # ── Combine in target order: [bram,dsp,ff,lut,cycles,interval] ────────
         return torch.cat([resource_preds, timing_preds], dim=-1)    # [B, 6]
+
+    def to_config(self):
+        return {
+            "name": self.name,
+            "settings": self.settings.to_config(),
+            "global_input_shape": self.global_input_shape,
+            "sequential_input_shape": self.sequential_input_shape,
+            "output_shape": self.output_shape,
+            "global_categorical_maps": self.global_categorical_maps,
+            "sequential_categorical_maps": self.sequential_categorical_maps,
+            "d_model": self.d_model,
+            "nhead": self.nhead,
+            "num_layers": self.num_layers,
+            "dim_feedforward": self.dim_feedforward,
+            "dropout": self.dropout,
+        }
+
+    @classmethod
+    def from_config(cls, config):
+        config["settings"] = GNNSettings.from_config(config["settings"])
+        return cls(**config)
 
 
 class KerasTransformerBlock(keras.layers.Layer):
