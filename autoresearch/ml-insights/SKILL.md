@@ -8,32 +8,38 @@ metadata:
 
 # Empirical Insights
 
-**Last updated**: exp24 retry completed (commit 218e389) — larger Transformer regressed, reverted to 4-layer
+**Last updated**: exp31 (commit 20e014f) — NEW BEST SMAPE 6.04
 
-**Best result**: mean SMAPE 6.08 (exp23, commit 48388b5) — 4-layer Transformer
+**Best result**: mean SMAPE **6.04** (exp31, commit 20e014f) — scheduler T_0=30, 4-layer Transformer
 
 ## Architecture Insights
 
-- 4-layer Transformer (idea-043) improved SMAPE 6.33->6.08, DSP SMAPE 8.25->7.16
-- Larger Transformer (d_model=192, nhead=6) regressed SMAPE to 6.44 — more capacity not helpful
-- Hybrid Transformer (CLS + query attention) with learned CLS residual remains best architecture
+- 4-layer Transformer (idea-043) improved SMAPE 6.33->6.08
+- Scheduler T_0=30 (idea-051) improved SMAPE 6.08->6.04 — **new best**
+- CLS residual 0.25 is optimal (tested 0.15, 0.25, 0.5)
+- Larger Transformer (d_model=192) regressed — not helpful
+
+## Hyperparameter Insights
+
+- LR 1e-3 optimal (tested 2e-3, 5e-4 — both worse)
+- Batch 256 optimal (tested 512 — worse)
+- T_0=30 better than T_0=20 (slower decay helped convergence)
 
 ## Feature Insights
 
 - Per-layer weight_bits from precision parsing was DSP breakthrough
-- Per-layer result_bits caused regression — discarded
 - Per-layer reuse_factor override gave modest improvement — keep
-- SMAPE eps fixed from 1.0 to ~0.1, true SMAPE baseline ~6.3
+- Per-layer result_bits caused regression — discarded
 
 ## Target-Specific Insights
 
-- BRAM is worst target (SMAPE ~19) — needs targeted improvement
-- DSP improved with deeper Transformer but still high (7.16)
-- CYCLES/INTERVAL well-predicted (SMAPE ~1.6-1.7)
-- FF/LUT intermediate (SMAPE ~3.4-3.5)
+- BRAM is worst target (SMAPE ~19.6) — needs targeted improvement
+- DSP improved significantly with T_0=30 (7.16->6.20)
+- CYCLES/INTERVAL well-predicted (SMAPE ~1.6)
+- FF/LUT intermediate (SMAPE ~3.6-3.7)
 
 ## Promising Directions
 
-1. **idea-044** (high priority, radical): Auxiliary per-token HLS prediction heads — multi-task supervision forcing token representations to be physically meaningful
-2. Focus on BRAM improvement (architecture change or targeted features)
-3. Explore different learning rate or batch size for 4-layer model
+1. **Focus on BRAM**: Architecture change or targeted features to improve worst target (19.6 SMAPE)
+2. **idea-044** (high priority, radical): Auxiliary per-token HLS prediction heads — multi-task supervision
+3. Try dropout tuning or different warmup strategy
