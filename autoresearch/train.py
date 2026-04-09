@@ -183,7 +183,7 @@ NORMALIZE_TARGETS = True
 # --------------------------------------------------------------------------
 
 BATCH_SIZE = 256
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 2e-3  # exp26: 2e-3 vs 1e-3 (4 layers may need faster LR)
 
 # --------------------------------------------------------------------------
 # Models factories

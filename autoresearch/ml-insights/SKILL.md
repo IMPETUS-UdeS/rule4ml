@@ -8,36 +8,32 @@ metadata:
 
 # Empirical Insights
 
-**Last updated**: exp23 (commit 48388b5) — deeper Transformer 4 layers
+**Last updated**: exp24 retry completed (commit 218e389) — larger Transformer regressed, reverted to 4-layer
 
-**Best result**: mean SMAPE 6.08 with corrected eps (deeper Transformer, 4 layers)
+**Best result**: mean SMAPE 6.08 (exp23, commit 48388b5) — 4-layer Transformer
 
 ## Architecture Insights
 
-- Hybrid Transformer (CLS + query attention) with learned CLS residual for resource targets works well
-- Deeper Transformer (4 layers vs 3) improved SMAPE 6.33->6.08 and DSP SMAPE 8.25->7.16
-- DSP-gated features (layer_dsp_eligible, layer_dsp_multiplier) remain the key breakthrough
+- 4-layer Transformer (idea-043) improved SMAPE 6.33->6.08, DSP SMAPE 8.25->7.16
+- Larger Transformer (d_model=192, nhead=6) regressed SMAPE to 6.44 — more capacity not helpful
+- Hybrid Transformer (CLS + query attention) with learned CLS residual remains best architecture
 
 ## Feature Insights
 
-- Per-layer weight_bits from precision parsing (exp20) was the breakthrough for DSP
-- Per-layer result_bits caused SMAPE regression (likely noise/collinearity with weight_bits) — discarded
+- Per-layer weight_bits from precision parsing was DSP breakthrough
+- Per-layer result_bits caused regression — discarded
 - Per-layer reuse_factor override gave modest improvement — keep
-- SMAPE eps=1.0 was inflating scores by ~3-4x for normalized targets — now corrected to eps=0.1
-
-## Loss Function Insights
-
-- MSLE remains the primary working loss; SMAPE direct loss saturates for extreme values
+- SMAPE eps fixed from 1.0 to ~0.1, true SMAPE baseline ~6.3
 
 ## Target-Specific Insights
 
-- BRAM is worst target (SMAPE 19.1) — needs architecture or feature breakthrough
-- DSP improved with deeper Transformer (7.16 SMAPE from 8.25)
-- CYCLES/INTERVAL well-predicted (SMAPE 1.6-1.7)
-- FF/LUT intermediate (SMAPE 3.4-3.5)
+- BRAM is worst target (SMAPE ~19) — needs targeted improvement
+- DSP improved with deeper Transformer but still high (7.16)
+- CYCLES/INTERVAL well-predicted (SMAPE ~1.6-1.7)
+- FF/LUT intermediate (SMAPE ~3.4-3.5)
 
 ## Promising Directions
 
-1. **Focus on BRAM**: Architecture change or targeted features to improve worst target (19.1 SMAPE)
-2. **idea-044** (high, radical): Auxiliary per-token HLS prediction heads for multi-task supervision
-3. **idea-045** (medium): Larger Transformer (d_model=192, nhead=6) — more capacity for BRAM/DSP
+1. **idea-044** (high priority, radical): Auxiliary per-token HLS prediction heads — multi-task supervision forcing token representations to be physically meaningful
+2. Focus on BRAM improvement (architecture change or targeted features)
+3. Explore different learning rate or batch size for 4-layer model
