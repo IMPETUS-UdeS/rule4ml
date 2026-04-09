@@ -289,7 +289,7 @@ def train_predictor(
     optimizer = torch.optim.AdamW(
         predictor.parameters(),
         lr=LEARNING_RATE,
-        weight_decay=5e-5,  # exp38: 5e-5 vs 1e-4
+        weight_decay=1e-4,  # 1e-4 is optimal
     )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
