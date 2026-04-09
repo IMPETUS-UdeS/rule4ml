@@ -288,9 +288,9 @@ def train_predictor(
     # T_0=20: fits ~2 full restarts within the full ~40 epoch budget
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
-        T_0=40,
+        T_0=30,
         T_mult=1,
-        eta_min=1e-6,  # exp32: T_0=40 vs 30 for even slower decay
+        eta_min=1e-6,  # T_0=30 is optimal
     )
 
     log_dir = os.path.join(base_log_dir, group_name)
