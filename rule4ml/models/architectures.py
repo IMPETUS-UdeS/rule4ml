@@ -175,7 +175,12 @@ class GNNSettings:
 
 class KerasMLP(keras.Model):
     def __init__(
-        self, settings: MLPSettings, input_shape, output_shape, categorical_maps, name="KerasMLP"
+        self,
+        settings: MLPSettings,
+        input_shape,
+        output_shape,
+        categorical_maps,
+        name="KerasMLP",
     ):
         squeeze_op = tf.squeeze if kops is None else kops.squeeze
 
@@ -215,7 +220,10 @@ class KerasMLP(keras.Model):
 
         for idx, units in enumerate(settings.dense_layers):
             x = keras.layers.Dense(units, activation="relu")(x)
-            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
+            if (
+                idx < len(settings.dense_dropouts)
+                and settings.dense_dropouts[idx] > 0.0
+            ):
                 x = KerasMCDropout(settings.dense_dropouts[idx])(x)
 
         model_inputs = categorical_inputs + [numerical_inputs]
@@ -292,11 +300,15 @@ class KerasTransformer(keras.Model):
                 global_numerical_outputs
             )
 
-        concat_global_inputs = concat_op([*global_embeddings, global_numerical_outputs], axis=-1)
+        concat_global_inputs = concat_op(
+            [*global_embeddings, global_numerical_outputs], axis=-1
+        )
 
         global_outputs = concat_global_inputs
         for idx, units in enumerate(settings.global_dense_layers):
-            global_outputs = keras.layers.Dense(units, activation="relu")(global_outputs)
+            global_outputs = keras.layers.Dense(units, activation="relu")(
+                global_outputs
+            )
 
         # Sequential inputs (layer-wise info)
         sequential_categorical_inputs = []
@@ -324,7 +336,10 @@ class KerasTransformer(keras.Model):
             sequential_embeddings.append(embedding_layer)
 
         sequential_numerical_inputs = keras.layers.Input(
-            shape=(None, sequential_input_shape[-1] - len(sequential_categorical_inputs)),
+            shape=(
+                None,
+                sequential_input_shape[-1] - len(sequential_categorical_inputs),
+            ),
             name=f"s{len(sequential_categorical_maps)}_numerical_inputs",
         )
 
@@ -338,11 +353,15 @@ class KerasTransformer(keras.Model):
             [*sequential_embeddings, sequential_numerical_outputs], axis=-1
         )
         masked_inputs = keras.layers.Masking(mask_value=0.0)(concat_seq_inputs)
-        mask = tf.reduce_any(tf.not_equal(masked_inputs, 0.0), axis=-1)  # shape: (batch, seq_len)
+        mask = tf.reduce_any(
+            tf.not_equal(masked_inputs, 0.0), axis=-1
+        )  # shape: (batch, seq_len)
 
         x = masked_inputs
         for idx, units in enumerate(settings.seq_dense_layers):
-            x = keras.layers.TimeDistributed(keras.layers.Dense(units, activation="relu"))(x)
+            x = keras.layers.TimeDistributed(
+                keras.layers.Dense(units, activation="relu")
+            )(x)
 
         x = KerasTransformerBlock(
             x.shape[-1],
@@ -360,7 +379,10 @@ class KerasTransformer(keras.Model):
 
         for idx, units in enumerate(settings.dense_layers):
             x = keras.layers.Dense(units, activation="relu")(x)
-            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
+            if (
+                idx < len(settings.dense_dropouts)
+                and settings.dense_dropouts[idx] > 0.0
+            ):
                 x = KerasMCDropout(settings.dense_dropouts[idx])(x)
 
         # The same order as the model inputs should be maintained, else Keras 3 breaks
@@ -431,9 +453,9 @@ class TorchMLP(torch.nn.Module):
         in_dim = input_shape[-1] - len(categorical_maps)
         if in_dim > 0:
             for idx, units in enumerate(settings.numerical_dense_layers):
-                self.numerical_layers[f"g{idx + len(categorical_maps)}_numerical_layer"] = (
-                    torch.nn.Linear(in_dim, units, bias=False)
-                )
+                self.numerical_layers[
+                    f"g{idx + len(categorical_maps)}_numerical_layer"
+                ] = torch.nn.Linear(in_dim, units, bias=False)
                 in_dim = units
 
         concat_dim = sum(settings.embedding_layers) + in_dim
@@ -441,7 +463,10 @@ class TorchMLP(torch.nn.Module):
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
             self.dense_layers.append(torch.nn.Linear(concat_dim, units))
-            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
+            if (
+                idx < len(settings.dense_dropouts)
+                and settings.dense_dropouts[idx] > 0.0
+            ):
                 self.dropouts.append(torch.nn.Dropout(settings.dense_dropouts[idx]))
             else:
                 self.dropouts.append(None)
@@ -519,7 +544,7 @@ class TorchGNN(torch.nn.Module):
     ):
         if torch_geometric is None:
             raise ImportError(
-                "Failed to import \"torch_geometric\". Please install \"torch_geometric\" to use this class."
+                'Failed to import "torch_geometric". Please install "torch_geometric" to use this class.'
             )
 
         super().__init__()
@@ -542,12 +567,14 @@ class TorchGNN(torch.nn.Module):
         g_in_dim = max(0, global_input_shape[-1] - len(global_categorical_maps))
         if g_in_dim > 0:
             for idx, units in enumerate(settings.numerical_dense_layers):
-                self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
-                    torch.nn.Linear(g_in_dim, units, bias=False)
-                )
+                self.numerical_layers[
+                    f"g{idx + len(global_categorical_maps)}_numerical_layer"
+                ] = torch.nn.Linear(g_in_dim, units, bias=False)
                 g_in_dim = units
 
-        seq_numerical_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
+        seq_numerical_dim = sequential_input_shape[-1] - len(
+            sequential_categorical_maps
+        )
         gnn_dim = sum(settings.seq_embedding_layers) + seq_numerical_dim
 
         # Project global features to the same dimension as the GNN node features?
@@ -561,7 +588,9 @@ class TorchGNN(torch.nn.Module):
         self.norms = torch.nn.ModuleList()
         for idx, units in enumerate(settings.gconv_layers):
             mlp = torch.nn.Sequential(
-                torch.nn.Linear(gnn_dim, units), torch.nn.ReLU(), torch.nn.Linear(units, units)
+                torch.nn.Linear(gnn_dim, units),
+                torch.nn.ReLU(),
+                torch.nn.Linear(units, units),
             )
             self.gconvs.append(
                 # torch_geometric.nn.SAGEConv(
@@ -580,7 +609,11 @@ class TorchGNN(torch.nn.Module):
         )
         self.global_pool = torch_geometric.nn.global_mean_pool
 
-        concat_dim = sum(settings.global_embedding_layers) + g_in_dim + sum(settings.gconv_layers)
+        concat_dim = (
+            sum(settings.global_embedding_layers)
+            + g_in_dim
+            + sum(settings.gconv_layers)
+        )
         self.dense_layers = torch.nn.ModuleList()
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
@@ -590,7 +623,10 @@ class TorchGNN(torch.nn.Module):
                 else torch.nn.Linear(concat_dim, units)
             )
             self.dense_layers.append(dense_layer)
-            if idx < len(settings.dense_dropouts) and settings.dense_dropouts[idx] > 0.0:
+            if (
+                idx < len(settings.dense_dropouts)
+                and settings.dense_dropouts[idx] > 0.0
+            ):
                 self.dropouts.append(torch.nn.Dropout(settings.dense_dropouts[idx]))
             else:
                 self.dropouts.append(None)
@@ -624,7 +660,9 @@ class TorchGNN(torch.nn.Module):
         self.kl_loss = 0.0
 
         if device is None:
-            if torch.cuda.is_available() and os.environ.get("CUDA_VISIBLE_DEVICES") not in [
+            if torch.cuda.is_available() and os.environ.get(
+                "CUDA_VISIBLE_DEVICES"
+            ) not in [
                 "",
                 "-1",
             ]:
@@ -638,7 +676,9 @@ class TorchGNN(torch.nn.Module):
         x_global_categorical = []
         for idx, key in enumerate(self.global_embeddings.keys()):
             try:
-                x_global_categorical.append(self.global_embeddings[key](inputs[key]).squeeze(1))
+                x_global_categorical.append(
+                    self.global_embeddings[key](inputs[key]).squeeze(1)
+                )
             except Exception as e:
                 print(f"Input: {inputs[key].shape}")
                 raise e
@@ -650,11 +690,15 @@ class TorchGNN(torch.nn.Module):
         seq_numerical_inputs = inputs[
             self.sequential_input_keys["numerical"]
         ]  # shape: (batch, seq_len, seq_features)
-        mask = ~(seq_numerical_inputs == 0.0).all(dim=-1)  # mask to eliminate zero padding
+        mask = ~(seq_numerical_inputs == 0.0).all(
+            dim=-1
+        )  # mask to eliminate zero padding
 
         x_sequential_categorical = []
         for idx, key in enumerate(self.sequential_embeddings.keys()):
-            x_sequential_categorical.append(self.sequential_embeddings[key](inputs[key]).squeeze(2))
+            x_sequential_categorical.append(
+                self.sequential_embeddings[key](inputs[key]).squeeze(2)
+            )
 
         node_features = []
         edge_indices = []
@@ -665,8 +709,12 @@ class TorchGNN(torch.nn.Module):
             if valid_seq_numerical.size(0) == 0:
                 continue
 
-            valid_seq_embeddings = [embedding[i][mask[i]] for embedding in x_sequential_categorical]
-            valid_features = torch.cat([*valid_seq_embeddings, valid_seq_numerical], dim=-1)
+            valid_seq_embeddings = [
+                embedding[i][mask[i]] for embedding in x_sequential_categorical
+            ]
+            valid_features = torch.cat(
+                [*valid_seq_embeddings, valid_seq_numerical], dim=-1
+            )
             node_features.append(valid_features.to(self.device))
             num_nodes = valid_features.size(0)
             if num_nodes > 1:
@@ -674,7 +722,9 @@ class TorchGNN(torch.nn.Module):
                 edge = torch.stack([row, row + 1], dim=0) + ptr
                 edge_indices.append(edge.to(self.device))
 
-            batch_vector.append(torch.full((num_nodes,), i, dtype=torch.long).to(self.device))
+            batch_vector.append(
+                torch.full((num_nodes,), i, dtype=torch.long).to(self.device)
+            )
             ptr += num_nodes
 
         if len(node_features) == 0:
@@ -689,11 +739,17 @@ class TorchGNN(torch.nn.Module):
         batch = torch.cat(batch_vector, dim=0)
 
         if edge_indices.numel() > 0:
-            edge_indices = torch_geometric.utils.to_undirected(edge_indices, num_nodes=ptr)
-        edge_indices, _ = torch_geometric.utils.add_self_loops(edge_indices, num_nodes=ptr)
+            edge_indices = torch_geometric.utils.to_undirected(
+                edge_indices, num_nodes=ptr
+            )
+        edge_indices, _ = torch_geometric.utils.add_self_loops(
+            edge_indices, num_nodes=ptr
+        )
 
         # Hook: subclasses can inject global context into node features before GNN.
-        x_seq = self._pre_gnn_hook(x_seq, batch, x_global_categorical, x_global_numerical)
+        x_seq = self._pre_gnn_hook(
+            x_seq, batch, x_global_categorical, x_global_numerical
+        )
 
         xs = []
         for gconv, norm in zip(self.gconvs, self.norms):
@@ -787,12 +843,14 @@ class TorchTransformerPredictor(torch.nn.Module):
         g_in_dim = g_num_dim
         if g_in_dim > 0:
             for idx, units in enumerate(settings.numerical_dense_layers):
-                self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
-                    torch.nn.Linear(g_in_dim, units, bias=False)
-                )
+                self.numerical_layers[
+                    f"g{idx + len(global_categorical_maps)}_numerical_layer"
+                ] = torch.nn.Linear(g_in_dim, units, bias=False)
                 g_in_dim = units
 
-        g_cat_dim = sum(settings.global_embedding_layers[:len(global_categorical_maps)])
+        g_cat_dim = sum(
+            settings.global_embedding_layers[: len(global_categorical_maps)]
+        )
         g_enc_dim = g_cat_dim + g_in_dim
         self.global_proj = torch.nn.Linear(g_enc_dim, d_model)
 
@@ -804,7 +862,9 @@ class TorchTransformerPredictor(torch.nn.Module):
                 embedding_dim=settings.seq_embedding_layers[idx],
             )
 
-        s_cat_dim = sum(settings.seq_embedding_layers[:len(sequential_categorical_maps)])
+        s_cat_dim = sum(
+            settings.seq_embedding_layers[: len(sequential_categorical_maps)]
+        )
         s_num_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
         node_in_dim = s_cat_dim + s_num_dim
         self.node_proj = torch.nn.Linear(node_in_dim, d_model)
@@ -819,10 +879,11 @@ class TorchTransformerPredictor(torch.nn.Module):
             dim_feedforward=dim_feedforward,
             dropout=dropout,
             batch_first=True,
-            norm_first=True,   # Pre-LN: more stable gradient flow
+            norm_first=True,  # Pre-LN: more stable gradient flow
         )
         self.transformer = torch.nn.TransformerEncoder(
-            enc_layer, num_layers=num_layers,
+            enc_layer,
+            num_layers=num_layers,
             norm=torch.nn.LayerNorm(d_model),
             enable_nested_tensor=False,
         )
@@ -856,7 +917,9 @@ class TorchTransformerPredictor(torch.nn.Module):
         self.kl_loss = 0.0
 
         if device is None:
-            if torch.cuda.is_available() and os.environ.get("CUDA_VISIBLE_DEVICES") not in ["", "-1"]:
+            if torch.cuda.is_available() and os.environ.get(
+                "CUDA_VISIBLE_DEVICES"
+            ) not in ["", "-1"]:
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
@@ -872,8 +935,12 @@ class TorchTransformerPredictor(torch.nn.Module):
         B = next(iter(inputs.values())).shape[0]
         if B > self._INFERENCE_CHUNK:
             return torch.cat(
-                [self._forward_chunk({k: v[i:i + self._INFERENCE_CHUNK] for k, v in inputs.items()})
-                 for i in range(0, B, self._INFERENCE_CHUNK)],
+                [
+                    self._forward_chunk(
+                        {k: v[i : i + self._INFERENCE_CHUNK] for k, v in inputs.items()}
+                    )
+                    for i in range(0, B, self._INFERENCE_CHUNK)
+                ],
                 dim=0,
             )
         return self._forward_chunk(inputs)
@@ -888,39 +955,41 @@ class TorchTransformerPredictor(torch.nn.Module):
         for key in self.numerical_layers.keys():
             x_global_num = self.numerical_layers[key](x_global_num)
 
-        g = torch.cat([*x_global_cat, x_global_num], dim=-1)       # [B, g_enc_dim]
-        g_token = self.global_proj(g).unsqueeze(1)                  # [B, 1, d_model]
+        g = torch.cat([*x_global_cat, x_global_num], dim=-1)  # [B, g_enc_dim]
+        g_token = self.global_proj(g).unsqueeze(1)  # [B, 1, d_model]
 
         # ── Encode per-node features → [B, T, node_in_dim] ───────────────────
-        seq_num = inputs[self.sequential_input_keys["numerical"]]   # [B, T, s_num_dim]
-        pad_mask = (seq_num == 0.0).all(dim=-1)                     # [B, T] True = padded
+        seq_num = inputs[self.sequential_input_keys["numerical"]]  # [B, T, s_num_dim]
+        pad_mask = (seq_num == 0.0).all(dim=-1)  # [B, T] True = padded
 
         x_seq_cat = [
             self.sequential_embeddings[key](inputs[key]).squeeze(2)
             for key in self.sequential_embeddings.keys()
-        ]                                                           # list of [B, T, emb_dim]
-        x_seq = torch.cat([*x_seq_cat, seq_num], dim=-1)           # [B, T, node_in_dim]
-        x_seq = self.node_proj(x_seq)                              # [B, T, d_model]
+        ]  # list of [B, T, emb_dim]
+        x_seq = torch.cat([*x_seq_cat, seq_num], dim=-1)  # [B, T, node_in_dim]
+        x_seq = self.node_proj(x_seq)  # [B, T, d_model]
 
         # ── Add positional encodings ──────────────────────────────────────────
         B, T, _ = x_seq.shape
         seq_pos = torch.arange(1, T + 1, device=x_seq.device).unsqueeze(0).expand(B, -1)
-        x_seq = x_seq + self.pos_enc(seq_pos)                      # [B, T, d_model]
+        x_seq = x_seq + self.pos_enc(seq_pos)  # [B, T, d_model]
 
         g_pos = torch.zeros(B, 1, dtype=torch.long, device=g_token.device)
-        g_token = g_token + self.pos_enc(g_pos)                    # [B, 1, d_model]
+        g_token = g_token + self.pos_enc(g_pos)  # [B, 1, d_model]
 
         # ── Prepend global token → [B, 1+T, d_model] ─────────────────────────
-        full_seq = torch.cat([g_token, x_seq], dim=1)              # [B, 1+T, d_model]
+        full_seq = torch.cat([g_token, x_seq], dim=1)  # [B, 1+T, d_model]
 
         global_not_pad = torch.zeros(B, 1, dtype=torch.bool, device=seq_num.device)
-        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)   # [B, 1+T]
+        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)  # [B, 1+T]
 
         # ── Transformer encoder ───────────────────────────────────────────────
-        out = self.transformer(full_seq, src_key_padding_mask=full_mask)  # [B, 1+T, d_model]
+        out = self.transformer(
+            full_seq, src_key_padding_mask=full_mask
+        )  # [B, 1+T, d_model]
 
-        pooled = out[:, 0, :]                                      # [B, d_model]
-        return self.head(pooled)                                    # [B, output_size]
+        pooled = out[:, 0, :]  # [B, d_model]
+        return self.head(pooled)  # [B, output_size]
 
 
 class TorchTransformerHybridPredictor(torch.nn.Module):
@@ -976,12 +1045,14 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         g_in_dim = g_num_dim
         if g_in_dim > 0:
             for idx, units in enumerate(settings.numerical_dense_layers):
-                self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
-                    torch.nn.Linear(g_in_dim, units, bias=False)
-                )
+                self.numerical_layers[
+                    f"g{idx + len(global_categorical_maps)}_numerical_layer"
+                ] = torch.nn.Linear(g_in_dim, units, bias=False)
                 g_in_dim = units
 
-        g_cat_dim = sum(settings.global_embedding_layers[:len(global_categorical_maps)])
+        g_cat_dim = sum(
+            settings.global_embedding_layers[: len(global_categorical_maps)]
+        )
         g_enc_dim = g_cat_dim + g_in_dim
         self.global_proj = torch.nn.Linear(g_enc_dim, d_model)
 
@@ -993,7 +1064,9 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
                 embedding_dim=settings.seq_embedding_layers[idx],
             )
 
-        s_cat_dim = sum(settings.seq_embedding_layers[:len(sequential_categorical_maps)])
+        s_cat_dim = sum(
+            settings.seq_embedding_layers[: len(sequential_categorical_maps)]
+        )
         s_num_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
         node_in_dim = s_cat_dim + s_num_dim
         self.node_proj = torch.nn.Linear(node_in_dim, d_model)
@@ -1011,7 +1084,8 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
             norm_first=True,
         )
         self.transformer = torch.nn.TransformerEncoder(
-            enc_layer, num_layers=num_layers,
+            enc_layer,
+            num_layers=num_layers,
             norm=torch.nn.LayerNorm(d_model),
             enable_nested_tensor=False,
         )
@@ -1027,7 +1101,9 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
             batch_first=True,
         )
         self.resource_cls_residual = torch.nn.Parameter(
-            torch.full((self._N_RESOURCE, 1), 0.25)
+            torch.full(
+                (self._N_RESOURCE, 1), 0.5
+            )  # exp29: 0.5 vs 0.25 - more CLS weight
         )
         self.resource_heads = torch.nn.ModuleList()
         for _ in range(self._N_RESOURCE):
@@ -1043,9 +1119,13 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         timing_head_layers = []
         in_dim = d_model
         for out_dim in settings.dense_layers:
-            timing_head_layers.extend([torch.nn.Linear(in_dim, out_dim), torch.nn.ReLU()])
+            timing_head_layers.extend(
+                [torch.nn.Linear(in_dim, out_dim), torch.nn.ReLU()]
+            )
             in_dim = out_dim
-        timing_head_layers.extend([torch.nn.Linear(in_dim, n_timing), torch.nn.Softplus()])
+        timing_head_layers.extend(
+            [torch.nn.Linear(in_dim, n_timing), torch.nn.Softplus()]
+        )
         self.timing_head = torch.nn.Sequential(*timing_head_layers)
 
         # ── Bookkeeping ───────────────────────────────────────────────────────
@@ -1072,7 +1152,9 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         self.kl_loss = 0.0
 
         if device is None:
-            if torch.cuda.is_available() and os.environ.get("CUDA_VISIBLE_DEVICES") not in ["", "-1"]:
+            if torch.cuda.is_available() and os.environ.get(
+                "CUDA_VISIBLE_DEVICES"
+            ) not in ["", "-1"]:
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
@@ -1083,8 +1165,12 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         B = next(iter(inputs.values())).shape[0]
         if B > self._INFERENCE_CHUNK:
             return torch.cat(
-                [self._forward_chunk({k: v[i:i + self._INFERENCE_CHUNK] for k, v in inputs.items()})
-                 for i in range(0, B, self._INFERENCE_CHUNK)],
+                [
+                    self._forward_chunk(
+                        {k: v[i : i + self._INFERENCE_CHUNK] for k, v in inputs.items()}
+                    )
+                    for i in range(0, B, self._INFERENCE_CHUNK)
+                ],
                 dim=0,
             )
         return self._forward_chunk(inputs)
@@ -1100,18 +1186,18 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
             x_global_num = self.numerical_layers[key](x_global_num)
 
         g = torch.cat([*x_global_cat, x_global_num], dim=-1)
-        g_token = self.global_proj(g).unsqueeze(1)                  # [B, 1, d_model]
+        g_token = self.global_proj(g).unsqueeze(1)  # [B, 1, d_model]
 
         # ── Encode per-node → [B, T, d_model] ────────────────────────────────
-        seq_num = inputs[self.sequential_input_keys["numerical"]]   # [B, T, s_num_dim]
-        pad_mask = (seq_num == 0.0).all(dim=-1)                     # [B, T] True = padded
+        seq_num = inputs[self.sequential_input_keys["numerical"]]  # [B, T, s_num_dim]
+        pad_mask = (seq_num == 0.0).all(dim=-1)  # [B, T] True = padded
 
         x_seq_cat = [
             self.sequential_embeddings[key](inputs[key]).squeeze(2)
             for key in self.sequential_embeddings.keys()
         ]
         x_seq = torch.cat([*x_seq_cat, seq_num], dim=-1)
-        x_seq = self.node_proj(x_seq)                               # [B, T, d_model]
+        x_seq = self.node_proj(x_seq)  # [B, T, d_model]
 
         # ── Positional encodings ──────────────────────────────────────────────
         B, T, _ = x_seq.shape
@@ -1121,33 +1207,39 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         g_token = g_token + self.pos_enc(g_pos)
 
         # ── Self-attention over [global + sequence] ───────────────────────────
-        full_seq = torch.cat([g_token, x_seq], dim=1)              # [B, 1+T, d_model]
+        full_seq = torch.cat([g_token, x_seq], dim=1)  # [B, 1+T, d_model]
         global_not_pad = torch.zeros(B, 1, dtype=torch.bool, device=seq_num.device)
-        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)   # [B, 1+T]
+        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)  # [B, 1+T]
 
-        enc_out = self.transformer(full_seq, src_key_padding_mask=full_mask)  # [B, 1+T, d_model]
+        enc_out = self.transformer(
+            full_seq, src_key_padding_mask=full_mask
+        )  # [B, 1+T, d_model]
 
-        cls_out = enc_out[:, 0, :]                                   # [B, d_model]
+        cls_out = enc_out[:, 0, :]  # [B, d_model]
 
         # ── Resource branch: cross-attention from 4 learned query vectors ─────
-        r_queries = self.resource_queries.unsqueeze(0).expand(B, -1, -1)  # [B, 4, d_model]
+        r_queries = self.resource_queries.unsqueeze(0).expand(
+            B, -1, -1
+        )  # [B, 4, d_model]
         r_ctx, _ = self.resource_cross_attn(
-            r_queries, enc_out, enc_out,
+            r_queries,
+            enc_out,
+            enc_out,
             key_padding_mask=full_mask,
-        )                                                            # [B, 4, d_model]
+        )  # [B, 4, d_model]
         # Blend in the global CLS summary so each resource head starts from a
         # stable baseline before specializing via its query-specific attention.
         r_ctx = r_ctx + self.resource_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
         resource_preds = torch.cat(
             [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
             dim=-1,
-        )                                                            # [B, 4]
+        )  # [B, 4]
 
         # ── Timing branch: CLS token pooling ─────────────────────────────────
-        timing_preds = self.timing_head(cls_out)                     # [B, 2]
+        timing_preds = self.timing_head(cls_out)  # [B, 2]
 
         # ── Combine in target order: [bram,dsp,ff,lut,cycles,interval] ────────
-        return torch.cat([resource_preds, timing_preds], dim=-1)     # [B, 6]
+        return torch.cat([resource_preds, timing_preds], dim=-1)  # [B, 6]
 
     def to_config(self):
         return {
@@ -1224,12 +1316,14 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
         g_in_dim = g_num_dim
         if g_in_dim > 0:
             for idx, units in enumerate(settings.numerical_dense_layers):
-                self.numerical_layers[f"g{idx + len(global_categorical_maps)}_numerical_layer"] = (
-                    torch.nn.Linear(g_in_dim, units, bias=False)
-                )
+                self.numerical_layers[
+                    f"g{idx + len(global_categorical_maps)}_numerical_layer"
+                ] = torch.nn.Linear(g_in_dim, units, bias=False)
                 g_in_dim = units
 
-        g_cat_dim = sum(settings.global_embedding_layers[:len(global_categorical_maps)])
+        g_cat_dim = sum(
+            settings.global_embedding_layers[: len(global_categorical_maps)]
+        )
         g_enc_dim = g_cat_dim + g_in_dim
         self.global_proj = torch.nn.Linear(g_enc_dim, d_model)
 
@@ -1241,7 +1335,9 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
                 embedding_dim=settings.seq_embedding_layers[idx],
             )
 
-        s_cat_dim = sum(settings.seq_embedding_layers[:len(sequential_categorical_maps)])
+        s_cat_dim = sum(
+            settings.seq_embedding_layers[: len(sequential_categorical_maps)]
+        )
         s_num_dim = sequential_input_shape[-1] - len(sequential_categorical_maps)
         node_in_dim = s_cat_dim + s_num_dim
         self.node_proj = torch.nn.Linear(node_in_dim, d_model)
@@ -1259,7 +1355,8 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
             norm_first=True,
         )
         self.transformer = torch.nn.TransformerEncoder(
-            enc_layer, num_layers=num_layers,
+            enc_layer,
+            num_layers=num_layers,
             norm=torch.nn.LayerNorm(d_model),
             enable_nested_tensor=False,
         )
@@ -1273,7 +1370,9 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
         )
 
         # ── Resource branch: 4 learned query vectors + CLS residual (α=0.25) ──
-        self.resource_queries = torch.nn.Parameter(torch.randn(self._N_RESOURCE, d_model))
+        self.resource_queries = torch.nn.Parameter(
+            torch.randn(self._N_RESOURCE, d_model)
+        )
         self.resource_cls_residual = torch.nn.Parameter(
             torch.full((self._N_RESOURCE, 1), 0.25)
         )
@@ -1326,7 +1425,9 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
         self.kl_loss = 0.0
 
         if device is None:
-            if torch.cuda.is_available() and os.environ.get("CUDA_VISIBLE_DEVICES") not in ["", "-1"]:
+            if torch.cuda.is_available() and os.environ.get(
+                "CUDA_VISIBLE_DEVICES"
+            ) not in ["", "-1"]:
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
@@ -1337,8 +1438,12 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
         B = next(iter(inputs.values())).shape[0]
         if B > self._INFERENCE_CHUNK:
             return torch.cat(
-                [self._forward_chunk({k: v[i:i + self._INFERENCE_CHUNK] for k, v in inputs.items()})
-                 for i in range(0, B, self._INFERENCE_CHUNK)],
+                [
+                    self._forward_chunk(
+                        {k: v[i : i + self._INFERENCE_CHUNK] for k, v in inputs.items()}
+                    )
+                    for i in range(0, B, self._INFERENCE_CHUNK)
+                ],
                 dim=0,
             )
         return self._forward_chunk(inputs)
@@ -1354,18 +1459,18 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
             x_global_num = self.numerical_layers[key](x_global_num)
 
         g = torch.cat([*x_global_cat, x_global_num], dim=-1)
-        g_token = self.global_proj(g).unsqueeze(1)                  # [B, 1, d_model]
+        g_token = self.global_proj(g).unsqueeze(1)  # [B, 1, d_model]
 
         # ── Encode per-node → [B, T, d_model] ────────────────────────────────
-        seq_num = inputs[self.sequential_input_keys["numerical"]]   # [B, T, s_num_dim]
-        pad_mask = (seq_num == 0.0).all(dim=-1)                     # [B, T] True = padded
+        seq_num = inputs[self.sequential_input_keys["numerical"]]  # [B, T, s_num_dim]
+        pad_mask = (seq_num == 0.0).all(dim=-1)  # [B, T] True = padded
 
         x_seq_cat = [
             self.sequential_embeddings[key](inputs[key]).squeeze(2)
             for key in self.sequential_embeddings.keys()
         ]
         x_seq = torch.cat([*x_seq_cat, seq_num], dim=-1)
-        x_seq = self.node_proj(x_seq)                               # [B, T, d_model]
+        x_seq = self.node_proj(x_seq)  # [B, T, d_model]
 
         # ── Positional encodings ──────────────────────────────────────────────
         B, T, _ = x_seq.shape
@@ -1375,33 +1480,43 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
         g_token = g_token + self.pos_enc(g_pos)
 
         # ── Self-attention over [global + sequence] ───────────────────────────
-        full_seq = torch.cat([g_token, x_seq], dim=1)              # [B, 1+T, d_model]
+        full_seq = torch.cat([g_token, x_seq], dim=1)  # [B, 1+T, d_model]
         global_not_pad = torch.zeros(B, 1, dtype=torch.bool, device=seq_num.device)
-        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)   # [B, 1+T]
+        full_mask = torch.cat([global_not_pad, pad_mask], dim=1)  # [B, 1+T]
 
-        enc_out = self.transformer(full_seq, src_key_padding_mask=full_mask)  # [B, 1+T, d_model]
-        cls_out = enc_out[:, 0, :]                                  # [B, d_model]
+        enc_out = self.transformer(
+            full_seq, src_key_padding_mask=full_mask
+        )  # [B, 1+T, d_model]
+        cls_out = enc_out[:, 0, :]  # [B, d_model]
 
         # ── Resource branch: cross-attention + CLS residual (α≈0.25) ─────────
-        r_queries = self.resource_queries.unsqueeze(0).expand(B, -1, -1)  # [B, 4, d_model]
-        r_ctx, _ = self.cross_attn(r_queries, enc_out, enc_out, key_padding_mask=full_mask)
+        r_queries = self.resource_queries.unsqueeze(0).expand(
+            B, -1, -1
+        )  # [B, 4, d_model]
+        r_ctx, _ = self.cross_attn(
+            r_queries, enc_out, enc_out, key_padding_mask=full_mask
+        )
         r_ctx = r_ctx + self.resource_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
         resource_preds = torch.cat(
             [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
             dim=-1,
-        )                                                            # [B, 4]
+        )  # [B, 4]
 
         # ── Timing branch: cross-attention + CLS residual (α≈0.75) ──────────
-        t_queries = self.timing_queries.unsqueeze(0).expand(B, -1, -1)   # [B, 2, d_model]
-        t_ctx, _ = self.cross_attn(t_queries, enc_out, enc_out, key_padding_mask=full_mask)
+        t_queries = self.timing_queries.unsqueeze(0).expand(
+            B, -1, -1
+        )  # [B, 2, d_model]
+        t_ctx, _ = self.cross_attn(
+            t_queries, enc_out, enc_out, key_padding_mask=full_mask
+        )
         t_ctx = t_ctx + self.timing_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
         timing_preds = torch.cat(
             [head(t_ctx[:, i, :]) for i, head in enumerate(self.timing_heads)],
             dim=-1,
-        )                                                            # [B, 2]
+        )  # [B, 2]
 
         # ── Combine in target order: [bram,dsp,ff,lut,cycles,interval] ────────
-        return torch.cat([resource_preds, timing_preds], dim=-1)    # [B, 6]
+        return torch.cat([resource_preds, timing_preds], dim=-1)  # [B, 6]
 
     def to_config(self):
         return {
@@ -1438,17 +1553,25 @@ class KerasTransformerBlock(keras.layers.Layer):
     """
 
     def __init__(
-        self, embed_dim, num_heads, ff_dim, output_dim, dropout_rate=0.1, global_pool="last"
+        self,
+        embed_dim,
+        num_heads,
+        ff_dim,
+        output_dim,
+        dropout_rate=0.1,
+        global_pool="last",
     ):
         super().__init__()
 
         if global_pool not in ["avg", "last"]:
             raise ValueError(
-                f"global_pool must be one of [\"avg\", \"last\"], but got \"{global_pool}\""
+                f'global_pool must be one of ["avg", "last"], but got "{global_pool}"'
             )
         self.global_pool = global_pool
 
-        self.att = keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
+        self.att = keras.layers.MultiHeadAttention(
+            num_heads=num_heads, key_dim=embed_dim
+        )
         self.ffn = keras.Sequential(
             [
                 keras.layers.Dense(ff_dim, activation="relu"),
@@ -1474,7 +1597,9 @@ class KerasTransformerBlock(keras.layers.Layer):
         pos_encoding = self.positional_encoding(seq_len, inputs.shape[-1])
         inputs = inputs + pos_encoding
 
-        attn_output = self.att(inputs, inputs, attention_mask=attention_mask, training=training)
+        attn_output = self.att(
+            inputs, inputs, attention_mask=attention_mask, training=training
+        )
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(inputs + attn_output)
         ffn_output = self.ffn(out1)
@@ -1484,7 +1609,9 @@ class KerasTransformerBlock(keras.layers.Layer):
         if self.global_pool == "avg":
             mask = tf.cast(mask, outputs.dtype)
             mask = tf.expand_dims(mask, axis=-1)
-            outputs = tf.reduce_sum(outputs * mask, axis=1) / (tf.reduce_sum(mask, axis=1) + 1e-6)
+            outputs = tf.reduce_sum(outputs * mask, axis=1) / (
+                tf.reduce_sum(mask, axis=1) + 1e-6
+            )
         elif self.global_pool == "last":
             seq_lens = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
             indices = tf.stack([tf.range(tf.shape(outputs)[0]), seq_lens - 1], axis=1)
@@ -1626,7 +1753,9 @@ class TorchBayesianLinear(torch.nn.Module):
         kl_bias = (
             0.5
             * (
-                (b_var + self.bias_mu**2) / prior_var - (self.bias_logvar - self.prior_logvar) - 1.0
+                (b_var + self.bias_mu**2) / prior_var
+                - (self.bias_logvar - self.prior_logvar)
+                - 1.0
             ).sum()
         )
 
