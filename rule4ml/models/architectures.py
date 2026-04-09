@@ -1102,8 +1102,8 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         )
         self.resource_cls_residual = torch.nn.Parameter(
             torch.full(
-                (self._N_RESOURCE, 1), 0.5
-            )  # exp29: 0.5 vs 0.25 - more CLS weight
+                (self._N_RESOURCE, 1), 0.25
+            )  # 0.15 and 0.5 both regressed, 0.25 is optimal
         )
         self.resource_heads = torch.nn.ModuleList()
         for _ in range(self._N_RESOURCE):
@@ -1375,8 +1375,8 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
         )
         self.resource_cls_residual = torch.nn.Parameter(
             torch.full(
-                (self._N_RESOURCE, 1), 0.15
-            )  # exp30: 0.15 vs 0.25 - less CLS, more specialization
+                (self._N_RESOURCE, 1), 0.25
+            )  # 0.15 and 0.5 both regressed, 0.25 is optimal
         )
         self.resource_heads = torch.nn.ModuleList()
         for _ in range(self._N_RESOURCE):
