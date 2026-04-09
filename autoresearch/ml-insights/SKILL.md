@@ -27,24 +27,12 @@ metadata:
 ## Hyperparameter Insights
 
 - T_0=30 optimal for 4-layer Transformer
-- LR 1e-3, batch 256 optimal
+- LR 1e-3, batch 256, weight_decay 1e-4 all optimal
+- Lower weight_decay (5e-5) significantly hurt SMAPE (+0.9pp) — regularization is important
 - CLS residual 0.25 optimal
-
-## Feature Insights
-
-- Per-layer weight_bits from precision parsing was DSP breakthrough
-- Per-layer reuse_factor override gave modest improvement — keep
-- SMAPE eps fixed from 1.0 to ~0.1, true SMAPE baseline ~6.3
-
-## Target-Specific Insights
-
-- BRAM improved significantly with Huber loss (18.28 SMAPE from 19.56)
-- DSP is now weakest target (7.08 SMAPE) — may need targeted improvement
-- FF/LUT intermediate (~3.1-3.5)
-- CYCLES/INTERVAL well-predicted (~1.5)
 
 ## Promising Directions
 
-1. Tune Huber delta parameter (currently 0.5)
-2. Try pure Huber loss without MSLE
-3. Focus on DSP improvement
+1. Focus on DSP improvement (now the weakest target at 7.08 SMAPE)
+2. Try adding gradient clipping or other regularization
+3. Consider different learning rate warmup strategies
