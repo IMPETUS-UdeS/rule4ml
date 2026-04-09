@@ -1374,7 +1374,9 @@ class TorchTransformerFullQueryPredictor(torch.nn.Module):
             torch.randn(self._N_RESOURCE, d_model)
         )
         self.resource_cls_residual = torch.nn.Parameter(
-            torch.full((self._N_RESOURCE, 1), 0.25)
+            torch.full(
+                (self._N_RESOURCE, 1), 0.15
+            )  # exp30: 0.15 vs 0.25 - less CLS, more specialization
         )
         self.resource_heads = torch.nn.ModuleList()
         for _ in range(self._N_RESOURCE):
