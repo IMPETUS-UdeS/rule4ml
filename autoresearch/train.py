@@ -236,7 +236,7 @@ def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
         log_pred,
         log_true,
         reduction="none",
-        delta=0.3,  # exp37: delta=0.3 vs 0.5
+        delta=0.5,  # 0.5 is optimal
     )
     return torch.mean(
         torch.mean(mse + 0.1 * huber, dim=0)  # 0.1 is optimal
@@ -287,17 +287,30 @@ def train_predictor(
     )
 
     optimizer = torch.optim.AdamW(
-        predictor.parameters(), lr=LEARNING_RATE, weight_decay=1e-4
+        predictor.parameters(),
+        lr=LEARNING_RATE,
+        weight_decay=5e-5,  # exp38: 5e-5 vs 1e-4
     )
 
-    # Cosine annealing: T_max is estimated as total_budget / (one epoch cost).
-    # We use a generous T_max so the LR decays slowly. Restarts every ~20 epochs.
-    # T_0=20: fits ~2 full restarts within the full ~40 epoch budget
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         T_0=30,
         T_mult=1,
-        eta_min=1e-6,  # T_0=30 is optimal
+        eta_min=1e-6,
+    )
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,
+        T_0=30,
+        T_mult=1,
+        eta_min=1e-6,
+    )
+
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=5,  # exp38: 5 epoch LR warmup
     )
 
     log_dir = os.path.join(base_log_dir, group_name)
