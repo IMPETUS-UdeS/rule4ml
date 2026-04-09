@@ -236,10 +236,10 @@ def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
         log_pred,
         log_true,
         reduction="none",
-        delta=1.0,  # exp34: delta=1.0 vs 0.5
+        delta=0.5,  # 0.5 is optimal
     )
     return torch.mean(
-        torch.mean(mse + 0.1 * huber, dim=0)
+        torch.mean(mse + 0.2 * huber, dim=0)  # exp35: 0.2 vs 0.1 Huber weight
     )  # exp33: add Huber component
 
 
