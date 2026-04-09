@@ -233,7 +233,10 @@ def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     log_true = torch.log1p(torch.clamp(y_true, min=0.0))
     mse = (log_pred - log_true) ** 2
     huber = torch.nn.functional.huber_loss(
-        log_pred, log_true, reduction="none", delta=0.5
+        log_pred,
+        log_true,
+        reduction="none",
+        delta=1.0,  # exp34: delta=1.0 vs 0.5
     )
     return torch.mean(
         torch.mean(mse + 0.1 * huber, dim=0)
