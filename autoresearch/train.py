@@ -212,10 +212,10 @@ def make_predictor(
         sequential_categorical_maps=SEQUENTIAL_CATEGORICAL_MAPS,
         name=name,
         device=device,
-        d_model=192,  # exp24: 192 vs 128 (idea-045)
-        nhead=6,  # exp24: 6 vs 4 (192/6=32 per head)
+        d_model=128,
+        nhead=4,
         num_layers=4,
-        dim_feedforward=384,  # exp24: 384 vs 256
+        dim_feedforward=256,
         dropout=0.1,
     )
 
