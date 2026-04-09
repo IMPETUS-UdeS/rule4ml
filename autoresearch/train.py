@@ -227,19 +227,17 @@ def make_predictor(
 
 def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     """
-    Mean Squared Log Error + Huber component for robustness.
+    Pure Huber loss in log1p space for robustness to outliers.
     """
     log_pred = torch.log1p(torch.clamp(y_pred, min=0.0))
     log_true = torch.log1p(torch.clamp(y_true, min=0.0))
-    mse = (log_pred - log_true) ** 2
-    huber = torch.nn.functional.huber_loss(
-        log_pred,
-        log_true,
-        reduction="none",
-        delta=0.5,  # 0.5 is optimal
-    )
     return torch.mean(
-        torch.mean(mse + 0.2 * huber, dim=0)  # exp35: 0.2 vs 0.1 Huber weight
+        torch.mean(
+            torch.nn.functional.huber_loss(log_pred, log_true, reduction="none"), dim=0
+        )
+    )  # exp36: pure Huber
+    return torch.mean(
+        torch.mean(mse + 0.1 * huber, dim=0)  # 0.1 is optimal
     )  # exp33: add Huber component
 
 
