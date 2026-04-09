@@ -141,7 +141,7 @@ def main():
         max_workers=JSON_MAX_WORKERS,
     )
     meta_data, global_inputs, targets = get_global_data(
-        json_data, normalize=False, max_workers=JSON_MAX_WORKERS
+        json_data, normalize=True, max_workers=JSON_MAX_WORKERS
     )
     sequential_inputs = get_sequential_data(json_data, max_workers=JSON_MAX_WORKERS)
 

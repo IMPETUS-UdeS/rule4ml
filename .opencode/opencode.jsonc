@@ -1,6 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "GLM-5.1",
   "instructions": ["autoresearch/AGENTS.md"],
   "permission": {
     "*": "allow",
