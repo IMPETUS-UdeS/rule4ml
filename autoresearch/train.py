@@ -182,7 +182,7 @@ NORMALIZE_TARGETS = True
 # Hyperparameters
 # --------------------------------------------------------------------------
 
-BATCH_SIZE = 512  # exp28: 512 vs 256 for more stable gradients
+BATCH_SIZE = 256  # 512 regressed, reverting
 LEARNING_RATE = 1e-3  # best: 1e-3
 
 # --------------------------------------------------------------------------
