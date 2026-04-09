@@ -216,7 +216,7 @@ def make_predictor(
         nhead=4,
         num_layers=4,
         dim_feedforward=256,
-        dropout=0.1,
+        dropout=0.15,  # exp39: 0.15 vs 0.1 for more regularization
     )
 
 
