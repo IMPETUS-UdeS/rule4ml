@@ -337,8 +337,8 @@ def train_predictor(
             loss = msle_loss(predictor(inputs), targets)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
-                predictor.parameters(), max_norm=0.5
-            )  # exp42: 0.5 vs 1.0
+                predictor.parameters(), max_norm=1.0
+            )  # 0.5 regressed
             optimizer.step()
 
             running_loss += loss.item()
