@@ -53,7 +53,7 @@ uv run autoresearch --branch-name ${BRANCH} --commit-hash ${HASH} > autoresearch
 
 **Primary metrics**: `mean R2` (higher is better) and `mean SMAPE` (lower is better), across all 6 targets. You also have access to the individual `SMAPE`, `R2` and `RMSE` values for each target, which should help analyze trade-offs and identify near-misses.
 
-**Creativity and exploration**: Do not let this become a hyperparameter-tuning-only exercise. The best improvements might come from creative, out-of-the-box changes to how the input is represented, the model architecture, or the training process. Don't be afraid to try bold ideas, even if they add complexity, as long as they have a chance of drastically improving the results. Some experiments can be simple tweaks too — use your judgment to decide what is worth trying.
+**Creativity and exploration**: Do not let this become a hyperparameter-tuning-only exercise. The best improvements might come from creative, out-of-the-box changes to how the input is represented, the model architecture, or the training process. Do not be afraid to try bold ideas, even if they add complexity. **You can never lose the progress, the commit history keeps track of successful experiments**. Some experiments can be simple tweaks too — use your judgment to decide what is worth trying.
 
 **The first run**: Your very first run should always be to establish the baseline, running `train.py` as-is and recording the results with a `baseline` status.
 
@@ -106,7 +106,7 @@ During any stage of the process, log ideas in `autoresearch/reports/ideas.tsv` a
 id    author    category    description    created_at    priority    status    attempt_count    last_attempt    notes
 ```
 
-- `priority`: subjective expected impact — one of [`low`, `medium`, `high`]. Reflects expected impact, not probability of success
+- `priority`: expected impact — one of [`low`, `medium`, `high`]. Reflects expected impact, not probability of success
 - `attempt_count`: increment every time you try to implement the same idea, even from a different angle. Use notes to clarify differences in approach
 - `last_attempt`: either a timestamp of the last attempt or `branch:commit` if the idea was accepted
 
@@ -184,19 +184,20 @@ The experiment runs on the dedicated branch.
 
 1. Every time an experiment finishes, you MUST re-read this `AGENTS.md` file to refresh your state and ensure you are following the protocol correctly.
 2. Look at the git state: the current branch and commit you are on.
-3. Every 4 experiments, you **MUST** think of and record in `ideas.tsv`, with `medium` to `high` priority, a more radical change to explore different angles. You are **HIGHLY ENCOURAGED** to try it as soon as you can.
-4. Plan the next experiment. This can be an idea from `ideas.tsv` or a new one you come up with by looking at the code, the training data, the available resources, results so far, or just thinking hard about potential improvements.
-5. Implement the experiment — modify `autoresearch/train.py` and create any supporting files, classes, functions needed.
-6. git commit and get the short hash
-7. Run the experiment with the issued command
-8. Check the log once after 120 seconds to ensure it's running and not crashing immediately. **DO NOT SPAM CHECK COMMANDS** — trust the code to run and wait for the running process to finish
-9. While waiting, use a portion of `TIME_BUDGET` (few minutes tops, **NOT THE ENTIRE** `TIME_BUDGET`) to plan future ideas, review the codebase for new angles, or inspect the training data and available resources. Record findings in `ideas.tsv` or `issues.tsv`.
-10. Poll for completion: `while kill -0 $PID 2>/dev/null; do sleep 60; done; echo "Done"`. Read out the results using `grep` on `autoresearch/runs/${BRANCH}-${HASH}.log`
-11. If the output is empty, the run likely crashed. Run `tail -n 50 autoresearch/runs/${BRANCH}-${HASH}.log` to read the stack trace and attempt a fix. If you cannot fix it after a few attempts, give up and report to the human.
-12. Record the results in `results.tsv`. Update `ideas.tsv` if an existing idea was tried. Update `issues.tsv` if a non-breaking issue was encountered. **Do not commit the TSV files — leave them untracked by git.**
-13. **Update `ml-insights` skill**: update `autoresearch/ml-insights/SKILL.md` with any new findings — what worked, what didn't, target-specific observations, and update the "Last updated" line and best result metrics. The `autoresearch/ml-insights` directory is symlinked to your local configuration's `ml-insights` skill and is your evolving memory across sessions. Keep it concise so it can be loaded quickly. Remove stale content; prefer synthesized lessons over per-experiment narratives.
-14. If the all-target metrics improve, keep the commit and continue building on it.
-15. Otherwise, you git reset back to where you started
+3. Every 4 experiments, you **MUST** think of and record in `ideas.tsv`, with `medium` to `high` priority, a more radical change to explore different angles. You are **HIGHLY ENCOURAGED** to try as the next idea.
+4. If the 5 latest experiments have shown no improvement, you **MUST** try a different angle rather than iterating on the same approach.
+5. Plan the next experiment. This can be an idea from `ideas.tsv` or a new one you come up with by looking at the code, the training data, the available resources, results so far.
+6. Implement the experiment — modify `autoresearch/train.py` and create any supporting files, classes, functions needed.
+7. git commit and get the short hash
+8. Run the experiment with the issued command
+9. Check the log once after 120 seconds to ensure it's running and not crashing immediately. **DO NOT SPAM CHECK COMMANDS** — trust the code to run and wait for the running process to finish
+10. While waiting, use a portion of `TIME_BUDGET` (few minutes tops, **NOT THE ENTIRE** `TIME_BUDGET`) to plan future ideas, review the codebase for new angles, or inspect the training data and available resources. Record findings in `ideas.tsv` or `issues.tsv`.
+11. Poll for completion: `while kill -0 $PID 2>/dev/null; do sleep 60; done; echo "Done"`. Read out the results using `grep` on `autoresearch/runs/${BRANCH}-${HASH}.log`
+12. If the output is empty, the run likely crashed. Run `tail -n 50 autoresearch/runs/${BRANCH}-${HASH}.log` to read the stack trace and attempt a fix. If you cannot fix it after a few attempts, give up and report to the human.
+13. Record the results in `results.tsv`. Update `ideas.tsv` if an existing idea was tried. Update `issues.tsv` if a non-breaking issue was encountered. **Do not commit the TSV files — leave them untracked by git.**
+14. **Update `ml-insights` skill**: update `autoresearch/ml-insights/SKILL.md` with any new findings — what worked, what didn't, target-specific observations, and update the "Last updated" line and best result metrics. The `autoresearch/ml-insights` directory is symlinked to your local configuration's `ml-insights` skill and is your evolving memory across sessions. Keep it concise so it can be loaded quickly. Remove stale content; prefer synthesized lessons over per-experiment narratives.
+15. If the all-target metrics improve, keep the commit and continue building on it.
+16. Otherwise, you git reset back to where you started
 
 **Timeout**: If a run significantly exceeds `TIME_BUDGET` (2 times or more) with no progress logged, kill it and treat it as a failure.
 
