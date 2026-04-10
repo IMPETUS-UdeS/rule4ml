@@ -27,12 +27,11 @@ metadata:
 ## Hyperparameter Insights
 
 - T_0=30 optimal for 4-layer Transformer
-- LR 1e-3, batch 256, weight_decay 1e-4 all optimal
-- Lower weight_decay (5e-5) significantly hurt SMAPE (+0.9pp) — regularization is important
-- CLS residual 0.25 optimal
+- LR 1e-3, batch 256, weight_decay 1e-4, dropout 0.1 all optimal
+- Lower dropout (0.05) and higher dropout (0.15) both regressed — regularization is balanced
 
 ## Promising Directions
 
 1. Focus on DSP improvement (now the weakest target at 7.08 SMAPE)
-2. Try adding gradient clipping or other regularization
-3. Consider different learning rate warmup strategies
+2. Try different optimizer (e.g., SGD with momentum)
+3. Consider adding gradient clipping

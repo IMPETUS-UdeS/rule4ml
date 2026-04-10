@@ -286,10 +286,11 @@ def train_predictor(
         pin_memory=pin_memory,
     )
 
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.SGD(
         predictor.parameters(),
         lr=LEARNING_RATE,
-        weight_decay=1e-4,  # 1e-4 is optimal
+        weight_decay=1e-4,
+        momentum=0.9,  # exp41: SGD vs AdamW
     )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
