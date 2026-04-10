@@ -25,7 +25,7 @@ HLS4ML_TAGS = {"0.8.1": "v0.8.1", "1.1.0": "v1.1.0"}
 # Constants
 # --------------------------------------------------------------------------
 
-TIME_BUDGET = 3600  # wall-clock training seconds (excludes startup and evaluation)
+TIME_BUDGET = 60  # wall-clock training seconds (excludes startup and evaluation)
 ALL_TARGETS = ["bram", "dsp", "ff", "lut", "cycles", "interval"]
 
 EVERYTHING_SEED = 42
@@ -265,8 +265,9 @@ def predict(
 
 def evaluate(
     wrappers: List[Tuple],
-    test_inputs_df: pd.DataFrame,
-    test_targets_df: pd.DataFrame,
+    df: pd.DataFrame,
+    global_feature_labels: List[str],
+    sequential_feature_labels: List[str],
 ) -> dict:
     """
     Locked evaluation. Calls predict() internally for each trained model group
@@ -276,46 +277,108 @@ def evaluate(
     Args:
         wrappers: List of (wrapper, group_targets) tuples, one per trained group.
             group_targets is a list of target name strings (e.g. ['bram', 'dsp']).
-        test_inputs_df: Feature DataFrame for the test split (targets stripped automatically).
-        test_targets_df: DataFrame with one column per target in ALL_TARGETS.
+        df: Full dataframe containing all samples and columns (features + targets).
+        global_feature_labels: List of global feature column names.
+        sequential_feature_labels: List of sequential feature column names.
         device:         Torch device for inference.
 
     Returns:
-        Flat dict with keys:
-            mean_smape            — mean SMAPE across all six targets (primary metric)
-            mean_r2               — mean R² across all six targets
-            smape_<target>        — per-target SMAPE
-            r2_<target>           — per-target R²
-            rmse_<target>         — per-target RMSE
+        Dict with keys:
+            mean_smape            — float, mean SMAPE across all six targets
+            mean_r2               — float, mean R² across all six targets
+            smape_<target>        — dict {arch, ..., all architectures} per-target SMAPE
+            r2_<target>           — dict {arch, ..., all architectures} per-target R²
+            rmse_<target>         — dict {arch, ..., all architectures} per-target RMSE
     """
 
-    predictions = {}
-    for wrapper, group_targets in wrappers:
-        preds = predict(wrapper, test_inputs_df)
-        for i, target in enumerate(group_targets):
-            if target in predictions:
-                raise ValueError(f"Duplicate prediction target during evaluation: {target}")
-            predictions[target] = preds[:, i]
+    df["architecture"] = df["model_name"].apply(get_architecture_name)
+    unique_architectures = sorted(df["architecture"].unique())
 
-    missing_targets = [t for t in ALL_TARGETS if t not in predictions]
+    inputs_df = build_inputs_df(df, global_feature_labels, sequential_feature_labels)
+    targets_df = df[ALL_TARGETS]
+
+    # Per-architecture predictions
+    arch_data = {
+        arch: {target: {"y_true": [], "y_pred": []} for target in ALL_TARGETS}
+        for arch in unique_architectures
+    }
+    wrapper_targets = set()
+    for wrapper, group_targets in wrappers:
+        if wrapper_targets.intersection(group_targets):
+            raise ValueError(
+                "Overlapping target groups detected in wrappers. "
+                "Each wrapper must have a unique set of targets."
+            )
+        wrapper_targets.update(group_targets)
+        preds = predict(wrapper, inputs_df)
+
+        for arch in unique_architectures:
+            arch_mask = df["architecture"] == arch
+            if not arch_mask.any():
+                continue
+
+            arch_targets = targets_df.loc[arch_mask].values
+            arch_preds = preds[arch_mask]
+
+            for i, target in enumerate(wrapper.output_labels):
+                target_idx = ALL_TARGETS.index(target)
+                arch_data[arch][target]["y_true"].append(arch_targets[:, target_idx])
+                arch_data[arch][target]["y_pred"].append(arch_preds[:, i])
+
+    missing_targets = set(ALL_TARGETS) - wrapper_targets
     if missing_targets:
         raise ValueError(
             "Evaluation requires predictions for all targets. Missing: "
             + ", ".join(missing_targets)
         )
 
-    trained = list(ALL_TARGETS)
-    smape_vals, r2_vals, rmse_vals = {}, {}, {}
-    for t in trained:
-        y_true = test_targets_df[t].values
-        y_pred = np.asarray(predictions[t]).ravel()
-        smape_vals[t] = smape(y_true, y_pred)
-        r2_vals[t] = r2(y_true, y_pred)
-        rmse_vals[t] = rmse(y_true, y_pred)
+    all_y_true = { t: [] for t in ALL_TARGETS }
+    all_y_pred = { t: [] for t in ALL_TARGETS }
+    smape_vals = { t: {} for t in ALL_TARGETS }
+    r2_vals = { t: {} for t in ALL_TARGETS }
+    rmse_vals = { t: {} for t in ALL_TARGETS }
+
+    # Per-architecture breakdown
+    for arch in unique_architectures:
+        for target in ALL_TARGETS:
+            y_true = (
+                np.concatenate(arch_data[arch][target]["y_true"])
+                if arch_data[arch][target]["y_true"]
+                else np.array([])
+            )
+            y_pred = (
+                np.concatenate(arch_data[arch][target]["y_pred"])
+                if arch_data[arch][target]["y_pred"]
+                else np.array([])
+            )
+
+            all_y_true[target].append(y_true)
+            all_y_pred[target].append(y_pred)
+
+            valid = ~np.isnan(y_true) & ~np.isnan(y_pred)
+            if valid.sum() > 0:
+                smape_vals[target][arch] = smape(y_true[valid], y_pred[valid])
+                r2_vals[target][arch] = r2(y_true[valid], y_pred[valid])
+                rmse_vals[target][arch] = rmse(y_true[valid], y_pred[valid])
+
+    # Overall metrics
+    for target in ALL_TARGETS:
+        y_true = np.concatenate(all_y_true[target])
+        y_pred = np.concatenate(all_y_pred[target])
+
+        valid = ~np.isnan(y_true) & ~np.isnan(y_pred)
+        if valid.sum() > 0:
+            smape_vals[target]["all architectures"] = smape(y_true[valid], y_pred[valid])
+            r2_vals[target]["all architectures"] = r2(y_true[valid], y_pred[valid])
+            rmse_vals[target]["all architectures"] = rmse(y_true[valid], y_pred[valid])
+        else:
+            smape_vals[target]["all architectures"] = float("nan")
+            r2_vals[target]["all architectures"] = float("nan")
+            rmse_vals[target]["all architectures"] = float("nan")
 
     metrics = {
-        "mean_smape": float(np.mean(list(smape_vals.values()))),
-        "mean_r2": float(np.mean(list(r2_vals.values()))),
+        "smape_mean": float(np.nanmean([smape_vals[t]["all architectures"] for t in ALL_TARGETS])),
+        "r2_mean": float(np.nanmean([r2_vals[t]["all architectures"] for t in ALL_TARGETS])),
     }
     for t in ALL_TARGETS:
         metrics[f"smape_{t}"] = smape_vals[t]
@@ -345,21 +408,27 @@ def print_summary(
         label = f"{key}:"
         return f"{label:<{col_width}}{val}"
 
+    for k, v in metrics.items():
+        if isinstance(v, float):
+            metrics[k] = round(v, 4)
+        elif isinstance(v, dict):
+            metrics[k] = {tk: round(tv, 4) if isinstance(tv, float) else tv for tk, tv in v.items()}
+
     lines = ["---"]
-    lines.append(line("mean_smape", f"{metrics['mean_smape']:.4f}"))
+    lines.append(line("smape_mean", json.dumps(metrics["smape_mean"])))
     for t in ALL_TARGETS:
         v = metrics.get(f"smape_{t}")
         if v is not None:
-            lines.append(line(f"smape_{t}", f"{v:.4f}"))
-    lines.append(line("mean_r2", f"{metrics['mean_r2']:.4f}"))
+            lines.append(line(f"smape_{t}", json.dumps(v)))
+    lines.append(line("r2_mean", json.dumps(metrics["r2_mean"])))
     for t in ALL_TARGETS:
         v = metrics.get(f"r2_{t}")
         if v is not None:
-            lines.append(line(f"r2_{t}", f"{v:.4f}"))
+            lines.append(line(f"r2_{t}", json.dumps(v)))
     for t in ALL_TARGETS:
         v = metrics.get(f"rmse_{t}")
         if v is not None:
-            lines.append(line(f"rmse_{t}", f"{v:.2f}"))
+            lines.append(line(f"rmse_{t}", json.dumps(v)))
 
     if num_epochs is not None:
         lines.append(line("num_epochs", json.dumps(num_epochs)))

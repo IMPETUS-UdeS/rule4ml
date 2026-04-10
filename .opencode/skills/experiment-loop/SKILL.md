@@ -28,7 +28,7 @@ while kill -0 $PID 2>/dev/null; do sleep 60; done; echo "Done"
 
 ## Extract Results
 ```bash
-grep -E "^(mean_smape|smape_|mean_r2|r2_|rmse_|num_epochs|training_seconds|total_seconds|peak_vram_mb|platform):" autoresearch/runs/${BRANCH}/${HASH}/run.log
+grep -E "^(smape_|r2_|rmse_|num_epochs|training_seconds|total_seconds|peak_vram_mb|platform):" autoresearch/runs/${BRANCH}/${HASH}/run.log
 ```
 
 If output is empty → likely crashed. Check:
@@ -40,7 +40,8 @@ tail -50 autoresearch/runs/${BRANCH}/${HASH}/run.log
 Add a row to `autoresearch/reports/results.tsv` (tab-separated). Fields:
 - `agentic_model`: your model name
 - `branch`, `commit`: from git
-- All SMAPE/R2/RMSE values (use -1.0 for crashes)
+- `smape_mean`, `r2_mean`: scalars (-1.0 for crashes)
+- Per-target SMAPE/R2/RMSE: record the full dict string from the log (e.g. `{"conv1d": 8.1, "dense": 10.4, "all architectures": 9.9}`), -1.0 for crashes
 - `num_epochs`: from log (JSON dict of group→epoch count)
 - `platform`: GPU name or "CPU"
 - `vram_gb`: peak VRAM / 1024 (0.0 for crashes)

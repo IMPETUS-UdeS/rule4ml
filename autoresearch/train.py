@@ -176,7 +176,7 @@ SEQUENTIAL_FEATURE_LABELS = [
 # --------------------------------------------------------------------------
 
 TARGET_GROUPS = {"all": ALL_TARGETS}
-NORMALIZE_TARGETS = True
+NORMALIZE_TARGETS = False
 
 # --------------------------------------------------------------------------
 # Hyperparameters
@@ -454,19 +454,13 @@ def main():
         n_train = cached["meta"]["split_lengths"]["train"]
         n_val = cached["meta"]["split_lengths"]["val"]
 
-        raw_test_df = load_split_from_json(
+        test_raw_df = load_split_from_json(
             "test",
             GLOBAL_CATEGORICAL_MAPS,
             SEQUENTIAL_CATEGORICAL_MAPS,
             normalize=NORMALIZE_TARGETS,
         )
-        test_inputs_df = build_inputs_df(
-            raw_test_df,
-            GLOBAL_FEATURE_LABELS,
-            SEQUENTIAL_FEATURE_LABELS,
-        )
-        test_targets_df = raw_test_df[ALL_TARGETS].copy()
-        n_test = len(raw_test_df)
+        n_test = len(test_raw_df)
 
         print(
             f"  train: {n_train} | val: {n_val} | test: {n_test} samples (from cache)",
@@ -487,8 +481,8 @@ def main():
             print(f"  {s}: {len(df)} samples", flush=True)
 
         inputs_df_splits_full = {
-            s: build_inputs_df(df, GLOBAL_FEATURE_LABELS, SEQUENTIAL_FEATURE_LABELS)
-            for s, df in raw_splits.items()
+            s: build_inputs_df(raw_splits[s], GLOBAL_FEATURE_LABELS, SEQUENTIAL_FEATURE_LABELS)
+            for s in ("train", "val")
         }
 
         # Use a throw-away wrapper/GNN just to define input structure for build_inputs()
@@ -539,8 +533,7 @@ def main():
         )
         print(f"  Saved tensor cache: {cache_path}", flush=True)
 
-        test_inputs_df = inputs_df_splits_full["test"]
-        test_targets_df = raw_splits["test"][ALL_TARGETS]
+        test_raw_df = raw_splits["test"]
 
     branch_name = cli_args.branch_name
     commit_hash = cli_args.commit_hash
@@ -581,8 +574,9 @@ def main():
 
     metrics = evaluate(
         trained_wrappers,
-        test_inputs_df,
-        test_targets_df,
+        test_raw_df,
+        GLOBAL_FEATURE_LABELS,
+        SEQUENTIAL_FEATURE_LABELS,
     )
     peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024 if use_gpu else 0.0
     total_seconds = time.time() - total_start

@@ -65,26 +65,26 @@ Once the script finishes, it prints a summary:
 
 ```text
 ---
-mean_smape:            0.5419
-smape_bram:            0.4654
-smape_dsp:             0.4314
-smape_ff:              0.8431
-smape_lut:             0.5123
-smape_cycles:          0.6871
-smape_interval:        0.3121
-mean_r2:               0.4579
-r2_bram:               0.1387
-r2_dsp:                0.8942
-r2_ff:                 0.6387
-r2_lut:                0.4432
-r2_cycles:             0.1685
-r2_interval:           0.4641
-rmse_bram:             120.45
-rmse_dsp:              85.32
-rmse_ff:               300.12
-rmse_lut:              150.67
-rmse_cycles:           1500.67
-rmse_interval:         1523.89
+smape_mean:            0.5419
+smape_bram:            {"conv1d": 0.3821, "conv2d": 0.5102, "dense": 0.4891, "all architectures": 0.4654}
+smape_dsp:             {"conv1d": 0.3104, "conv2d": 0.4721, "dense": 0.4812, "all architectures": 0.4314}
+smape_ff:              {"conv1d": 0.7234, "conv2d": 0.8901, "dense": 0.8734, "all architectures": 0.8431}
+smape_lut:             {"conv1d": 0.4201, "conv2d": 0.5534, "dense": 0.5412, "all architectures": 0.5123}
+smape_cycles:          {"conv1d": 0.5901, "conv2d": 0.7234, "dense": 0.6812, "all architectures": 0.6871}
+smape_interval:        {"conv1d": 0.2134, "conv2d": 0.3412, "dense": 0.3301, "all architectures": 0.3121}
+r2_mean:               0.4579
+r2_bram:               {"conv1d": 0.2341, "conv2d": 0.1102, "dense": 0.0812, "all architectures": 0.1387}
+r2_dsp:                {"conv1d": 0.9234, "conv2d": 0.8712, "dense": 0.8901, "all architectures": 0.8942}
+r2_ff:                 {"conv1d": 0.7012, "conv2d": 0.6234, "dense": 0.6012, "all architectures": 0.6387}
+r2_lut:                {"conv1d": 0.5123, "conv2d": 0.4234, "dense": 0.4012, "all architectures": 0.4432}
+r2_cycles:             {"conv1d": 0.2341, "conv2d": 0.1512, "dense": 0.1201, "all architectures": 0.1685}
+r2_interval:           {"conv1d": 0.5234, "conv2d": 0.4512, "dense": 0.4301, "all architectures": 0.4641}
+rmse_bram:             {"conv1d": 98.12, "conv2d": 134.21, "dense": 128.34, "all architectures": 120.45}
+rmse_dsp:              {"conv1d": 71.34, "conv2d": 92.12, "dense": 88.21, "all architectures": 85.32}
+rmse_ff:               {"conv1d": 251.12, "conv2d": 334.21, "dense": 312.34, "all architectures": 300.12}
+rmse_lut:              {"conv1d": 124.12, "conv2d": 167.34, "dense": 158.21, "all architectures": 150.67}
+rmse_cycles:           {"conv1d": 1234.12, "conv2d": 1634.21, "dense": 1589.34, "all architectures": 1500.67}
+rmse_interval:         {"conv1d": 1289.12, "conv2d": 1612.34, "dense": 1578.21, "all architectures": 1523.89}
 num_epochs:            {"bram": 35, "dsp-lut": 40, "ff": 35, "cycles": 30, "interval": 30}
 training_seconds:      3600.00
 total_seconds:         3700.00
@@ -165,10 +165,10 @@ agentic_model    branch    commit    smape_mean    smape_bram    smape_dsp    sm
 - branch: the git branch this experiment was run on
 - git commit hash (short, 7 chars)
 - mean SMAPE across all 6 targets, -1.0 for crashes
-- SMAPE for each target, -1.0 for crashes
+- SMAPE for each target as the full dict string from the log (e.g. `{"conv1d": 8.1, "dense": 10.4, "all architectures": 9.9}`), -1.0 for crashes
 - mean R2 across all 6 targets, -1.0 for crashes
-- R2 for each target, -1.0 for crashes
-- RMSE for each target, -1.0 for crashes
+- R2 for each target as the full dict string from the log, -1.0 for crashes
+- RMSE for each target as the full dict string from the log, -1.0 for crashes
 - dictionary mapping target group names to number of epochs trained
 - platform that the experiment ran on (e.g. "NVIDIA RTX 3090", "NVIDIA A100 40GB", etc.). Log "CPU" if no GPU was used
 - peak vram usage in GB — use 0.0 for crashes or N/A if on CPU
