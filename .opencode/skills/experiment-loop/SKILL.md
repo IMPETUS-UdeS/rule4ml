@@ -51,14 +51,14 @@ Add a row to `autoresearch/reports/results.tsv` (tab-separated). Fields:
 **Do NOT commit TSV files. Leave them untracked by git.**
 
 ## Decision Logic (Post-Experiment)
-- **Clear improvement** (R2 up AND SMAPE down AND RMSE down on ALL targets) → `keep`, continue building on this commit
-- **Mixed result** → use judgment. Large mean SMAPE/R2 improvements with minor per-target regressions are worth keeping. Small improvements with significant regressions → `discard`
-- **No improvement** → `discard`, git reset to previous commit
-- **Crash** → try to fix and rerun once. If still crashes, report in `issues.tsv`
+- **Clear improvement**: (R2 up AND SMAPE down AND RMSE down on ALL targets) → `keep`, continue building on this commit
+- **Mixed result**: use judgment. Large mean SMAPE/R2 improvements with minor per-target regressions are worth keeping. Small improvements with significant regressions → `discard`
+- **No improvement**: `discard`, git reset to previous commit
+- **Crash**: try to fix and rerun once. If still crashes, report in `issues.tsv`
 
 ## Git Workflow
 - After `keep`: stay on the commit, plan next experiment
-- After `discard`: `git reset --hard HEAD~1` to undo the commit, then plan next experiment on the previous commit
+- After `discard`: `git reset --hard HEAD~1` to undo the commit, then plan next experiment on the previous commit. **You only keep commits that improved**. Do not ignore this and keep the failed commits in the history.
 - Every 4 experiments: record a medium/high-priority radical idea in `ideas.tsv`
 
 ## Updating Insights Skill

@@ -128,3 +128,4 @@ hls4ml/
 uv.lock
 !.gemini/.env
 *secret*
+autoresearch/ml-insights/SKILL.md
