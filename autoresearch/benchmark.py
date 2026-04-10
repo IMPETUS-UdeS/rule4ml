@@ -17,6 +17,7 @@ from autoresearch.prepare import (
     JSON_BATCH_SIZE,
     JSON_MAX_WORKERS,
     build_inputs_df,
+    get_architecture_name,
     get_split_json_patterns,
     predict,
     print_summary,
@@ -74,13 +75,6 @@ def print_arch_summary(
     )
     print(line, flush=True)
     print(flush=True)
-
-
-def get_architecture_name(model_name):
-    architecture = str(model_name.split("_")[0].split("/")[-1])
-    if architecture.lower() in ["model", "2layer", "3layer", "latency", "resource"]:
-        architecture = "dense"
-    return architecture
 
 
 def load_wrappers(path: str, device: torch.device) -> Sequence[BaseModelWrapper]:

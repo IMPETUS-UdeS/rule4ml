@@ -171,8 +171,8 @@ SEQUENTIAL_FEATURE_LABELS = [
 
 # --------------------------------------------------------------------------
 # Targets
-# Can be separate predictor for each target,
-# or groups of targets as desired.
+# - Can be separate predictor for each target, or groups of targets as desired.
+# - Can be normalized with board maximum available (percentage) or left as raw values.
 # --------------------------------------------------------------------------
 
 TARGET_GROUPS = {"all": ALL_TARGETS}

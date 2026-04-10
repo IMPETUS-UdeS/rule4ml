@@ -1073,12 +1073,10 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
         # }
 
         targets = {
-            "bram": max(1 / max_bram, (bram / max_bram)) * 100
-            if bram is not None
-            else None,
-            "dsp": max(1 / max_dsp, (dsp / max_dsp)) * 100 if dsp is not None else None,
-            "ff": max(1 / max_ff, (ff / max_ff)) * 100 if ff is not None else None,
-            "lut": max(1 / max_lut, (lut / max_lut)) * 100 if lut is not None else None,
+            "bram": (bram / max_bram) * 100 if bram is not None else None,
+            "dsp": (dsp / max_dsp) * 100 if dsp is not None else None,
+            "ff": (ff / max_ff) * 100 if ff is not None else None,
+            "lut": (lut / max_lut) * 100 if lut is not None else None,
         }
 
     cycles_min = latency_report.get("cycles_min", None)

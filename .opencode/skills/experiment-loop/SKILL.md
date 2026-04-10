@@ -12,12 +12,12 @@ metadata:
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 HASH=$(git rev-parse --short HEAD)
-uv run autoresearch --branch-name ${BRANCH} --commit-hash ${HASH} > autoresearch/runs/${BRANCH}-${HASH}.log 2>&1 & PID=$!
+uv run autoresearch --branch-name ${BRANCH} --commit-hash ${HASH} > autoresearch/runs/${BRANCH}/${HASH}/run.log 2>&1 & PID=$!
 ```
 
 ## Safety Check (60 seconds after start)
 ```bash
-sleep 60 && head -20 autoresearch/runs/${BRANCH}-${HASH}.log
+sleep 60 && head -20 autoresearch/runs/${BRANCH}/${HASH}/run.log
 ```
 Look for: training epoch lines, no Python stack trace, GPU device name printed.
 
@@ -28,12 +28,12 @@ while kill -0 $PID 2>/dev/null; do sleep 60; done; echo "Done"
 
 ## Extract Results
 ```bash
-grep -E "^(mean_smape|smape_|mean_r2|r2_|rmse_|num_epochs|training_seconds|total_seconds|peak_vram_mb|platform):" autoresearch/runs/${BRANCH}-${HASH}.log
+grep -E "^(mean_smape|smape_|mean_r2|r2_|rmse_|num_epochs|training_seconds|total_seconds|peak_vram_mb|platform):" autoresearch/runs/${BRANCH}/${HASH}/run.log
 ```
 
 If output is empty → likely crashed. Check:
 ```bash
-tail -50 autoresearch/runs/${BRANCH}-${HASH}.log
+tail -50 autoresearch/runs/${BRANCH}/${HASH}/run.log
 ```
 
 ## Recording Results
