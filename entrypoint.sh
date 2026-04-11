@@ -9,6 +9,8 @@ fi
 
 cd /workspace
 
+cp /pyproject.toml /workspace/pyproject.toml
+
 # Link the pre-built venv, uv.lock and datasets folder 
 if [ ! -e /workspace/.venv ]; then
     ln -s /venv /workspace/.venv
@@ -18,13 +20,6 @@ if [ ! -e /workspace/uv.lock ]; then
 fi
 if [ ! -e /workspace/datasets ]; then
     ln -s /datasets /workspace/datasets
-fi
-
-# Re-apply GPU-specific torch sources so uv run uses the pre-built venv
-if [ "$GPU_TYPE" = "cuda" ]; then
-    uv add --index pytorch-cuda=https://download.pytorch.org/whl/cu128 torch; \
-elif [ "$GPU_TYPE" = "rocm" ]; then
-    uv add --index pytorch-rocm=https://download.pytorch.org/whl/rocm7.2 torch pytorch-triton-rocm; \
 fi
 
 # Set git identity and trust the workspace

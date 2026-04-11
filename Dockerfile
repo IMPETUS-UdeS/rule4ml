@@ -50,11 +50,12 @@ RUN if [ "$GPU_TYPE" = "cuda" ]; then \
         uv add --index pytorch-rocm=https://download.pytorch.org/whl/rocm7.2 torch pytorch-triton-rocm; \
     fi
 
-# Install python dependencies, move files, then wipe the repo
+# Install python dependencies, move files, then wipe the workspace (re-cloned at entry)
 RUN uv sync && \
     mv /workspace/.venv /venv && \
     mv /workspace/uv.lock /uv.lock && \
     mv /workspace/datasets /datasets && \
+    mv /workspace/pyproject.toml /pyproject.toml && \
     rm -rf /workspace
 ENV VIRTUAL_ENV=/venv
 ENV PATH="/venv/bin:$PATH"
