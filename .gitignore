@@ -126,6 +126,7 @@ _version.py
 format.py
 hls4ml/
 uv.lock
+uv.toml
 !.gemini/.env
 *secret*
 autoresearch/ml-insights/SKILL.md
