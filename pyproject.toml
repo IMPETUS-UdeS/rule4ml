@@ -61,6 +61,10 @@ rule4ml = ["parsers/supported_boards.json"]
 [tool.setuptools.exclude-package-data]
 "*" = ["data_gen/*", "datasets/*", "notebooks/*", "tests/*"]
 
+[project.scripts]
+autoresearch = "autoresearch.train:main"
+benchmark = "autoresearch.benchmark:main"
+
 [[tool.uv.index]]
 name = "pytorch-rocm"
 url = "https://download.pytorch.org/whl/rocm7.2"
@@ -68,7 +72,3 @@ url = "https://download.pytorch.org/whl/rocm7.2"
 [tool.uv.sources]
 torch = { index = "pytorch-rocm" }
 pytorch-triton-rocm = { index = "pytorch-rocm" }
-
-[project.scripts]
-autoresearch = "autoresearch.train:main"
-benchmark = "autoresearch.benchmark:main"

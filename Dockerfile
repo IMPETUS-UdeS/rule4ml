@@ -43,6 +43,9 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g @google/gemini-cli
 RUN npm install -g @openai/codex
 
+# Strip everything from the first uv index block to the end of the file
+RUN sed -i '/\[\[tool.uv.index\]\]/,$d' pyproject.toml
+
 # Add GPU-specific torch sources to pyproject.toml
 RUN if [ "$GPU_TYPE" = "cuda" ]; then \
         uv add --index pytorch-cuda=https://download.pytorch.org/whl/cu128 torch; \
