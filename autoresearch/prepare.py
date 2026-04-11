@@ -25,7 +25,7 @@ HLS4ML_TAGS = {"0.8.1": "v0.8.1", "1.1.0": "v1.1.0"}
 # Constants
 # --------------------------------------------------------------------------
 
-TIME_BUDGET = 60  # wall-clock training seconds (excludes startup and evaluation)
+TIME_BUDGET = 3600  # wall-clock training seconds (excludes startup and evaluation)
 ALL_TARGETS = ["bram", "dsp", "ff", "lut", "cycles", "interval"]
 
 EVERYTHING_SEED = 42
