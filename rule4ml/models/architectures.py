@@ -1043,6 +1043,9 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         self.numerical_layers = torch.nn.ModuleDict()
         g_num_dim = max(0, global_input_shape[-1] - len(global_categorical_maps))
         g_in_dim = g_num_dim
+        # Per-feature BatchNorm normalizes wildly different feature scales
+        # (e.g. total_mult std~383K vs dropout_count std~1) before projection.
+        self.global_input_bn = torch.nn.BatchNorm1d(g_num_dim) if g_num_dim > 0 else None
         if g_in_dim > 0:
             for idx, units in enumerate(settings.numerical_dense_layers):
                 self.numerical_layers[
@@ -1128,6 +1131,13 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         )
         self.timing_head = torch.nn.Sequential(*timing_head_layers)
 
+        # ── Uncertainty head support (exp34) ──────────────────────────────────
+        self._store_repr = False
+        self._last_r_ctx = None
+        self._last_cls_out = None
+        self.uncertainty_resource_heads = None
+        self.uncertainty_timing_head = None
+
         # ── Bookkeeping ───────────────────────────────────────────────────────
         self.global_input_keys = {
             "categorical": [name for name in self.global_embeddings.keys()],
@@ -1175,13 +1185,25 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
             )
         return self._forward_chunk(inputs)
 
-    def _forward_chunk(self, inputs):
+    def _encode_representations(self, inputs):
+        """Shared backbone encoder. Returns (r_ctx, cls_out, full_mask).
+
+        r_ctx:     [B, N_RESOURCE, d_model] — per-resource cross-attention context
+        cls_out:   [B, d_model] — global CLS token output
+        full_mask: [B, 1+T] — padding mask (True = padded)
+        """
         # ── Encode global → [B, 1, d_model] ──────────────────────────────────
         x_global_cat = [
             self.global_embeddings[key](inputs[key]).squeeze(1)
             for key in self.global_embeddings.keys()
         ]
         x_global_num = inputs[self.global_input_keys["numerical"]]
+        if self.global_input_bn is not None:
+            # Log1p compress heavy-tailed features (total_mult std~382K, reuse_max std~4K)
+            # before BatchNorm1d so BN statistics are not dominated by extreme values.
+            # log1p(0) = 0 so zero-inflated arch-indicator features are preserved.
+            x_global_num = torch.log1p(x_global_num.clamp(min=0))
+            x_global_num = self.global_input_bn(x_global_num)
         for key in self.numerical_layers.keys():
             x_global_num = self.numerical_layers[key](x_global_num)
 
@@ -1190,7 +1212,11 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
 
         # ── Encode per-node → [B, T, d_model] ────────────────────────────────
         seq_num = inputs[self.sequential_input_keys["numerical"]]  # [B, T, s_num_dim]
-        pad_mask = (seq_num == 0.0).all(dim=-1)  # [B, T] True = padded
+        pad_mask = (seq_num == 0.0).all(dim=-1)  # [B, T] True = padded (before transform)
+        # Log1p compress sequential numerical features: layer_op_mult and layer_parameter_count
+        # span large ranges. log1p(0)=0 preserves zeros (padded rows + zero-inflated features
+        # like layer_filters=0 for dense layers). Safe: no division, no amplification risk.
+        seq_num = torch.log1p(seq_num.clamp(min=0))
 
         x_seq_cat = [
             self.sequential_embeddings[key](inputs[key]).squeeze(2)
@@ -1230,6 +1256,12 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         # Blend in the global CLS summary so each resource head starts from a
         # stable baseline before specializing via its query-specific attention.
         r_ctx = r_ctx + self.resource_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
+
+        return r_ctx, cls_out, full_mask
+
+    def _forward_chunk(self, inputs):
+        r_ctx, cls_out, _ = self._encode_representations(inputs)
+
         resource_preds = torch.cat(
             [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
             dim=-1,
@@ -1244,6 +1276,7 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
     def to_config(self):
         return {
             "name": self.name,
+
             "settings": self.settings.to_config(),
             "global_input_shape": self.global_input_shape,
             "sequential_input_shape": self.sequential_input_shape,
@@ -1261,6 +1294,92 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
     def from_config(cls, config):
         config["settings"] = GNNSettings.from_config(config["settings"])
         return cls(**config)
+
+
+class TorchTransformerHybridPredictorGated(TorchTransformerHybridPredictor):
+    """
+    Extends TorchTransformerHybridPredictor with learned binary gates per resource target.
+
+    Each resource target (BRAM/DSP/FF/LUT) gets a sigmoid gate head that predicts
+    P(target > 0). During training, the gate softly modulates resource predictions
+    (gate * pred_log), enabling the model to learn to zero-out resource predictions
+    for zero-valued targets. Gate bias is initialized to +2.0 (sigmoid(2)≈0.88),
+    keeping gates nearly open at the start to avoid zeroing non-zero targets early.
+
+    Loss: log_mse_loss(gate * resource_pred, log_targets) + gate_weight * BCE(gate, binary_targets)
+    """
+
+    def __init__(self, *args, gate_bce_weight: float = 0.05, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gate_bce_weight = gate_bce_weight
+
+        # Gate heads: Linear → Sigmoid, bias init +2.0 so sigmoid(2)≈0.88 at start
+        self.resource_gates = torch.nn.ModuleList()
+        for _ in range(self._N_RESOURCE):
+            gate_linear = torch.nn.Linear(self.d_model, 1)
+            torch.nn.init.constant_(gate_linear.bias, 2.0)
+            self.resource_gates.append(
+                torch.nn.Sequential(gate_linear, torch.nn.Sigmoid())
+            )
+        # Move gates to same device as the rest of the model
+        self.resource_gates.to(self.device)
+
+    def _forward_chunk(self, inputs):
+        r_ctx, cls_out, _ = self._encode_representations(inputs)
+
+        # Resource value predictions in log space
+        resource_preds = torch.cat(
+            [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
+            dim=-1,
+        )  # [B, 4]
+
+        # Gate probabilities P(target > 0)
+        gates = torch.cat(
+            [gate(r_ctx[:, i, :]) for i, gate in enumerate(self.resource_gates)],
+            dim=-1,
+        )  # [B, 4]
+
+        # Soft gate: attenuate resource preds by P(target>0)
+        # At inference: near-zero gate → near-zero log pred → expm1≈0 → rounds to 0
+        gated_resource_preds = gates * resource_preds  # [B, 4]
+
+        timing_preds = self.timing_head(cls_out)  # [B, 2]
+
+        return torch.cat([gated_resource_preds, timing_preds], dim=-1)  # [B, 6]
+
+    def forward_with_gates(self, inputs):
+        """Training forward: returns (preds [B,6], gates [B,4]) for BCE loss computation."""
+        B = next(iter(inputs.values())).shape[0]
+        if B > self._INFERENCE_CHUNK:
+            results = [
+                self._forward_chunk_with_gates(
+                    {k: v[i : i + self._INFERENCE_CHUNK] for k, v in inputs.items()}
+                )
+                for i in range(0, B, self._INFERENCE_CHUNK)
+            ]
+            preds = torch.cat([r[0] for r in results], dim=0)
+            gates = torch.cat([r[1] for r in results], dim=0)
+            return preds, gates
+        return self._forward_chunk_with_gates(inputs)
+
+    def _forward_chunk_with_gates(self, inputs):
+        r_ctx, cls_out, _ = self._encode_representations(inputs)
+
+        resource_preds = torch.cat(
+            [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
+            dim=-1,
+        )  # [B, 4]
+
+        gates = torch.cat(
+            [gate(r_ctx[:, i, :]) for i, gate in enumerate(self.resource_gates)],
+            dim=-1,
+        )  # [B, 4]
+
+        gated_resource_preds = gates * resource_preds  # [B, 4]
+        timing_preds = self.timing_head(cls_out)  # [B, 2]
+
+        preds = torch.cat([gated_resource_preds, timing_preds], dim=-1)  # [B, 6]
+        return preds, gates
 
 
 class TorchTransformerFullQueryPredictor(torch.nn.Module):

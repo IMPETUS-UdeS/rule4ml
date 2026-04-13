@@ -7,10 +7,12 @@ os.environ.setdefault(
 )  # Set before torch/HSA runtime initializes to prevent ROCm GPU hangs on RDNA3
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow verbose logging
 
+import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from autoresearch.prepare import (
+    get_architecture_name,
     ALL_TARGETS,
     CACHE_DIR,
     EVERYTHING_SEED,
@@ -28,8 +30,10 @@ from autoresearch.prepare import (
     set_seed,
     tensor_cache_key,
 )
-from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
+from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictorGated
 from rule4ml.models.wrappers import TorchModelWrapper
+
+from autoresearch.wrappers_ext import MCDropoutWrapper
 
 set_seed(EVERYTHING_SEED)
 
@@ -167,6 +171,8 @@ SEQUENTIAL_FEATURE_LABELS = [
     # DSP routing features (exp20)
     "layer_dsp_eligible",  # 1 if layer_weight_bits <= 18 (fits in DSP48E2 B input)
     "layer_dsp_multiplier",  # DSP-routed multiplications per layer
+    # Analytical initiation interval (exp32, idea-027)
+    "layer_analytical_ii",  # params / max(reuse, 1) — directly encodes II formula
 ]
 
 # --------------------------------------------------------------------------
@@ -190,10 +196,13 @@ LEARNING_RATE = 1e-3  # best: 1e-3
 # --------------------------------------------------------------------------
 
 
+GATE_BCE_WEIGHT = 0.05  # BCE weight for gate supervision (light — regression dominates)
+
+
 def make_predictor(
     output_size: int, device: torch.device, name: str
-) -> TorchTransformerHybridPredictor:
-    return TorchTransformerHybridPredictor(
+) -> TorchTransformerHybridPredictorGated:
+    return TorchTransformerHybridPredictorGated(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
@@ -213,10 +222,10 @@ def make_predictor(
         name=name,
         device=device,
         d_model=128,
-        nhead=4,
+        nhead=8,  # 4→8 heads (head_dim 32→16): more diverse attention, same FLOPS, no epoch penalty
         num_layers=4,
-        dim_feedforward=256,
-        dropout=0.1,  # 0.05 and 0.15 both regressed, reverting
+        dim_feedforward=512,  # 256→512: more capacity in FF layers; log1p preproc enables better use
+        dropout=0.15,  # exp33: 0.1→0.15 for better MC-Dropout uncertainty signal
     )
 
 
@@ -225,24 +234,14 @@ def make_predictor(
 # --------------------------------------------------------------------------
 
 
-def msle_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+def log_mse_loss(y_pred: torch.Tensor, y_true_log: torch.Tensor) -> torch.Tensor:
     """
-    Mean Squared Log Error, averaged per target then across targets.
-    Equivalent to MSE in log1p space — penalises relative errors which
-    aligns well with SMAPE-style evaluation.
+    MSE loss for log-transformed targets.
+    y_true_log is already log1p(raw_target) — model predicts directly in log space.
+    Unlike MSLE (which double-logs), this cleanly maps Softplus outputs to log-scale
+    targets, giving uniform gradient scale across the full target range.
     """
-    log_pred = torch.log1p(torch.clamp(y_pred, min=0.0))
-    log_true = torch.log1p(torch.clamp(y_true, min=0.0))
-    mse = (log_pred - log_true) ** 2
-    huber = torch.nn.functional.huber_loss(
-        log_pred,
-        log_true,
-        reduction="none",
-        delta=0.5,  # 0.5 is optimal
-    )
-    return torch.mean(
-        torch.mean(mse + 0.1 * huber, dim=0)  # 0.1 is optimal
-    )
+    return torch.mean(torch.mean((y_pred - y_true_log) ** 2, dim=0))
 
 
 # --------------------------------------------------------------------------
@@ -264,7 +263,7 @@ def train_predictor(
         device=device,
         name=f"{'-'.join(t.upper() for t in group_targets)}_Transformer",
     )
-    wrapper = TorchModelWrapper()
+    wrapper = MCDropoutWrapper()
     wrapper.set_model(predictor)
     wrapper.set_input_labels(
         [f for f in GLOBAL_FEATURE_LABELS if f not in GLOBAL_CATEGORICAL_MAPS],
@@ -273,16 +272,18 @@ def train_predictor(
     wrapper.set_output_labels(group_targets)
 
     pin_memory = device.type == "cuda"
+    # Transform targets to log space: model learns to predict log1p(raw_target)
+    log_target_tensors = {s: torch.log1p(target_tensors[s]) for s in target_tensors}
     train_loader = make_dataloader(
         input_tensors_splits["train"],
-        target_tensors["train"],
+        log_target_tensors["train"],
         BATCH_SIZE,
         shuffle=True,
         pin_memory=pin_memory,
     )
     val_loader = make_dataloader(
         input_tensors_splits["val"],
-        target_tensors["val"],
+        log_target_tensors["val"],
         BATCH_SIZE,
         shuffle=False,
         pin_memory=pin_memory,
@@ -326,6 +327,7 @@ def train_predictor(
     progress = 0.0
     training_time = 0.0
     best_val_loss = float("inf")
+    bce_fn = torch.nn.BCELoss()
 
     while True:
         running_loss = 0.0
@@ -336,7 +338,14 @@ def train_predictor(
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
             targets = targets.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            loss = msle_loss(predictor(inputs), targets)
+            preds, gates = predictor.forward_with_gates(inputs)
+            mse = log_mse_loss(preds, targets)
+            # BCE on resource gates: binary label = (raw_target > 0)
+            # targets are already log1p-transformed; expm1 recovers raw values
+            raw_resource = torch.expm1(targets[:, : predictor._N_RESOURCE])
+            binary_targets = (raw_resource > 0).float()
+            bce = bce_fn(gates, binary_targets)
+            loss = mse + GATE_BCE_WEIGHT * bce
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 predictor.parameters(), max_norm=1.0
@@ -359,7 +368,12 @@ def train_predictor(
             for inputs, targets in val_loader:
                 inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
                 targets = targets.to(device, non_blocking=True)
-                val_loss += msle_loss(predictor(inputs), targets).item()
+                preds, gates = predictor.forward_with_gates(inputs)
+                mse = log_mse_loss(preds, targets)
+                raw_resource = torch.expm1(targets[:, : predictor._N_RESOURCE])
+                binary_targets = (raw_resource > 0).float()
+                bce = bce_fn(gates, binary_targets)
+                val_loss += (mse + GATE_BCE_WEIGHT * bce).item()
         val_loss /= max(len(val_loader), 1)
         writer.add_scalar("Loss/Val", val_loss, n_epochs)
 
@@ -589,3 +603,26 @@ def main():
         peak_vram_mb=peak_vram_mb,
         platform=device_name,
     )
+
+    # ── MC-Dropout uncertainty analysis ──────────────────────────────────────
+    test_raw_df["_architecture"] = test_raw_df["model_name"].apply(get_architecture_name)
+    unique_archs = sorted(test_raw_df["_architecture"].unique())
+
+    for wrapper, group_targets in trained_wrappers:
+        if not hasattr(wrapper, "predict_uncertainty_from_df"):
+            continue
+        test_inputs_df = build_inputs_df(
+            test_raw_df, GLOBAL_FEATURE_LABELS, SEQUENTIAL_FEATURE_LABELS
+        )
+        safe_inputs = test_inputs_df.drop(
+            columns=[c for c in ALL_TARGETS if c in test_inputs_df.columns]
+        )
+        _, variance = wrapper.predict_uncertainty_from_df(safe_inputs)
+
+        for i, target in enumerate(group_targets):
+            by_arch = {
+                arch: float(np.mean(variance[test_raw_df["_architecture"].values == arch, i]))
+                for arch in unique_archs
+            }
+            by_arch["all architectures"] = float(np.mean(variance[:, i]))
+            print(f"uncertainty_mc_variance_{target}: {by_arch}", flush=True)

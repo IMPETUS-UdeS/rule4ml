@@ -130,3 +130,4 @@ uv.toml
 !.gemini/.env
 *secret*
 autoresearch/ml-insights/SKILL.md
+*.lock

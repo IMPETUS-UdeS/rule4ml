@@ -505,6 +505,11 @@ def get_layers_data(
         pipelined = float(reuse_factor > 1)
         dsp_eligible = float(layer_weight_bits <= DSP_WEIGHT_BITS_THRESHOLD)
         dsp_multiplier_estimation = multiplier_estimation * dsp_eligible
+        # Analytical initiation interval: params / reuse ≈ II for Dense/Conv layers.
+        # Dense II = ceil(n_in*n_out/reuse); Conv II = ceil(kernel*channels*filters/reuse).
+        # Both simplify to ceil(param_count / reuse). Providing this quotient directly
+        # avoids the model having to learn it from separate params/reuse features.
+        analytical_ii = float(layer_parameters) / max(float(reuse_factor), 1.0)
 
         data = {
             "layer_type": layer_type.lower(),
@@ -529,6 +534,7 @@ def get_layers_data(
             "layer_pipelined": pipelined,
             "layer_dsp_eligible": dsp_eligible,
             "layer_dsp_multiplier": dsp_multiplier_estimation,
+            "layer_analytical_ii": analytical_ii,
         }
         layers_data.append(data)
 
@@ -931,16 +937,16 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         if layer_class in features_to_extract:
             features_to_extract[layer_class]["count"] += 1
             for feature_key, layer_key in zip(
-                ["inputs", "outputs", "parameters", "reuse"],
-                ["input_shape", "output_shape", "parameters", "reuse_factor"],
+                ["inputs", "outputs", "parameters", "reuse", "filters", "kernel_size", "strides"],
+                ["input_shape", "output_shape", "parameters", "reuse_factor", "filters", "kernel_size", "strides"],
             ):
-                if feature_key in features_to_extract[layer_class]:
+                if feature_key in features_to_extract[layer_class] and layer_key in layer:
                     features_to_extract[layer_class][feature_key] = get_layer_features(
                         features_to_extract[layer_class][feature_key], layer[layer_key]
                     )
 
     adjusted_features = adjust_feature_values(
-        features_to_extract, keys=["inputs", "outputs", "parameters", "reuse"]
+        features_to_extract, keys=["inputs", "outputs", "parameters", "reuse", "filters", "kernel_size", "strides"]
     )
     extracted_features = unwrap_nested_dicts(adjusted_features)
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
