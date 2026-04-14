@@ -85,33 +85,112 @@ class MCDropoutWrapper(LogTransformWrapper):
 
 class SeparateHeadWrapper(LogTransformWrapper):
     """
-    Two-phase uncertainty estimation: freeze backbone after MSE training,
-    train lightweight residual-prediction heads (exp34).
-
-    Phase 1: pure MSE training (same as LogTransformWrapper).
-    Phase 2: freeze backbone, train one MLP per target to predict
-        log1p(|residual_in_log1p_space|) using per-target representations.
-
-    At inference: point estimates from backbone, uncertainty from heads.
+    Post-hoc uncertainty heads trained on frozen-backbone residuals.
     """
 
     _N_RESOURCE = 4
+
+    def __init__(self):
+        super().__init__()
+        self.uncertainty_calibration = None
+        self.uncertainty_spread_weight = None
+
+    @staticmethod
+    def _apply_monotonic_calibration(raw_uncertainty, calibration):
+        if calibration is None:
+            return raw_uncertainty
+
+        calibrated = np.array(raw_uncertainty, copy=True)
+        for i, target_cal in enumerate(calibration):
+            if target_cal is None:
+                continue
+            x = np.asarray(target_cal["x"], dtype=np.float32)
+            y = np.asarray(target_cal["y"], dtype=np.float32)
+            if len(x) == 0 or len(y) == 0:
+                continue
+            calibrated[:, i] = np.interp(
+                calibrated[:, i],
+                x,
+                y,
+                left=float(y[0]),
+                right=float(y[-1]),
+            )
+        return calibrated
+
+    @staticmethod
+    def _apply_spread_fusion(mean_uncertainty, std_uncertainty, spread_weight):
+        if spread_weight is None or std_uncertainty is None:
+            return mean_uncertainty
+        fused = np.array(mean_uncertainty, copy=True)
+        for i, alpha in enumerate(spread_weight):
+            fused[:, i] = fused[:, i] + float(alpha) * std_uncertainty[:, i]
+        return fused
 
     def _save_weights(self, save_dir):
         backbone_path = os.path.join(save_dir, f"{self.model.name}.weights.pt")
         backbone_sd = {
             k: v
             for k, v in self.model.state_dict().items()
-            if not k.startswith(("uncertainty_resource_heads", "uncertainty_timing_head"))
+            if not k.startswith(
+                (
+                    "uncertainty_resource_heads",
+                    "uncertainty_timing_head",
+                    "uncertainty_resource_ensemble_heads",
+                    "uncertainty_timing_ensemble_heads",
+                    "uncertainty_resource_modulators",
+                    "uncertainty_timing_modulators",
+                    "uncertainty_resource_quantile_heads",
+                    "uncertainty_timing_quantile_head",
+                )
+            )
         }
         torch.save(backbone_sd, backbone_path)
-        if self.model.uncertainty_resource_heads is not None:
+        if (
+            self.model.uncertainty_resource_heads is not None
+            or self.model.uncertainty_resource_ensemble_heads is not None
+            or self.model.uncertainty_resource_quantile_heads is not None
+        ):
             unc_path = os.path.join(save_dir, f"{self.model.name}.uncertainty.pt")
-            torch.save(
-                {
+            if self.model.uncertainty_resource_ensemble_heads is not None:
+                if self.model.uncertainty_resource_modulators is not None:
+                    unc_payload = {
+                        "kind": "modulated_ensemble",
+                        "resource_ensemble_heads": self.model.uncertainty_resource_ensemble_heads.state_dict(),
+                        "timing_ensemble_heads": self.model.uncertainty_timing_ensemble_heads.state_dict(),
+                        "resource_modulators": self.model.uncertainty_resource_modulators.state_dict(),
+                        "timing_modulators": self.model.uncertainty_timing_modulators.state_dict(),
+                        "ensemble_size": self.model.uncertainty_ensemble_size,
+                        "calibration": self.uncertainty_calibration,
+                        "spread_weight": self.uncertainty_spread_weight,
+                    }
+                else:
+                    unc_payload = {
+                        "kind": "ensemble",
+                        "resource_ensemble_heads": self.model.uncertainty_resource_ensemble_heads.state_dict(),
+                        "timing_ensemble_heads": self.model.uncertainty_timing_ensemble_heads.state_dict(),
+                        "ensemble_size": self.model.uncertainty_ensemble_size,
+                        "mask_rate": self.model.uncertainty_mask_rate,
+                        "calibration": self.uncertainty_calibration,
+                        "spread_weight": self.uncertainty_spread_weight,
+                    }
+            elif self.model.uncertainty_resource_quantile_heads is not None:
+                unc_payload = {
+                    "kind": "quantile",
+                    "resource_quantile_heads": self.model.uncertainty_resource_quantile_heads.state_dict(),
+                    "timing_quantile_head": self.model.uncertainty_timing_quantile_head.state_dict(),
+                    "calibration": self.uncertainty_calibration,
+                    "spread_weight": self.uncertainty_spread_weight,
+                }
+            else:
+                unc_payload = {
+                    "kind": "single",
                     "resource_heads": self.model.uncertainty_resource_heads.state_dict(),
                     "timing_head": self.model.uncertainty_timing_head.state_dict(),
-                },
+                    "calibration": self.uncertainty_calibration,
+                    "spread_weight": self.uncertainty_spread_weight,
+                }
+            torch.save(
+                unc_payload,
                 unc_path,
             )
 
@@ -123,24 +202,59 @@ class SeparateHeadWrapper(LogTransformWrapper):
         )
         unc_path = weights_path.replace(".weights.pt", ".uncertainty.pt")
         if os.path.isfile(unc_path):
-            self.model.add_uncertainty_heads()
             unc_sd = torch.load(unc_path, map_location=self.device)
-            self.model.uncertainty_resource_heads.load_state_dict(unc_sd["resource_heads"])
-            self.model.uncertainty_timing_head.load_state_dict(unc_sd["timing_head"])
+            if unc_sd.get("kind") == "modulated_ensemble":
+                self.model.add_uncertainty_modulated_ensemble_heads(
+                    ensemble_size=unc_sd["ensemble_size"]
+                )
+                self.model.uncertainty_resource_ensemble_heads.load_state_dict(
+                    unc_sd["resource_ensemble_heads"]
+                )
+                self.model.uncertainty_timing_ensemble_heads.load_state_dict(
+                    unc_sd["timing_ensemble_heads"]
+                )
+                self.model.uncertainty_resource_modulators.load_state_dict(
+                    unc_sd["resource_modulators"]
+                )
+                self.model.uncertainty_timing_modulators.load_state_dict(
+                    unc_sd["timing_modulators"]
+                )
+            elif unc_sd.get("kind") == "ensemble":
+                self.model.add_uncertainty_ensemble_heads(
+                    ensemble_size=unc_sd["ensemble_size"],
+                    mask_rate=unc_sd.get("mask_rate", 0.0),
+                )
+                self.model.uncertainty_resource_ensemble_heads.load_state_dict(
+                    unc_sd["resource_ensemble_heads"]
+                )
+                self.model.uncertainty_timing_ensemble_heads.load_state_dict(
+                    unc_sd["timing_ensemble_heads"]
+                )
+            elif unc_sd.get("kind") == "quantile":
+                self.model.add_uncertainty_quantile_heads()
+                self.model.uncertainty_resource_quantile_heads.load_state_dict(
+                    unc_sd["resource_quantile_heads"]
+                )
+                self.model.uncertainty_timing_quantile_head.load_state_dict(
+                    unc_sd["timing_quantile_head"]
+                )
+            else:
+                self.model.add_uncertainty_heads()
+                self.model.uncertainty_resource_heads.load_state_dict(
+                    unc_sd["resource_heads"]
+                )
+                self.model.uncertainty_timing_head.load_state_dict(unc_sd["timing_head"])
+            self.uncertainty_calibration = unc_sd.get("calibration")
+            self.uncertainty_spread_weight = unc_sd.get("spread_weight")
 
     def predict_uncertainty_from_df(self, inputs_df):
-        """
-        Returns (point_estimates, uncertainty) where:
-        - point_estimates: [N, T] in original (non-log) space
-        - uncertainty: [N, T] predicted log1p(|residual|) from uncertainty heads
-        """
-        if self.model.uncertainty_resource_heads is None:
-            raise RuntimeError(
-                "Uncertainty heads not initialized. Run Phase 2 training first."
-            )
+        has_single = self.model.uncertainty_resource_heads is not None
+        has_ensemble = self.model.uncertainty_resource_ensemble_heads is not None
+        has_quantile = self.model.uncertainty_resource_quantile_heads is not None
+        if not has_single and not has_ensemble and not has_quantile:
+            raise RuntimeError("Uncertainty heads are not initialized.")
         point_estimates = super().predict_from_df(inputs_df.copy())
 
-        # Build input dict (same pre-processing as predict_from_df)
         feature_labels = list(self.global_numerical_labels) + list(
             self.global_categorical_maps.keys()
         )
@@ -155,8 +269,6 @@ class SeparateHeadWrapper(LogTransformWrapper):
             feature_labels += ["sequential_inputs"]
         inputs_filtered = inputs_copy[feature_labels]
         input_dict = self.build_inputs(inputs_filtered)
-
-        # Convert numpy arrays → tensors (same as _process_input_dict does internally)
         input_tensors = self._process_input_dict(input_dict)
         tensor_dict = {
             k: v.to(self.device)
@@ -165,8 +277,53 @@ class SeparateHeadWrapper(LogTransformWrapper):
 
         self.model.eval()
         with torch.no_grad():
-            unc_tensor = self.model.forward_uncertainty(tensor_dict)
-        return point_estimates, unc_tensor.cpu().numpy()
+            if has_quantile:
+                _, unc_tensor = self.model.forward_uncertainty_quantiles(tensor_dict)
+                raw_uncertainty = unc_tensor.cpu().numpy()
+            elif has_ensemble and hasattr(self.model, "forward_uncertainty_stats"):
+                mean_unc, std_unc = self.model.forward_uncertainty_stats(tensor_dict)
+                raw_uncertainty = self._apply_spread_fusion(
+                    mean_unc.cpu().numpy(),
+                    std_unc.cpu().numpy(),
+                    self.uncertainty_spread_weight,
+                )
+            else:
+                unc_tensor = self.model.forward_uncertainty(tensor_dict)
+                raw_uncertainty = unc_tensor.cpu().numpy()
+        calibrated_uncertainty = self._apply_monotonic_calibration(
+            raw_uncertainty, self.uncertainty_calibration
+        )
+        return point_estimates, calibrated_uncertainty
+
+    def predict_uncertainty_interval_from_df(self, inputs_df):
+        if self.model.uncertainty_resource_quantile_heads is None:
+            raise RuntimeError("Quantile uncertainty heads are not initialized.")
+        point_estimates = super().predict_from_df(inputs_df.copy())
+
+        feature_labels = list(self.global_numerical_labels) + list(
+            self.global_categorical_maps.keys()
+        )
+        inputs_copy = inputs_df.copy()
+        if len(self.sequential_numerical_labels) > 0:
+            sequential_labels = list(self.sequential_numerical_labels) + list(
+                self.sequential_categorical_maps.keys()
+            )
+            inputs_copy.loc[:, "sequential_inputs"] = inputs_copy["sequential_inputs"].apply(
+                lambda x: x[sequential_labels]
+            )
+            feature_labels += ["sequential_inputs"]
+        inputs_filtered = inputs_copy[feature_labels]
+        input_dict = self.build_inputs(inputs_filtered)
+        input_tensors = self._process_input_dict(input_dict)
+        tensor_dict = {
+            k: v.to(self.device)
+            for k, v in zip(input_dict.keys(), input_tensors)
+        }
+
+        self.model.eval()
+        with torch.no_grad():
+            lower, upper = self.model.forward_uncertainty_quantiles(tensor_dict)
+        return point_estimates, lower.cpu().numpy(), upper.cpu().numpy()
 
 
 class RoundingWrapper(TorchModelWrapper):

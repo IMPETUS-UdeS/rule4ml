@@ -30,10 +30,10 @@ from autoresearch.prepare import (
     set_seed,
     tensor_cache_key,
 )
-from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictorGated
-from rule4ml.models.wrappers import TorchModelWrapper
+from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
+from rule4ml.models.wrappers import BaseModelWrapper, TorchModelWrapper
 
-from autoresearch.wrappers_ext import MCDropoutWrapper
+from autoresearch.wrappers_ext import MCDropoutWrapper, SeparateHeadWrapper
 
 set_seed(EVERYTHING_SEED)
 
@@ -190,6 +190,10 @@ NORMALIZE_TARGETS = False
 
 BATCH_SIZE = 256  # 512 regressed, reverting
 LEARNING_RATE = 1e-3  # best: 1e-3
+PHASE2_BUDGET = 300
+UNCERTAINTY_ENSEMBLE_SIZE = 4
+UNCERTAINTY_RANK_LAMBDA = 0.02
+UNCERTAINTY_PAIR_SUBSAMPLE = 64
 
 # --------------------------------------------------------------------------
 # Models factories
@@ -201,8 +205,8 @@ GATE_BCE_WEIGHT = 0.05  # BCE weight for gate supervision (light — regression 
 
 def make_predictor(
     output_size: int, device: torch.device, name: str
-) -> TorchTransformerHybridPredictorGated:
-    return TorchTransformerHybridPredictorGated(
+) -> TorchTransformerHybridPredictor:
+    return TorchTransformerHybridPredictor(
         settings=GNNSettings(
             global_embedding_layers=[16, 16, 16, 16],  # one per global categorical map
             seq_embedding_layers=[16],  # one per sequential categorical map
@@ -242,6 +246,339 @@ def log_mse_loss(y_pred: torch.Tensor, y_true_log: torch.Tensor) -> torch.Tensor
     targets, giving uniform gradient scale across the full target range.
     """
     return torch.mean(torch.mean((y_pred - y_true_log) ** 2, dim=0))
+
+
+def fit_monotonic_uncertainty_calibration(
+    raw_uncertainty: np.ndarray, true_log_abs_error: np.ndarray
+) -> list[dict]:
+    """
+    Fit per-target monotonic piecewise-linear maps from predicted uncertainty to
+    observed log-space absolute error using isotonic regression via PAV.
+    """
+
+    def pav_isotonic(x_sorted, y_sorted):
+        blocks = []
+        for xi, yi in zip(x_sorted, y_sorted):
+            blocks.append(
+                {
+                    "start": float(xi),
+                    "end": float(xi),
+                    "sum": float(yi),
+                    "count": 1,
+                }
+            )
+            while len(blocks) >= 2:
+                last = blocks[-1]
+                prev = blocks[-2]
+                if prev["sum"] / prev["count"] <= last["sum"] / last["count"]:
+                    break
+                merged = {
+                    "start": prev["start"],
+                    "end": last["end"],
+                    "sum": prev["sum"] + last["sum"],
+                    "count": prev["count"] + last["count"],
+                }
+                blocks[-2:] = [merged]
+        xs = []
+        ys = []
+        for block in blocks:
+            mean_y = block["sum"] / block["count"]
+            xs.append(block["start"])
+            ys.append(mean_y)
+            if block["end"] > block["start"]:
+                xs.append(block["end"])
+                ys.append(mean_y)
+        return np.asarray(xs, dtype=np.float32), np.asarray(ys, dtype=np.float32)
+
+    calibrators = []
+    for i in range(raw_uncertainty.shape[1]):
+        x = np.asarray(raw_uncertainty[:, i], dtype=np.float64)
+        y = np.asarray(true_log_abs_error[:, i], dtype=np.float64)
+        order = np.argsort(x, kind="mergesort")
+        x_sorted = x[order]
+        y_sorted = y[order]
+        unique_x, inverse = np.unique(x_sorted, return_inverse=True)
+        y_means = np.bincount(inverse, weights=y_sorted) / np.maximum(
+            np.bincount(inverse), 1
+        )
+        iso_x, iso_y = pav_isotonic(unique_x, y_means)
+        calibrators.append({"x": iso_x.tolist(), "y": iso_y.tolist()})
+    return calibrators
+
+
+def build_uncertainty_calibration(
+    wrapper,
+    val_inputs,
+    val_log_targets: torch.Tensor,
+):
+    predictor = wrapper.model
+    predictor.eval()
+    predictor._store_repr = True
+    with torch.no_grad():
+        unc_inputs = {k: v.to(predictor.device) for k, v in val_inputs.items()}
+        preds = predictor(unc_inputs)
+        true_log_abs_error = torch.log1p(
+            torch.abs(preds - val_log_targets.to(predictor.device))
+        )
+        if predictor.uncertainty_resource_ensemble_heads is not None:
+            mean_uncertainty, std_uncertainty = predictor.forward_uncertainty_stats(
+                unc_inputs
+            )
+            wrapper.uncertainty_spread_weight = fit_spread_weights(
+                mean_uncertainty.cpu().numpy(),
+                std_uncertainty.cpu().numpy(),
+                true_log_abs_error.cpu().numpy(),
+            )
+            spread_weight = torch.tensor(
+                wrapper.uncertainty_spread_weight,
+                dtype=mean_uncertainty.dtype,
+                device=predictor.device,
+            )
+            raw_uncertainty = mean_uncertainty + std_uncertainty * spread_weight
+        else:
+            raw_uncertainty = predictor.forward_uncertainty(unc_inputs)
+    predictor._store_repr = False
+    wrapper.uncertainty_calibration = fit_monotonic_uncertainty_calibration(
+        raw_uncertainty.cpu().numpy(),
+        true_log_abs_error.cpu().numpy(),
+    )
+
+
+def fit_spread_weights(
+    mean_uncertainty: np.ndarray,
+    std_uncertainty: np.ndarray,
+    true_log_abs_error: np.ndarray,
+) -> list[float]:
+    alphas = np.linspace(0.0, 3.0, 31)
+    weights = []
+
+    def safe_corr(x, y):
+        if np.std(x) < 1e-12 or np.std(y) < 1e-12:
+            return 0.0
+        return float(np.corrcoef(x, y)[0, 1])
+
+    for i in range(mean_uncertainty.shape[1]):
+        best_alpha = 0.0
+        best_corr = safe_corr(mean_uncertainty[:, i], true_log_abs_error[:, i])
+        for alpha in alphas[1:]:
+            fused = mean_uncertainty[:, i] + alpha * std_uncertainty[:, i]
+            corr = safe_corr(fused, true_log_abs_error[:, i])
+            if corr > best_corr:
+                best_corr = corr
+                best_alpha = float(alpha)
+        weights.append(best_alpha)
+    return weights
+
+
+def pairwise_ranking_loss(
+    pred_scores: torch.Tensor,
+    true_scores: torch.Tensor,
+    max_pairs: int = UNCERTAINTY_PAIR_SUBSAMPLE,
+) -> torch.Tensor:
+    batch_size = pred_scores.shape[0]
+    if batch_size < 2:
+        return pred_scores.new_tensor(0.0)
+    pair_count = min(max_pairs, batch_size // 2)
+    perm_a = torch.randperm(batch_size, device=pred_scores.device)[:pair_count]
+    perm_b = torch.randperm(batch_size, device=pred_scores.device)[:pair_count]
+    valid = perm_a != perm_b
+    if not torch.any(valid):
+        return pred_scores.new_tensor(0.0)
+    a_idx = perm_a[valid]
+    b_idx = perm_b[valid]
+    true_diff = true_scores[a_idx] - true_scores[b_idx]
+    pred_diff = pred_scores[a_idx] - pred_scores[b_idx]
+    sign = torch.sign(true_diff)
+    informative = sign != 0
+    if not torch.any(informative):
+        return pred_scores.new_tensor(0.0)
+    return torch.nn.functional.softplus(-sign[informative] * pred_diff[informative]).mean()
+
+
+def train_uncertainty_heads(
+    predictor: TorchTransformerHybridPredictor,
+    val_inputs: dict,
+    val_log_targets: torch.Tensor,
+    time_budget: float,
+    device: torch.device,
+) -> tuple[int, float]:
+    predictor.add_uncertainty_modulated_ensemble_heads(
+        d_hidden=32,
+        ensemble_size=UNCERTAINTY_ENSEMBLE_SIZE,
+    )
+
+    for param in predictor.parameters():
+        param.requires_grad_(False)
+    for param in predictor.uncertainty_resource_ensemble_heads.parameters():
+        param.requires_grad_(True)
+    for param in predictor.uncertainty_timing_ensemble_heads.parameters():
+        param.requires_grad_(True)
+    for param in predictor.uncertainty_resource_modulators.parameters():
+        param.requires_grad_(True)
+    for param in predictor.uncertainty_timing_modulators.parameters():
+        param.requires_grad_(True)
+
+    unc_params = (
+        list(predictor.uncertainty_resource_ensemble_heads.parameters())
+        + list(predictor.uncertainty_timing_ensemble_heads.parameters())
+        + list(predictor.uncertainty_resource_modulators.parameters())
+        + list(predictor.uncertainty_timing_modulators.parameters())
+    )
+    optimizer = torch.optim.Adam(unc_params, lr=1e-3)
+    pin_memory = device.type == "cuda"
+    val_loader = make_dataloader(
+        val_inputs, val_log_targets, BATCH_SIZE, shuffle=True, pin_memory=pin_memory
+    )
+
+    t_start = time.time()
+    n_epochs = 0
+    final_loss = float("nan")
+    while True:
+        total_loss = 0.0
+        n_batches = 0
+        for inputs, log_targets in val_loader:
+            inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
+            log_targets = log_targets.to(device, non_blocking=True)
+
+            predictor.eval()
+            predictor._store_repr = True
+            with torch.no_grad():
+                preds = predictor(inputs)
+            predictor._store_repr = False
+
+            log_residuals = torch.log1p(torch.abs(preds - log_targets))
+
+            predictor.uncertainty_resource_ensemble_heads.train()
+            predictor.uncertainty_timing_ensemble_heads.train()
+            predictor.uncertainty_resource_modulators.train()
+            predictor.uncertainty_timing_modulators.train()
+            member_losses = []
+            for member_idx, (resource_heads, timing_head) in enumerate(
+                zip(
+                    predictor.uncertainty_resource_ensemble_heads,
+                    predictor.uncertainty_timing_ensemble_heads,
+                )
+            ):
+                r_unc = torch.cat(
+                    [
+                        resource_heads[i](
+                            predictor._last_r_ctx[:, i, :]
+                            * predictor.uncertainty_resource_modulators[member_idx][i](
+                                predictor._last_r_ctx[:, i, :]
+                            )
+                        )
+                        for i in range(predictor._N_RESOURCE)
+                    ],
+                    dim=-1,
+                )
+                t_unc = timing_head(
+                    predictor._last_cls_out
+                    * predictor.uncertainty_timing_modulators[member_idx](
+                        predictor._last_cls_out
+                    )
+                )
+                unc_pred = torch.cat([r_unc, t_unc], dim=-1)
+                mse_loss = torch.mean((unc_pred - log_residuals) ** 2)
+                rank_loss = torch.stack(
+                    [
+                        pairwise_ranking_loss(unc_pred[:, i], log_residuals[:, i])
+                        for i in range(log_residuals.shape[1])
+                    ]
+                ).mean()
+                member_losses.append(mse_loss + UNCERTAINTY_RANK_LAMBDA * rank_loss)
+
+            optimizer.zero_grad(set_to_none=True)
+            loss = torch.stack(member_losses).mean()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        n_epochs += 1
+        final_loss = total_loss / max(n_batches, 1)
+        elapsed = time.time() - t_start
+        print(
+            f"Phase 2 epoch {n_epochs} done, loss={final_loss:.4f}, elapsed={elapsed:.0f}s",
+            flush=True,
+        )
+        if elapsed >= time_budget:
+            break
+
+    for param in predictor.parameters():
+        param.requires_grad_(True)
+
+    return n_epochs, time.time() - t_start
+
+
+def uncertainty_calibration_report(
+    wrapper,
+    eval_df,
+    feature_labels,
+    sequential_labels,
+    target_labels,
+):
+    test_inputs_df = build_inputs_df(eval_df, feature_labels, sequential_labels)
+    safe_inputs = test_inputs_df.drop(
+        columns=[c for c in ALL_TARGETS if c in test_inputs_df.columns],
+        errors="ignore",
+    )
+    point_estimates, predicted_unc = wrapper.predict_uncertainty_from_df(safe_inputs)
+
+    y_true = eval_df[target_labels].to_numpy(dtype=float)
+    abs_error_raw = np.abs(point_estimates - y_true)
+    pred_log = BaseModelWrapper.predict_from_df(wrapper, safe_inputs.copy())
+    true_log = np.log1p(y_true)
+    abs_error_log = np.abs(pred_log - true_log)
+    archs = eval_df["model_name"].apply(get_architecture_name).to_numpy()
+    unique_archs = sorted(np.unique(archs))
+
+    def safe_corr(x, y):
+        if np.std(x) < 1e-12 or np.std(y) < 1e-12:
+            return 0.0
+        return float(np.corrcoef(x, y)[0, 1])
+
+    for i, target in enumerate(target_labels):
+        rmse_log = float(
+            np.sqrt(np.mean((predicted_unc[:, i] - abs_error_log[:, i]) ** 2))
+        )
+        print(
+            f"uncertainty_corr_logabs_{target}: {safe_corr(predicted_unc[:, i], abs_error_log[:, i]):.4f}",
+            flush=True,
+        )
+        print(
+            f"uncertainty_corr_rawabs_{target}: {safe_corr(np.expm1(predicted_unc[:, i]), abs_error_raw[:, i]):.4f}",
+            flush=True,
+        )
+        print(f"uncertainty_rmse_logabs_{target}: {rmse_log:.4f}", flush=True)
+        by_arch_unc = {
+            arch: float(np.mean(predicted_unc[archs == arch, i])) for arch in unique_archs
+        }
+        by_arch_err = {
+            arch: float(np.mean(abs_error_log[archs == arch, i])) for arch in unique_archs
+        }
+        by_arch_unc["all architectures"] = float(np.mean(predicted_unc[:, i]))
+        by_arch_err["all architectures"] = float(np.mean(abs_error_log[:, i]))
+        print(f"uncertainty_mean_{target}: {by_arch_unc}", flush=True)
+        print(f"uncertainty_true_logabs_{target}: {by_arch_err}", flush=True)
+
+    if hasattr(wrapper, "predict_uncertainty_interval_from_df") and (
+        wrapper.model.uncertainty_resource_quantile_heads is not None
+    ):
+        _, lower_quant, upper_quant = wrapper.predict_uncertainty_interval_from_df(
+            safe_inputs
+        )
+        interval_hit = (abs_error_log >= lower_quant) & (abs_error_log <= upper_quant)
+        upper_hit = abs_error_log <= upper_quant
+        for i, target in enumerate(target_labels):
+            print(
+                f"uncertainty_interval_coverage_{target}: {float(np.mean(interval_hit[:, i])):.4f}",
+                flush=True,
+            )
+            print(
+                f"uncertainty_upper_coverage_{target}: {float(np.mean(upper_hit[:, i])):.4f}",
+                flush=True,
+            )
 
 
 # --------------------------------------------------------------------------
@@ -440,6 +777,18 @@ def main():
     arg_parser.add_argument(
         "--commit-hash", required=True, type=str, help="Git commit hash"
     )
+    arg_parser.add_argument(
+        "--backbone-run-dir",
+        type=str,
+        default=None,
+        help="Existing run directory with saved config/weights to use as frozen backbone",
+    )
+    arg_parser.add_argument(
+        "--uncertainty-budget",
+        type=float,
+        default=PHASE2_BUDGET,
+        help="Phase-2 training budget in seconds for post-hoc uncertainty heads",
+    )
     cli_args = arg_parser.parse_args()
 
     use_gpu = torch.cuda.is_available() and not FORCE_CPU
@@ -555,6 +904,70 @@ def main():
         os.path.dirname(__file__), "runs", branch_name, commit_hash
     )
     os.makedirs(base_log_dir, exist_ok=True)
+
+    if cli_args.backbone_run_dir:
+        print(
+            f"\nTraining uncertainty heads from frozen backbone: {cli_args.backbone_run_dir}",
+            flush=True,
+        )
+        group_name = "all"
+        group_targets = ALL_TARGETS
+        group_log_dir = os.path.join(base_log_dir, group_name)
+        os.makedirs(group_log_dir, exist_ok=True)
+
+        config_path = os.path.join(
+            cli_args.backbone_run_dir,
+            "BRAM-DSP-FF-LUT-CYCLES-INTERVAL_Transformer.config.json",
+        )
+        weights_path = os.path.join(
+            cli_args.backbone_run_dir,
+            "BRAM-DSP-FF-LUT-CYCLES-INTERVAL_Transformer.weights.pt",
+        )
+        wrapper = SeparateHeadWrapper()
+        wrapper.load(config_path, weights_path)
+        wrapper.model.to(device)
+
+        val_log_targets = torch.log1p(target_tensors_all["val"])
+        unc_epochs, unc_seconds = train_uncertainty_heads(
+            predictor=wrapper.model,
+            val_inputs=input_tensors_splits["val"],
+            val_log_targets=val_log_targets,
+            time_budget=cli_args.uncertainty_budget,
+            device=device,
+        )
+        build_uncertainty_calibration(
+            wrapper,
+            input_tensors_splits["val"],
+            val_log_targets,
+        )
+        wrapper.save(group_log_dir)
+
+        metrics = evaluate(
+            [(wrapper, group_targets)],
+            test_raw_df,
+            GLOBAL_FEATURE_LABELS,
+            SEQUENTIAL_FEATURE_LABELS,
+        )
+        peak_vram_mb = (
+            torch.cuda.max_memory_allocated() / 1024 / 1024 if use_gpu else 0.0
+        )
+        total_seconds = time.time() - total_start
+        print_summary(
+            metrics=metrics,
+            num_epochs={"all": "frozen_backbone", "uncertainty_heads": unc_epochs},
+            training_seconds=unc_seconds,
+            total_seconds=total_seconds,
+            peak_vram_mb=peak_vram_mb,
+            platform=device_name,
+        )
+        uncertainty_calibration_report(
+            wrapper,
+            test_raw_df,
+            GLOBAL_FEATURE_LABELS,
+            SEQUENTIAL_FEATURE_LABELS,
+            group_targets,
+        )
+        return
 
     n_groups = len(TARGET_GROUPS)
     per_group_budget = TIME_BUDGET / n_groups

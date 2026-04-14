@@ -1137,6 +1137,14 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         self._last_cls_out = None
         self.uncertainty_resource_heads = None
         self.uncertainty_timing_head = None
+        self.uncertainty_resource_ensemble_heads = None
+        self.uncertainty_timing_ensemble_heads = None
+        self.uncertainty_resource_modulators = None
+        self.uncertainty_timing_modulators = None
+        self.uncertainty_resource_quantile_heads = None
+        self.uncertainty_timing_quantile_head = None
+        self.uncertainty_ensemble_size = 1
+        self.uncertainty_mask_rate = 0.0
 
         # ── Bookkeeping ───────────────────────────────────────────────────────
         self.global_input_keys = {
@@ -1186,12 +1194,6 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         return self._forward_chunk(inputs)
 
     def _encode_representations(self, inputs):
-        """Shared backbone encoder. Returns (r_ctx, cls_out, full_mask).
-
-        r_ctx:     [B, N_RESOURCE, d_model] — per-resource cross-attention context
-        cls_out:   [B, d_model] — global CLS token output
-        full_mask: [B, 1+T] — padding mask (True = padded)
-        """
         # ── Encode global → [B, 1, d_model] ──────────────────────────────────
         x_global_cat = [
             self.global_embeddings[key](inputs[key]).squeeze(1)
@@ -1257,11 +1259,10 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
         # stable baseline before specializing via its query-specific attention.
         r_ctx = r_ctx + self.resource_cls_residual.unsqueeze(0) * cls_out.unsqueeze(1)
 
-        return r_ctx, cls_out, full_mask
+        return r_ctx, cls_out
 
     def _forward_chunk(self, inputs):
-        r_ctx, cls_out, _ = self._encode_representations(inputs)
-
+        r_ctx, cls_out = self._encode_representations(inputs)
         resource_preds = torch.cat(
             [head(r_ctx[:, i, :]) for i, head in enumerate(self.resource_heads)],
             dim=-1,
@@ -1269,6 +1270,10 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
 
         # ── Timing branch: CLS token pooling ─────────────────────────────────
         timing_preds = self.timing_head(cls_out)  # [B, 2]
+
+        if self._store_repr:
+            self._last_r_ctx = r_ctx.detach()
+            self._last_cls_out = cls_out.detach()
 
         # ── Combine in target order: [bram,dsp,ff,lut,cycles,interval] ────────
         return torch.cat([resource_preds, timing_preds], dim=-1)  # [B, 6]
@@ -1294,6 +1299,366 @@ class TorchTransformerHybridPredictor(torch.nn.Module):
     def from_config(cls, config):
         config["settings"] = GNNSettings.from_config(config["settings"])
         return cls(**config)
+
+    def add_uncertainty_heads(self, d_hidden: int = 32):
+        self.uncertainty_resource_ensemble_heads = None
+        self.uncertainty_timing_ensemble_heads = None
+        self.uncertainty_resource_modulators = None
+        self.uncertainty_timing_modulators = None
+        self.uncertainty_resource_quantile_heads = None
+        self.uncertainty_timing_quantile_head = None
+        self.uncertainty_ensemble_size = 1
+        self.uncertainty_mask_rate = 0.0
+        self.uncertainty_resource_heads = torch.nn.ModuleList(
+            [
+                torch.nn.Sequential(
+                    torch.nn.Linear(self.d_model, d_hidden),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(d_hidden, 1),
+                    torch.nn.Softplus(),
+                )
+                for _ in range(self._N_RESOURCE)
+            ]
+        )
+        n_timing = self.output_shape[-1] - self._N_RESOURCE
+        self.uncertainty_timing_head = torch.nn.Sequential(
+            torch.nn.Linear(self.d_model, d_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(d_hidden, n_timing),
+            torch.nn.Softplus(),
+        )
+        self.uncertainty_resource_heads.to(self.device)
+        self.uncertainty_timing_head.to(self.device)
+
+    def add_uncertainty_ensemble_heads(
+        self, d_hidden: int = 32, ensemble_size: int = 4, mask_rate: float = 0.15
+    ):
+        self.uncertainty_resource_heads = None
+        self.uncertainty_timing_head = None
+        self.uncertainty_resource_modulators = None
+        self.uncertainty_timing_modulators = None
+        self.uncertainty_resource_quantile_heads = None
+        self.uncertainty_timing_quantile_head = None
+        self.uncertainty_ensemble_size = ensemble_size
+        self.uncertainty_mask_rate = mask_rate
+        self.uncertainty_resource_ensemble_heads = torch.nn.ModuleList(
+            [
+                torch.nn.ModuleList(
+                    [
+                        torch.nn.Sequential(
+                            torch.nn.Linear(self.d_model, d_hidden),
+                            torch.nn.ReLU(),
+                            torch.nn.Linear(d_hidden, 1),
+                            torch.nn.Softplus(),
+                        )
+                        for _ in range(self._N_RESOURCE)
+                    ]
+                )
+                for _ in range(ensemble_size)
+            ]
+        )
+        n_timing = self.output_shape[-1] - self._N_RESOURCE
+        self.uncertainty_timing_ensemble_heads = torch.nn.ModuleList(
+            [
+                torch.nn.Sequential(
+                    torch.nn.Linear(self.d_model, d_hidden),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(d_hidden, n_timing),
+                    torch.nn.Softplus(),
+                )
+                for _ in range(ensemble_size)
+            ]
+        )
+        self.uncertainty_resource_ensemble_heads.to(self.device)
+        self.uncertainty_timing_ensemble_heads.to(self.device)
+
+    def add_uncertainty_modulated_ensemble_heads(
+        self, d_hidden: int = 32, ensemble_size: int = 4
+    ):
+        self.uncertainty_resource_heads = None
+        self.uncertainty_timing_head = None
+        self.uncertainty_resource_quantile_heads = None
+        self.uncertainty_timing_quantile_head = None
+        self.uncertainty_ensemble_size = ensemble_size
+        self.uncertainty_mask_rate = 0.0
+        self.uncertainty_resource_ensemble_heads = torch.nn.ModuleList(
+            [
+                torch.nn.ModuleList(
+                    [
+                        (
+                            torch.nn.Sequential(
+                                torch.nn.Linear(self.d_model, d_hidden * 2),
+                                torch.nn.ReLU(),
+                                torch.nn.Linear(d_hidden * 2, d_hidden),
+                                torch.nn.ReLU(),
+                                torch.nn.Linear(d_hidden, 1),
+                                torch.nn.Softplus(),
+                            )
+                            if resource_idx == 0
+                            else torch.nn.Sequential(
+                                torch.nn.Linear(self.d_model, int(d_hidden * 1.5)),
+                                torch.nn.ReLU(),
+                                torch.nn.Linear(int(d_hidden * 1.5), d_hidden),
+                                torch.nn.ReLU(),
+                                torch.nn.Linear(d_hidden, 1),
+                                torch.nn.Softplus(),
+                            )
+                        )
+                        for resource_idx in range(self._N_RESOURCE)
+                    ]
+                )
+                for _ in range(ensemble_size)
+            ]
+        )
+        self.uncertainty_resource_modulators = torch.nn.ModuleList(
+            [
+                torch.nn.ModuleList(
+                    [
+                        (
+                            torch.nn.Sequential(
+                                torch.nn.Linear(self.d_model, d_hidden * 2),
+                                torch.nn.ReLU(),
+                                torch.nn.Linear(d_hidden * 2, self.d_model),
+                                torch.nn.Sigmoid(),
+                            )
+                            if resource_idx == 0
+                            else torch.nn.Sequential(
+                                torch.nn.Linear(self.d_model, int(d_hidden * 1.5)),
+                                torch.nn.ReLU(),
+                                torch.nn.Linear(int(d_hidden * 1.5), self.d_model),
+                                torch.nn.Sigmoid(),
+                            )
+                        )
+                        for resource_idx in range(self._N_RESOURCE)
+                    ]
+                )
+                for _ in range(ensemble_size)
+            ]
+        )
+        n_timing = self.output_shape[-1] - self._N_RESOURCE
+        self.uncertainty_timing_ensemble_heads = torch.nn.ModuleList(
+            [
+                torch.nn.Sequential(
+                    torch.nn.Linear(self.d_model, d_hidden * 2),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(d_hidden * 2, d_hidden),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(d_hidden, n_timing),
+                    torch.nn.Softplus(),
+                )
+                for _ in range(ensemble_size)
+            ]
+        )
+        self.uncertainty_timing_modulators = torch.nn.ModuleList(
+            [
+                torch.nn.Sequential(
+                    torch.nn.Linear(self.d_model, d_hidden * 2),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(d_hidden * 2, self.d_model),
+                    torch.nn.Sigmoid(),
+                )
+                for _ in range(ensemble_size)
+            ]
+        )
+        self.uncertainty_resource_ensemble_heads.to(self.device)
+        self.uncertainty_resource_modulators.to(self.device)
+        self.uncertainty_timing_ensemble_heads.to(self.device)
+        self.uncertainty_timing_modulators.to(self.device)
+
+    def add_uncertainty_quantile_heads(self, d_hidden: int = 32):
+        self.uncertainty_resource_heads = None
+        self.uncertainty_timing_head = None
+        self.uncertainty_resource_ensemble_heads = None
+        self.uncertainty_timing_ensemble_heads = None
+        self.uncertainty_ensemble_size = 1
+        self.uncertainty_mask_rate = 0.0
+        self.uncertainty_resource_quantile_heads = torch.nn.ModuleList(
+            [
+                torch.nn.Sequential(
+                    torch.nn.Linear(self.d_model, d_hidden),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(d_hidden, 2),
+                    torch.nn.Softplus(),
+                )
+                for _ in range(self._N_RESOURCE)
+            ]
+        )
+        n_timing = self.output_shape[-1] - self._N_RESOURCE
+        self.uncertainty_timing_quantile_head = torch.nn.Sequential(
+            torch.nn.Linear(self.d_model, d_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(d_hidden, 2 * n_timing),
+            torch.nn.Softplus(),
+        )
+        self.uncertainty_resource_quantile_heads.to(self.device)
+        self.uncertainty_timing_quantile_head.to(self.device)
+
+    def _masked_repr(self, x, training: bool):
+        if not training or self.uncertainty_mask_rate <= 0.0:
+            return x
+        keep_prob = 1.0 - self.uncertainty_mask_rate
+        mask = torch.bernoulli(torch.full_like(x, keep_prob)) / keep_prob
+        return x * mask
+
+    def forward_uncertainty(self, inputs):
+        use_ensemble = (
+            self.uncertainty_resource_ensemble_heads is not None
+            and self.uncertainty_timing_ensemble_heads is not None
+        )
+        use_modulated = (
+            use_ensemble
+            and self.uncertainty_resource_modulators is not None
+            and self.uncertainty_timing_modulators is not None
+        )
+        use_quantiles = (
+            self.uncertainty_resource_quantile_heads is not None
+            and self.uncertainty_timing_quantile_head is not None
+        )
+        if not use_ensemble and (
+            not use_quantiles
+            and (
+                self.uncertainty_resource_heads is None
+                or self.uncertainty_timing_head is None
+            )
+        ):
+            raise RuntimeError("Uncertainty heads are not initialized.")
+
+        B = next(iter(inputs.values())).shape[0]
+        outputs = []
+        for start in range(0, B, self._INFERENCE_CHUNK):
+            chunk = {
+                k: v[start : start + self._INFERENCE_CHUNK]
+                for k, v in inputs.items()
+            }
+            self._store_repr = True
+            with torch.no_grad():
+                self._forward_chunk(chunk)
+            self._store_repr = False
+            if use_ensemble:
+                member_outputs = self._forward_uncertainty_member_outputs(
+                    use_modulated=use_modulated
+                )
+                outputs.append(member_outputs.mean(dim=0))
+            elif use_quantiles:
+                r_quantiles = torch.stack(
+                    [
+                        torch.sort(head(self._last_r_ctx[:, i, :]), dim=-1).values
+                        for i, head in enumerate(self.uncertainty_resource_quantile_heads)
+                    ],
+                    dim=1,
+                )  # [B, 4, 2]
+                t_quantiles = self.uncertainty_timing_quantile_head(self._last_cls_out)
+                t_quantiles = t_quantiles.view(self._last_cls_out.shape[0], -1, 2)
+                t_quantiles = torch.sort(t_quantiles, dim=-1).values
+                upper = torch.cat([r_quantiles[..., 1], t_quantiles[..., 1]], dim=-1)
+                outputs.append(upper)
+            else:
+                r_unc = torch.cat(
+                    [
+                        head(self._last_r_ctx[:, i, :])
+                        for i, head in enumerate(self.uncertainty_resource_heads)
+                    ],
+                    dim=-1,
+                )
+                t_unc = self.uncertainty_timing_head(self._last_cls_out)
+                outputs.append(torch.cat([r_unc, t_unc], dim=-1))
+        return torch.cat(outputs, dim=0)
+
+    def _forward_uncertainty_member_outputs(self, use_modulated: bool):
+        member_outputs = []
+        for member_idx, (resource_heads, timing_head) in enumerate(
+            zip(
+                self.uncertainty_resource_ensemble_heads,
+                self.uncertainty_timing_ensemble_heads,
+            )
+        ):
+            r_unc = torch.cat(
+                [
+                    head(
+                        self._last_r_ctx[:, i, :]
+                        * (
+                            self.uncertainty_resource_modulators[member_idx][i](
+                                self._last_r_ctx[:, i, :]
+                            )
+                            if use_modulated
+                            else 1.0
+                        )
+                    )
+                    for i, head in enumerate(resource_heads)
+                ],
+                dim=-1,
+            )
+            cls_in = self._last_cls_out
+            if use_modulated:
+                cls_in = cls_in * self.uncertainty_timing_modulators[member_idx](cls_in)
+            t_unc = timing_head(cls_in)
+            member_outputs.append(torch.cat([r_unc, t_unc], dim=-1))
+        return torch.stack(member_outputs, dim=0)
+
+    def forward_uncertainty_stats(self, inputs):
+        use_ensemble = (
+            self.uncertainty_resource_ensemble_heads is not None
+            and self.uncertainty_timing_ensemble_heads is not None
+        )
+        use_modulated = (
+            use_ensemble
+            and self.uncertainty_resource_modulators is not None
+            and self.uncertainty_timing_modulators is not None
+        )
+        if not use_ensemble:
+            raise RuntimeError("Ensemble uncertainty heads are not initialized.")
+
+        B = next(iter(inputs.values())).shape[0]
+        means = []
+        stds = []
+        for start in range(0, B, self._INFERENCE_CHUNK):
+            chunk = {
+                k: v[start : start + self._INFERENCE_CHUNK]
+                for k, v in inputs.items()
+            }
+            self._store_repr = True
+            with torch.no_grad():
+                self._forward_chunk(chunk)
+            self._store_repr = False
+            member_outputs = self._forward_uncertainty_member_outputs(
+                use_modulated=use_modulated
+            )
+            means.append(member_outputs.mean(dim=0))
+            stds.append(member_outputs.std(dim=0, unbiased=False))
+        return torch.cat(means, dim=0), torch.cat(stds, dim=0)
+
+    def forward_uncertainty_quantiles(self, inputs):
+        if (
+            self.uncertainty_resource_quantile_heads is None
+            or self.uncertainty_timing_quantile_head is None
+        ):
+            raise RuntimeError("Quantile uncertainty heads are not initialized.")
+
+        B = next(iter(inputs.values())).shape[0]
+        lower_outputs = []
+        upper_outputs = []
+        for start in range(0, B, self._INFERENCE_CHUNK):
+            chunk = {
+                k: v[start : start + self._INFERENCE_CHUNK]
+                for k, v in inputs.items()
+            }
+            self._store_repr = True
+            with torch.no_grad():
+                self._forward_chunk(chunk)
+            self._store_repr = False
+            r_quantiles = torch.stack(
+                [
+                    torch.sort(head(self._last_r_ctx[:, i, :]), dim=-1).values
+                    for i, head in enumerate(self.uncertainty_resource_quantile_heads)
+                ],
+                dim=1,
+            )
+            t_quantiles = self.uncertainty_timing_quantile_head(self._last_cls_out)
+            t_quantiles = t_quantiles.view(self._last_cls_out.shape[0], -1, 2)
+            t_quantiles = torch.sort(t_quantiles, dim=-1).values
+            lower_outputs.append(torch.cat([r_quantiles[..., 0], t_quantiles[..., 0]], dim=-1))
+            upper_outputs.append(torch.cat([r_quantiles[..., 1], t_quantiles[..., 1]], dim=-1))
+        return torch.cat(lower_outputs, dim=0), torch.cat(upper_outputs, dim=0)
 
 
 class TorchTransformerHybridPredictorGated(TorchTransformerHybridPredictor):
