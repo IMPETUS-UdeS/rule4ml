@@ -44,25 +44,17 @@ RUN curl -fsSL https://opencode.ai/install | bash
 RUN npm install -g @google/gemini-cli
 RUN npm install -g @openai/codex
 
-# Strip everything from the first uv index block to the end of the file
-RUN sed -i '/\[\[tool.uv.index\]\]/,$d' pyproject.toml
-
-# Add GPU-specific torch sources to pyproject.toml
-RUN if [ "$GPU_TYPE" = "cuda" ]; then \
-        uv add --index pytorch-cuda=https://download.pytorch.org/whl/cu128 torch; \
-    elif [ "$GPU_TYPE" = "rocm" ]; then \
-        uv add --index pytorch-rocm=https://download.pytorch.org/whl/rocm7.2 torch pytorch-triton-rocm; \
-    fi
-
-# Install python dependencies, move files, then wipe the workspace (re-cloned at entry)
-RUN uv sync && \
+# Install python dependencies with the GPU-specific torch extra (cuda or rocm),
+# move the venv, lock and datasets out, then wipe the workspace (re-cloned at entry)
+RUN uv sync --extra ${GPU_TYPE} && \
     mv /workspace/.venv /venv && \
     mv /workspace/uv.lock /uv.lock && \
     mv /workspace/datasets /datasets && \
-    mv /workspace/pyproject.toml /pyproject.toml && \
     rm -rf /workspace
 ENV VIRTUAL_ENV=/venv
 ENV PATH="/venv/bin:$PATH"
+# Never re-sync the pre-built venv: a sync without --extra would swap torch for the PyPI build
+ENV UV_NO_SYNC=1
 
 # Persist build args as env vars for the entrypoint
 ENV REPO_URL=${REPO_URL}

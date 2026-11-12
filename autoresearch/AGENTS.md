@@ -27,7 +27,7 @@ The training script runs for a **fixed time budget** `TIME_BUDGET` defined insid
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 HASH=$(git rev-parse --short HEAD)
-uv run autoresearch --branch-name ${BRANCH} --commit-hash ${HASH} > autoresearch/runs/${BRANCH}/${HASH}/run.log 2>&1 & PID=$!
+uv run --no-sync autoresearch --branch-name ${BRANCH} --commit-hash ${HASH} > autoresearch/runs/${BRANCH}/${HASH}/run.log 2>&1 & PID=$!
 ```
 
 **What you CAN do:**
