@@ -11,29 +11,17 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from autoresearch.prepare import (
-    get_architecture_name,
-    ALL_TARGETS,
-    CACHE_DIR,
-    EVERYTHING_SEED,
-    FORCE_CPU,
-    TIME_BUDGET,
-    build_input_tensors,
-    build_inputs_df,
-    evaluate,
-    load_checkpoint,
-    load_split_from_json,
-    load_tensor_cache,
-    make_dataloader,
-    print_summary,
-    save_checkpoint,
-    set_seed,
-    tensor_cache_key,
-)
-from rule4ml.models.architectures import GNNSettings, TorchTransformerHybridPredictor
-from rule4ml.models.wrappers import BaseModelWrapper, TorchModelWrapper
-
-from autoresearch.wrappers_ext import MCDropoutWrapper, SeparateHeadWrapper
+from autoresearch.prepare import (ALL_TARGETS, CACHE_DIR, EVERYTHING_SEED,
+                                  FORCE_CPU, TIME_BUDGET, build_input_tensors,
+                                  build_inputs_df, evaluate,
+                                  get_architecture_name, load_checkpoint,
+                                  load_split_from_json, load_tensor_cache,
+                                  make_dataloader, print_summary,
+                                  save_checkpoint, set_seed, tensor_cache_key)
+from rule4ml.models.architectures import (GNNSettings,
+                                          TorchTransformerHybridPredictor)
+from rule4ml.models.wrappers import (BaseModelWrapper, LogTransformWrapper,
+                                     TorchModelWrapper, load_wrapper)
 
 set_seed(EVERYTHING_SEED)
 
@@ -190,7 +178,6 @@ NORMALIZE_TARGETS = False
 
 BATCH_SIZE = 256  # 512 regressed, reverting
 LEARNING_RATE = 1e-3  # best: 1e-3
-PHASE2_BUDGET = 300
 UNCERTAINTY_ENSEMBLE_SIZE = 4
 UNCERTAINTY_RANK_LAMBDA = 0.02
 UNCERTAINTY_PAIR_SUBSAMPLE = 64
@@ -198,9 +185,6 @@ UNCERTAINTY_PAIR_SUBSAMPLE = 64
 # --------------------------------------------------------------------------
 # Models factories
 # --------------------------------------------------------------------------
-
-
-GATE_BCE_WEIGHT = 0.05  # BCE weight for gate supervision (light — regression dominates)
 
 
 def make_predictor(
@@ -519,15 +503,11 @@ def uncertainty_calibration_report(
     target_labels,
 ):
     test_inputs_df = build_inputs_df(eval_df, feature_labels, sequential_labels)
-    safe_inputs = test_inputs_df.drop(
-        columns=[c for c in ALL_TARGETS if c in test_inputs_df.columns],
-        errors="ignore",
-    )
-    point_estimates, predicted_unc = wrapper.predict_uncertainty_from_df(safe_inputs)
+    point_estimates, predicted_unc = wrapper.predict_uncertainty_from_df(test_inputs_df)
 
     y_true = eval_df[target_labels].to_numpy(dtype=float)
     abs_error_raw = np.abs(point_estimates - y_true)
-    pred_log = BaseModelWrapper.predict_from_df(wrapper, safe_inputs.copy())
+    pred_log = BaseModelWrapper.predict_from_df(wrapper, test_inputs_df.copy())
     true_log = np.log1p(y_true)
     abs_error_log = np.abs(pred_log - true_log)
     archs = eval_df["model_name"].apply(get_architecture_name).to_numpy()
@@ -566,7 +546,7 @@ def uncertainty_calibration_report(
         wrapper.model.uncertainty_resource_quantile_heads is not None
     ):
         _, lower_quant, upper_quant = wrapper.predict_uncertainty_interval_from_df(
-            safe_inputs
+            test_inputs_df
         )
         interval_hit = (abs_error_log >= lower_quant) & (abs_error_log <= upper_quant)
         upper_hit = abs_error_log <= upper_quant
@@ -589,8 +569,8 @@ def uncertainty_calibration_report(
 def train_predictor(
     group_name: str,
     group_targets: list,
-    input_tensors_splits: dict,  # {"train": {key: Tensor}, "val": {key: Tensor}}
-    target_tensors: dict,  # {"train": Tensor(N, len(group_targets)), "val": Tensor}
+    input_tensors_splits: dict,
+    target_tensors: dict,
     time_budget: float,
     base_log_dir: str,
     device: torch.device,
@@ -600,7 +580,7 @@ def train_predictor(
         device=device,
         name=f"{'-'.join(t.upper() for t in group_targets)}_Transformer",
     )
-    wrapper = MCDropoutWrapper()
+    wrapper = LogTransformWrapper()
     wrapper.set_model(predictor)
     wrapper.set_input_labels(
         [f for f in GLOBAL_FEATURE_LABELS if f not in GLOBAL_CATEGORICAL_MAPS],
@@ -629,7 +609,7 @@ def train_predictor(
     optimizer = torch.optim.AdamW(
         predictor.parameters(),
         lr=LEARNING_RATE,
-        weight_decay=1e-4,  # SGD failed badly, reverting
+        weight_decay=1e-4,
     )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -637,20 +617,6 @@ def train_predictor(
         T_0=30,
         T_mult=1,
         eta_min=1e-6,
-    )
-
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0=30,
-        T_mult=1,
-        eta_min=1e-6,
-    )
-
-    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer,
-        start_factor=0.1,
-        end_factor=1.0,
-        total_iters=5,  # exp38: 5 epoch LR warmup
     )
 
     log_dir = os.path.join(base_log_dir, group_name)
@@ -664,7 +630,6 @@ def train_predictor(
     progress = 0.0
     training_time = 0.0
     best_val_loss = float("inf")
-    bce_fn = torch.nn.BCELoss()
 
     while True:
         running_loss = 0.0
@@ -675,14 +640,7 @@ def train_predictor(
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
             targets = targets.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            preds, gates = predictor.forward_with_gates(inputs)
-            mse = log_mse_loss(preds, targets)
-            # BCE on resource gates: binary label = (raw_target > 0)
-            # targets are already log1p-transformed; expm1 recovers raw values
-            raw_resource = torch.expm1(targets[:, : predictor._N_RESOURCE])
-            binary_targets = (raw_resource > 0).float()
-            bce = bce_fn(gates, binary_targets)
-            loss = mse + GATE_BCE_WEIGHT * bce
+            loss = log_mse_loss(predictor(inputs), targets)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 predictor.parameters(), max_norm=1.0
@@ -705,12 +663,7 @@ def train_predictor(
             for inputs, targets in val_loader:
                 inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
                 targets = targets.to(device, non_blocking=True)
-                preds, gates = predictor.forward_with_gates(inputs)
-                mse = log_mse_loss(preds, targets)
-                raw_resource = torch.expm1(targets[:, : predictor._N_RESOURCE])
-                binary_targets = (raw_resource > 0).float()
-                bce = bce_fn(gates, binary_targets)
-                val_loss += (mse + GATE_BCE_WEIGHT * bce).item()
+                val_loss += log_mse_loss(predictor(inputs), targets).item()
         val_loss /= max(len(val_loader), 1)
         writer.add_scalar("Loss/Val", val_loss, n_epochs)
 
@@ -784,10 +737,10 @@ def main():
         help="Existing run directory with saved config/weights to use as frozen backbone",
     )
     arg_parser.add_argument(
-        "--uncertainty-budget",
+        "--uncertainty-pct",
         type=float,
-        default=PHASE2_BUDGET,
-        help="Phase-2 training budget in seconds for post-hoc uncertainty heads",
+        default=1.0,
+        help="Phase-2 training budget as percentage of total time budget",
     )
     cli_args = arg_parser.parse_args()
 
@@ -923,8 +876,7 @@ def main():
             cli_args.backbone_run_dir,
             "BRAM-DSP-FF-LUT-CYCLES-INTERVAL_Transformer.weights.pt",
         )
-        wrapper = SeparateHeadWrapper()
-        wrapper.load(config_path, weights_path)
+        wrapper = load_wrapper(config_path, weights_path)
         wrapper.model.to(device)
 
         val_log_targets = torch.log1p(target_tensors_all["val"])
@@ -932,7 +884,7 @@ def main():
             predictor=wrapper.model,
             val_inputs=input_tensors_splits["val"],
             val_log_targets=val_log_targets,
-            time_budget=cli_args.uncertainty_budget,
+            time_budget=cli_args.uncertainty_pct * TIME_BUDGET,
             device=device,
         )
         build_uncertainty_calibration(
@@ -1016,26 +968,3 @@ def main():
         peak_vram_mb=peak_vram_mb,
         platform=device_name,
     )
-
-    # ── MC-Dropout uncertainty analysis ──────────────────────────────────────
-    test_raw_df["_architecture"] = test_raw_df["model_name"].apply(get_architecture_name)
-    unique_archs = sorted(test_raw_df["_architecture"].unique())
-
-    for wrapper, group_targets in trained_wrappers:
-        if not hasattr(wrapper, "predict_uncertainty_from_df"):
-            continue
-        test_inputs_df = build_inputs_df(
-            test_raw_df, GLOBAL_FEATURE_LABELS, SEQUENTIAL_FEATURE_LABELS
-        )
-        safe_inputs = test_inputs_df.drop(
-            columns=[c for c in ALL_TARGETS if c in test_inputs_df.columns]
-        )
-        _, variance = wrapper.predict_uncertainty_from_df(safe_inputs)
-
-        for i, target in enumerate(group_targets):
-            by_arch = {
-                arch: float(np.mean(variance[test_raw_df["_architecture"].values == arch, i]))
-                for arch in unique_archs
-            }
-            by_arch["all architectures"] = float(np.mean(variance[:, i]))
-            print(f"uncertainty_mc_variance_{target}: {by_arch}", flush=True)

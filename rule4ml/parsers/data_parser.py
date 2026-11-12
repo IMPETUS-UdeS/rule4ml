@@ -469,7 +469,8 @@ def get_layers_data(
 
         reuse_factor = layer_config["reuse_factor"]
 
-        # Per-layer weight bit width and reuse_factor override: look up in layer_name_config, fall back to defaults.
+        # Per-layer weight bit width and reuse_factor override
+        # Look up in layer_name_config, fall back to defaults.
         layer_name = layer_config.get("name", "")
         layer_weight_bits = default_bits
         layer_result_bits = default_bits
@@ -505,6 +506,7 @@ def get_layers_data(
         pipelined = float(reuse_factor > 1)
         dsp_eligible = float(layer_weight_bits <= DSP_WEIGHT_BITS_THRESHOLD)
         dsp_multiplier_estimation = multiplier_estimation * dsp_eligible
+
         # Analytical initiation interval: params / reuse ≈ II for Dense/Conv layers.
         # Dense II = ceil(n_in*n_out/reuse); Conv II = ceil(kernel*channels*filters/reuse).
         # Both simplify to ceil(param_count / reuse). Providing this quotient directly
@@ -983,7 +985,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
     inputs.update(fixed_ops)
 
     # Per-layer weight precision and activation table sizes from hls_config["LayerName"].
-    # weight_bits encodes quantized weight bitwidth → directly drives DSP multiplier cost.
+    # weight_bits encodes quantized weight bitwidth driving DSP multiplier cost.
     # total_table_size is the sum of ROM sizes for LUT-based activation functions.
     layer_name_config = hls_config.get("layer_name") or {}
     weight_bits_vals = []

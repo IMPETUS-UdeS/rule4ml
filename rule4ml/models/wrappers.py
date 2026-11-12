@@ -66,6 +66,35 @@ class TrainSettings:
     metrics: list = field(default_factory=lambda: ["mape"])
 
 
+def load_wrapper(config_path, weights_path):
+    """
+    Load model wrapper from config and weights files.
+
+    Args:
+        config_path (str): path to the wrapper config JSON file.
+        weights_path (str): path to the model weights file.
+    """
+
+    if not config_path.endswith(".json"):
+        raise ValueError("Config file name must end with .json")
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"Config file does not exist: {config_path}")
+    if not os.path.isfile(weights_path):
+        raise FileNotFoundError(f"Weights file does not exist: {weights_path}")
+
+    with open(config_path) as json_file:
+        config = json.load(json_file)
+
+    cls = globals().get(config["wrapper_class"], None)
+    if not cls:
+        raise ValueError(f"Unknown wrapper class: {config['wrapper_class']}")
+
+    instance = cls.from_config(config)
+    instance._load_weights(weights_path)
+
+    return instance
+
+
 class BaseModelWrapper:
     def __init__(self):
         self.reset()
@@ -431,6 +460,7 @@ class BaseModelWrapper:
 
     def to_config(self):
         return {
+            "wrapper_class": self.__class__.__name__,
             "global_numerical_labels": list(self.global_numerical_labels),
             "sequential_numerical_labels": list(self.sequential_numerical_labels),
             "global_categorical_maps": self.global_categorical_maps,
@@ -443,24 +473,31 @@ class BaseModelWrapper:
             "scaler_config": self.scaler.to_config() if self.scaler else None,
         }
 
-    def from_config(self, config):
-        self.global_numerical_labels = config["global_numerical_labels"]
-        self.sequential_numerical_labels = config["sequential_numerical_labels"]
-        self.global_categorical_maps = config["global_categorical_maps"]
-        self.sequential_categorical_maps = config["sequential_categorical_maps"]
+    @classmethod
+    def from_config(cls, config):
+        if cls == BaseModelWrapper:
+            raise NotImplementedError("BaseModelWrapper should not be instantiated directly.")
 
-        self.output_labels = config["output_labels"]
-        self.output_shape = config["output_shape"]
+        instance = cls()
+        instance.global_numerical_labels = config["global_numerical_labels"]
+        instance.sequential_numerical_labels = config["sequential_numerical_labels"]
+        instance.global_categorical_maps = config["global_categorical_maps"]
+        instance.sequential_categorical_maps = config["sequential_categorical_maps"]
+
+        instance.output_labels = config["output_labels"]
+        instance.output_shape = config["output_shape"]
 
         model_class = config["model_class"]
-        self.model_config = config["model_config"]
-        self.model = globals()[model_class].from_config(self.model_config)
-        self.set_model(self.model)
+        instance.model_config = config["model_config"]
+        instance.model = globals()[model_class].from_config(instance.model_config)
+        instance.set_model(instance.model)
 
         scaler_class = config.get("scaler_class", None)
         scaler_config = config.get("scaler_config", None)
         if scaler_class and scaler_config:
-            self.scaler = globals()[scaler_class].from_config(scaler_config)
+            instance.scaler = globals()[scaler_class].from_config(scaler_config)
+
+        return instance
 
     def save(self, save_dir):
         """
@@ -479,30 +516,6 @@ class BaseModelWrapper:
             json.dump(config, config_file, indent=2)
 
         self._save_weights(save_dir)
-
-    def load(self, config_path, weights_path):
-        """
-        Load saved class config.
-
-        Args:
-            config_path (_type_): _description_
-        """
-
-        if not config_path.endswith(".json"):
-            raise ValueError("Config file name must end with .json")
-        if not os.path.isfile(config_path):
-            raise FileNotFoundError(f"Config file does not exist: {config_path}")
-        if not os.path.isfile(weights_path):
-            raise FileNotFoundError(f"Weights file does not exist: {weights_path}")
-
-        self.reset()
-
-        with open(config_path) as json_file:
-            # Load the class config
-            config = json.load(json_file)
-            self.from_config(config)
-
-        self._load_weights(weights_path)
 
     def _enable_mc_dropout(self):
         raise NotImplementedError("This method should be implemented in subclasses.")
@@ -899,6 +912,262 @@ class KerasModelWrapper(BaseModelWrapper):
         self.model.load_weights(weights_path)
 
 
+class LogTransformWrapper(TorchModelWrapper):
+    """
+    Inverse-transforms log-space model outputs at inference.
+
+    When training with log1p-transformed targets, the model learns to predict
+    log1p(true_value) directly. At inference time we recover:
+        pred_raw = expm1(max(pred_log, 0))
+    """
+
+    def predict_from_df(self, inputs_df, **kwargs):
+        preds = super().predict_from_df(inputs_df, **kwargs)
+        preds = np.expm1(np.maximum(preds, 0.0))
+        return preds
+
+
+class SeparateHeadWrapper(LogTransformWrapper):
+    """
+    Post-hoc uncertainty heads trained on frozen-backbone residuals.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.uncertainty_calibration = None
+        self.uncertainty_spread_weight = None
+
+    @staticmethod
+    def _apply_monotonic_calibration(raw_uncertainty, calibration):
+        if calibration is None:
+            return raw_uncertainty
+
+        calibrated = np.array(raw_uncertainty, copy=True)
+        for i, target_cal in enumerate(calibration):
+            if target_cal is None:
+                continue
+            x = np.asarray(target_cal["x"], dtype=np.float32)
+            y = np.asarray(target_cal["y"], dtype=np.float32)
+            if len(x) == 0 or len(y) == 0:
+                continue
+            calibrated[:, i] = np.interp(
+                calibrated[:, i],
+                x,
+                y,
+                left=float(y[0]),
+                right=float(y[-1]),
+            )
+        return calibrated
+
+    @staticmethod
+    def _apply_spread_fusion(mean_uncertainty, std_uncertainty, spread_weight):
+        if spread_weight is None or std_uncertainty is None:
+            return mean_uncertainty
+        fused = np.array(mean_uncertainty, copy=True)
+        for i, alpha in enumerate(spread_weight):
+            fused[:, i] = fused[:, i] + float(alpha) * std_uncertainty[:, i]
+        return fused
+
+    def _save_weights(self, save_dir):
+        backbone_path = os.path.join(save_dir, f"{self.model.name}.weights.pt")
+        backbone_sd = {
+            k: v
+            for k, v in self.model.state_dict().items()
+            if not k.startswith(
+                (
+                    "uncertainty_resource_heads",
+                    "uncertainty_timing_head",
+                    "uncertainty_resource_ensemble_heads",
+                    "uncertainty_timing_ensemble_heads",
+                    "uncertainty_resource_modulators",
+                    "uncertainty_timing_modulators",
+                    "uncertainty_resource_quantile_heads",
+                    "uncertainty_timing_quantile_head",
+                )
+            )
+        }
+        torch.save(backbone_sd, backbone_path)
+        if (
+            self.model.uncertainty_resource_heads is not None
+            or self.model.uncertainty_resource_ensemble_heads is not None
+            or self.model.uncertainty_resource_quantile_heads is not None
+        ):
+            unc_path = os.path.join(save_dir, f"{self.model.name}.uncertainty.pt")
+            if self.model.uncertainty_resource_ensemble_heads is not None:
+                if self.model.uncertainty_resource_modulators is not None:
+                    unc_payload = {
+                        "kind": "modulated_ensemble",
+                        "resource_ensemble_heads": self.model.uncertainty_resource_ensemble_heads.state_dict(),
+                        "timing_ensemble_heads": self.model.uncertainty_timing_ensemble_heads.state_dict(),
+                        "resource_modulators": self.model.uncertainty_resource_modulators.state_dict(),
+                        "timing_modulators": self.model.uncertainty_timing_modulators.state_dict(),
+                        "ensemble_size": self.model.uncertainty_ensemble_size,
+                        "calibration": self.uncertainty_calibration,
+                        "spread_weight": self.uncertainty_spread_weight,
+                    }
+                else:
+                    unc_payload = {
+                        "kind": "ensemble",
+                        "resource_ensemble_heads": self.model.uncertainty_resource_ensemble_heads.state_dict(),
+                        "timing_ensemble_heads": self.model.uncertainty_timing_ensemble_heads.state_dict(),
+                        "ensemble_size": self.model.uncertainty_ensemble_size,
+                        "mask_rate": self.model.uncertainty_mask_rate,
+                        "calibration": self.uncertainty_calibration,
+                        "spread_weight": self.uncertainty_spread_weight,
+                    }
+            elif self.model.uncertainty_resource_quantile_heads is not None:
+                unc_payload = {
+                    "kind": "quantile",
+                    "resource_quantile_heads": self.model.uncertainty_resource_quantile_heads.state_dict(),
+                    "timing_quantile_head": self.model.uncertainty_timing_quantile_head.state_dict(),
+                    "calibration": self.uncertainty_calibration,
+                    "spread_weight": self.uncertainty_spread_weight,
+                }
+            else:
+                unc_payload = {
+                    "kind": "single",
+                    "resource_heads": self.model.uncertainty_resource_heads.state_dict(),
+                    "timing_head": self.model.uncertainty_timing_head.state_dict(),
+                    "calibration": self.uncertainty_calibration,
+                    "spread_weight": self.uncertainty_spread_weight,
+                }
+            torch.save(
+                unc_payload,
+                unc_path,
+            )
+
+    def _load_weights(self, weights_path):
+        if not weights_path.endswith(".pt"):
+            raise ValueError("Weights filename must end with .pt")
+        self.model.load_state_dict(
+            torch.load(weights_path, map_location=self.device), strict=False
+        )
+        unc_path = weights_path.replace(".weights.pt", ".uncertainty.pt")
+        if os.path.isfile(unc_path):
+            unc_sd = torch.load(unc_path, map_location=self.device)
+            if unc_sd.get("kind") == "modulated_ensemble":
+                self.model.add_uncertainty_modulated_ensemble_heads(
+                    ensemble_size=unc_sd["ensemble_size"]
+                )
+                self.model.uncertainty_resource_ensemble_heads.load_state_dict(
+                    unc_sd["resource_ensemble_heads"]
+                )
+                self.model.uncertainty_timing_ensemble_heads.load_state_dict(
+                    unc_sd["timing_ensemble_heads"]
+                )
+                self.model.uncertainty_resource_modulators.load_state_dict(
+                    unc_sd["resource_modulators"]
+                )
+                self.model.uncertainty_timing_modulators.load_state_dict(
+                    unc_sd["timing_modulators"]
+                )
+            elif unc_sd.get("kind") == "ensemble":
+                self.model.add_uncertainty_ensemble_heads(
+                    ensemble_size=unc_sd["ensemble_size"],
+                    mask_rate=unc_sd.get("mask_rate", 0.0),
+                )
+                self.model.uncertainty_resource_ensemble_heads.load_state_dict(
+                    unc_sd["resource_ensemble_heads"]
+                )
+                self.model.uncertainty_timing_ensemble_heads.load_state_dict(
+                    unc_sd["timing_ensemble_heads"]
+                )
+            elif unc_sd.get("kind") == "quantile":
+                self.model.add_uncertainty_quantile_heads()
+                self.model.uncertainty_resource_quantile_heads.load_state_dict(
+                    unc_sd["resource_quantile_heads"]
+                )
+                self.model.uncertainty_timing_quantile_head.load_state_dict(
+                    unc_sd["timing_quantile_head"]
+                )
+            else:
+                self.model.add_uncertainty_heads()
+                self.model.uncertainty_resource_heads.load_state_dict(
+                    unc_sd["resource_heads"]
+                )
+                self.model.uncertainty_timing_head.load_state_dict(unc_sd["timing_head"])
+            self.uncertainty_calibration = unc_sd.get("calibration")
+            self.uncertainty_spread_weight = unc_sd.get("spread_weight")
+
+    def predict_uncertainty_from_df(self, inputs_df):
+        has_single = self.model.uncertainty_resource_heads is not None
+        has_ensemble = self.model.uncertainty_resource_ensemble_heads is not None
+        has_quantile = self.model.uncertainty_resource_quantile_heads is not None
+        if not has_single and not has_ensemble and not has_quantile:
+            raise RuntimeError("Uncertainty heads are not initialized.")
+        point_estimates = super().predict_from_df(inputs_df.copy())
+
+        feature_labels = list(self.global_numerical_labels) + list(
+            self.global_categorical_maps.keys()
+        )
+        inputs_copy = inputs_df.copy()
+        if len(self.sequential_numerical_labels) > 0:
+            sequential_labels = list(self.sequential_numerical_labels) + list(
+                self.sequential_categorical_maps.keys()
+            )
+            inputs_copy.loc[:, "sequential_inputs"] = inputs_copy["sequential_inputs"].apply(
+                lambda x: x[sequential_labels]
+            )
+            feature_labels += ["sequential_inputs"]
+        inputs_filtered = inputs_copy[feature_labels]
+        input_dict = self.build_inputs(inputs_filtered)
+        input_tensors = self._process_input_dict(input_dict)
+        tensor_dict = {
+            k: v.to(self.device)
+            for k, v in zip(input_dict.keys(), input_tensors)
+        }
+
+        self.model.eval()
+        with torch.no_grad():
+            if has_quantile:
+                _, unc_tensor = self.model.forward_uncertainty_quantiles(tensor_dict)
+                raw_uncertainty = unc_tensor.cpu().numpy()
+            elif has_ensemble and hasattr(self.model, "forward_uncertainty_stats"):
+                mean_unc, std_unc = self.model.forward_uncertainty_stats(tensor_dict)
+                raw_uncertainty = self._apply_spread_fusion(
+                    mean_unc.cpu().numpy(),
+                    std_unc.cpu().numpy(),
+                    self.uncertainty_spread_weight,
+                )
+            else:
+                unc_tensor = self.model.forward_uncertainty(tensor_dict)
+                raw_uncertainty = unc_tensor.cpu().numpy()
+        calibrated_uncertainty = self._apply_monotonic_calibration(
+            raw_uncertainty, self.uncertainty_calibration
+        )
+        return point_estimates, calibrated_uncertainty
+
+    def predict_uncertainty_interval_from_df(self, inputs_df):
+        if self.model.uncertainty_resource_quantile_heads is None:
+            raise RuntimeError("Quantile uncertainty heads are not initialized.")
+        point_estimates = super().predict_from_df(inputs_df.copy())
+
+        feature_labels = list(self.global_numerical_labels) + list(
+            self.global_categorical_maps.keys()
+        )
+        inputs_copy = inputs_df.copy()
+        if len(self.sequential_numerical_labels) > 0:
+            sequential_labels = list(self.sequential_numerical_labels) + list(
+                self.sequential_categorical_maps.keys()
+            )
+            inputs_copy.loc[:, "sequential_inputs"] = inputs_copy["sequential_inputs"].apply(
+                lambda x: x[sequential_labels]
+            )
+            feature_labels += ["sequential_inputs"]
+        inputs_filtered = inputs_copy[feature_labels]
+        input_dict = self.build_inputs(inputs_filtered)
+        input_tensors = self._process_input_dict(input_dict)
+        tensor_dict = {
+            k: v.to(self.device)
+            for k, v in zip(input_dict.keys(), input_tensors)
+        }
+
+        self.model.eval()
+        with torch.no_grad():
+            lower, upper = self.model.forward_uncertainty_quantiles(tensor_dict)
+        return point_estimates, lower.cpu().numpy(), upper.cpu().numpy()
+
+
 class MultiModelWrapper:
     """
     _summary_
@@ -929,21 +1198,17 @@ class MultiModelWrapper:
             if not os.path.exists(config_path):
                 continue
 
-            h5_path = f"{path}.weights.h5"
-            pt_path = f"{path}.weights.pt"
-            if os.path.exists(h5_path):
-                model_wrapper = KerasModelWrapper()
-                model_wrapper.load(config_path, h5_path)
-                self.add_model_wrapper(model_wrapper)
-            elif os.path.exists(pt_path):
-                model_wrapper = TorchModelWrapper()
-                model_wrapper.load(config_path, pt_path)
-                self.add_model_wrapper(model_wrapper)
-            else:
-                raise FileNotFoundError(
-                    f"No weights file found for model at {config_path}. "
-                    "Expected .weights.h5 or .weights.pt"
-                )
+            weights_path = f"{path}.weights.h5"
+            if not os.path.exists(weights_path):
+                weights_path = f"{path}.weights.pt"
+                if not os.path.exists(weights_path):
+                    raise FileNotFoundError(
+                        f"No weights file found for model at {config_path}. "
+                        "Expected .weights.h5 or .weights.pt"
+                    )
+
+            model_wrapper = load_wrapper(config_path, weights_path)
+            self.add_model_wrapper(model_wrapper)
 
     def predict(self, models_to_predict, **kwargs):
         """
@@ -1174,21 +1439,19 @@ def get_available_estimators() -> Dict[str, BaseModelWrapper]:
         for file in files:
             if file.endswith(".config.json"):
                 config_path = os.path.join(root, file)
-                h5_path = config_path.replace(".config.json", ".weights.h5")
-                pt_path = config_path.replace(".config.json", ".weights.pt")
-                wrapper = None
-                if os.path.exists(h5_path):
-                    wrapper = KerasModelWrapper()
-                    wrapper.load(config_path, h5_path)
-                elif os.path.exists(pt_path):
-                    wrapper = TorchModelWrapper()
-                    wrapper.load(config_path, pt_path)
-                if wrapper:
-                    key = (
-                        os.path.dirname(
-                            os.path.relpath(config_path, weights_dir)
-                        ).replace(os.sep, "_")
-                    ) + "_" + wrapper.model.name
-                    estimators[key] = wrapper
+                weights_path = config_path.replace(".config.json", ".weights.h5")
+                if not os.path.exists(weights_path):
+                    weights_path = config_path.replace(".config.json", ".weights.pt")
+                    if not os.path.exists(weights_path):
+                        print(f"No weights file found for config {config_path}. Skipping.")
+                        continue
+
+                wrapper = load_wrapper(config_path, weights_path)
+                key = (
+                    os.path.dirname(
+                        os.path.relpath(config_path, weights_dir)
+                    ).replace(os.sep, "_")
+                ) + "_" + wrapper.model.name
+                estimators[key] = wrapper
 
     return estimators

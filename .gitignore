@@ -131,3 +131,4 @@ uv.toml
 *secret*
 autoresearch/ml-insights/SKILL.md
 *.lock
+/datasets

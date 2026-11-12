@@ -1,4 +1,5 @@
 {
+  "wrapper_class": "KerasModelWrapper",
   "global_numerical_labels": [
     "bit_width",
     "reuse_mean",

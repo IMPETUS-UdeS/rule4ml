@@ -11,31 +11,14 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow verbose logging
 import numpy as np
 import torch
 
-from autoresearch.prepare import (
-    ALL_TARGETS,
-    FORCE_CPU,
-    JSON_BATCH_SIZE,
-    JSON_MAX_WORKERS,
-    build_inputs_df,
-    get_architecture_name,
-    get_split_json_patterns,
-    predict,
-    print_summary,
-    r2,
-    rmse,
-    smape,
-)
-from rule4ml.models.wrappers import (
-    BaseModelWrapper,
-    KerasModelWrapper,
-    TorchModelWrapper,
-)
-from rule4ml.parsers.data_parser import (
-    get_global_data,
-    get_sequential_data,
-    read_from_json,
-    to_dataframe,
-)
+from autoresearch.prepare import (ALL_TARGETS, FORCE_CPU, JSON_BATCH_SIZE,
+                                  JSON_MAX_WORKERS, build_inputs_df,
+                                  get_architecture_name,
+                                  get_split_json_patterns, predict,
+                                  print_summary, r2, rmse, smape)
+from rule4ml.models.wrappers import BaseModelWrapper, load_wrapper
+from rule4ml.parsers.data_parser import (get_global_data, get_sequential_data,
+                                         read_from_json, to_dataframe)
 
 
 def print_arch_summary(
@@ -78,26 +61,25 @@ def print_arch_summary(
 
 
 def load_wrappers(path: str, device: torch.device) -> Sequence[BaseModelWrapper]:
-    """Scan directory for *.config.json and load matching wrappers."""
+    """
+    Scan directory for *.config.json and load matching wrappers.
+    """
+
     wrappers = []
     for config_path in sorted(
         glob.glob(os.path.join(path, "**", "*.config.json"), recursive=True)
     ):
-        h5_path = config_path.replace(".config.json", ".weights.h5")
-        pt_path = config_path.replace(".config.json", ".weights.pt")
+        weights_path = config_path.replace(".config.json", ".weights.h5")
+        if not os.path.exists(weights_path):
+            weights_path = config_path.replace(".config.json", ".weights.pt")
+            if not os.path.exists(weights_path):
+                print(f"Warning: No weights found for {config_path}, skipping.", flush=True)
+                continue
 
-        if os.path.exists(pt_path):
-            wrapper = TorchModelWrapper()
-            wrapper.load(config_path, pt_path)
-        elif os.path.exists(h5_path):
-            wrapper = KerasModelWrapper()
-            wrapper.load(config_path, h5_path)
-        else:
-            print(f"Warning: No weights found for {config_path}, skipping.", flush=True)
-            continue
-
+        wrapper = load_wrapper(config_path, weights_path)
         wrapper.model.to(device)
         wrappers.append(wrapper)
+
     return wrappers
 
 
@@ -228,8 +210,8 @@ def main():
             overall_rmse[target] = rmse(y_true[valid], y_pred[valid])
 
     metrics = {
-        "mean_smape": float(np.mean(list(overall_smape.values()))),
-        "mean_r2": float(np.mean(list(overall_r2.values()))),
+        "smape_mean": float(np.mean(list(overall_smape.values()))),
+        "r2_mean": float(np.mean(list(overall_r2.values()))),
     }
     for target in ALL_TARGETS:
         metrics[f"smape_{target}"] = overall_smape.get(target, float("nan"))

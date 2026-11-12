@@ -25,7 +25,7 @@ HLS4ML_TAGS = {"0.8.1": "v0.8.1", "1.1.0": "v1.1.0"}
 # Constants
 # --------------------------------------------------------------------------
 
-TIME_BUDGET = 3600  # wall-clock training seconds (excludes startup and evaluation)
+TIME_BUDGET = 4800  # wall-clock training seconds (excludes startup and evaluation)
 ALL_TARGETS = ["bram", "dsp", "ff", "lut", "cycles", "interval"]
 
 EVERYTHING_SEED = 42
@@ -110,9 +110,17 @@ def build_inputs_df(
     global_labels: List[str],
     sequential_labels: List[str]
 ) -> pd.DataFrame:
+    """
+    Build a DataFrame containing only the input columns for the model.
+    Strips any leaked target columns from the inputs.
+    """
+
     inputs_df = df[global_labels].copy()
     inputs_df["sequential_inputs"] = df["sequential_inputs"].apply(
         lambda x: x[sequential_labels]
+    )
+    inputs_df = inputs_df.drop(
+        columns=[c for c in ALL_TARGETS if c in inputs_df.columns]
     )
     return inputs_df
 
@@ -154,7 +162,8 @@ def make_dataloader(
 # Metrics
 # --------------------------------------------------------------------------
 
-def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-10) -> float:
+def smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    eps = 1e-10
     y_true = np.asarray(y_true, dtype=float).ravel()
     y_pred = np.asarray(y_pred, dtype=float).ravel()
 
@@ -245,19 +254,15 @@ def predict(
     inputs_df: pd.DataFrame,
 ) -> np.ndarray:
     """
-    Inference helper. Strips any leaked target columns from inputs_df before
-    running the model. Returns a (N, output_size) numpy array.
+    Inference helper. Returns a (N, output_size) numpy array.
 
     Available to the agent for use during training (e.g. validation monitoring),
     but also called internally by evaluate() so the agent cannot override how
     the final test-set predictions are produced.
     """
-    safe_inputs = inputs_df.drop(
-        columns=[c for c in ALL_TARGETS if c in inputs_df.columns]
-    )
 
     wrapper.model.eval()
-    return wrapper.predict_from_df(safe_inputs)
+    return wrapper.predict_from_df(inputs_df)
 
 # --------------------------------------------------------------------------
 # Evaluation

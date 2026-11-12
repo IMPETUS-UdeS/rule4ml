@@ -15,7 +15,7 @@ ARG REPO_REF=agent
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates \
+    git curl ca-certificates tmux \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
@@ -38,8 +38,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# Install agentic CLI tools (claude, codex, gemini)
-RUN npm install -g @anthropic-ai/claude-code
+# Install agentic CLI tools (claude, opencode, gemini and codex)
+RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN curl -fsSL https://opencode.ai/install | bash
 RUN npm install -g @google/gemini-cli
 RUN npm install -g @openai/codex
 
