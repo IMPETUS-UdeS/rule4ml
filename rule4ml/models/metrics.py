@@ -22,7 +22,9 @@ def smape(y_true, y_pred):
     y_true = y_true.squeeze()
     y_pred = y_pred.squeeze()
 
-    return 200 * np.mean(np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1))
+    return 200 * np.mean(
+        np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1)
+    )
 
 
 def rmse(y_true, y_pred):
@@ -90,7 +92,9 @@ class KerasParametricSMAPE(tf.keras.metrics.Metric):
             self.count.assign_add(tf.cast(tf.size(smape), tf.float32))
         else:
             numerator = kops.absolute(y_true_i - y_pred_i)
-            denominator = kops.maximum(kops.absolute(y_true_i) + kops.absolute(y_pred_i), self.eps)
+            denominator = kops.maximum(
+                kops.absolute(y_true_i) + kops.absolute(y_pred_i), self.eps
+            )
             smape = 100.0 * numerator / denominator
             self.total.assign_add(kops.sum(smape))
             self.count.assign_add(kops.cast(kops.size(smape), tf.float32))
@@ -170,11 +174,15 @@ class TorchParametricMAPE(torch.nn.Module):
         y_true_i = y_true_i.reshape(-1)
         y_pred_i = y_pred_i.reshape(-1)
 
-        diff = torch.abs(y_true_i - y_pred_i) / torch.clamp(torch.abs(y_true_i), min=self.eps)
+        diff = torch.abs(y_true_i - y_pred_i) / torch.clamp(
+            torch.abs(y_true_i), min=self.eps
+        )
         mape = 100.0 * torch.mean(diff, dim=-1)
 
         self.total += torch.sum(mape)
-        self.count += torch.tensor(mape.numel(), dtype=torch.float32, device=self.device)
+        self.count += torch.tensor(
+            mape.numel(), dtype=torch.float32, device=self.device
+        )
 
     def result(self):
         if self.count.item() == 0:
@@ -223,12 +231,16 @@ class TorchParametricSMAPE(torch.nn.Module):
         y_pred_i = y_pred_i.reshape(-1)
 
         numerator = torch.abs(y_true_i - y_pred_i)
-        denominator = torch.clamp(torch.abs(y_true_i) + torch.abs(y_pred_i), min=self.eps)
+        denominator = torch.clamp(
+            torch.abs(y_true_i) + torch.abs(y_pred_i), min=self.eps
+        )
         smape = 100.0 * numerator / denominator
 
         self.total += torch.sum(smape)
-        self.count += torch.tensor(smape.numel(), dtype=torch.float32, device=self.device)
-    
+        self.count += torch.tensor(
+            smape.numel(), dtype=torch.float32, device=self.device
+        )
+
     def result(self):
         if self.count.item() == 0:
             return torch.tensor(0.0, dtype=torch.float32, device=self.device)

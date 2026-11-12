@@ -2,7 +2,15 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
-from keras.layers import Activation, Add, BatchNormalization, Concatenate, Dense, Dropout, Input
+from keras.layers import (
+    Activation,
+    Add,
+    BatchNormalization,
+    Concatenate,
+    Dense,
+    Dropout,
+    Input,
+)
 from keras.models import Model
 from utils import FloatRange, IntRange, Power2Range
 
@@ -44,7 +52,9 @@ class GeneratorSettings:
     output_range: IntRange = IntRange(1, 1000)
     dropout_range: FloatRange = FloatRange(0.1, 0.8)
 
-    activations: list = field(default_factory=lambda: [None, "relu", "tanh", "sigmoid", "softmax"])
+    activations: list = field(
+        default_factory=lambda: [None, "relu", "tanh", "sigmoid", "softmax"]
+    )
     output_softmax_only: bool = False
 
     parameter_limit: int = 4096
@@ -103,7 +113,9 @@ def generate_fc_layer(
     out_list.append(Dense(units, use_bias=use_bias)(inputs))
 
     if skip_inputs is not None:
-        skip_layer = Add() if out_list[-1].shape[1] == skip_inputs.shape[1] else Concatenate()
+        skip_layer = (
+            Add() if out_list[-1].shape[1] == skip_inputs.shape[1] else Concatenate()
+        )
         out_list.append(skip_layer([skip_inputs, out_list[-1]]))
 
     if activation is not None:
@@ -159,7 +171,10 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
             model_bn
             and i < n_layers - 1
             and rng.random() < settings.bn_probability_func(i + 1)
-            and (settings.parameter_limit <= 0 or x.shape[1] <= settings.parameter_limit // 4)
+            and (
+                settings.parameter_limit <= 0
+                or x.shape[1] <= settings.parameter_limit // 4
+            )
         )  # Whether BatchNorm is added after the new Dense layer
 
         dropout_rate = 0.0
@@ -173,11 +188,15 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
 
         skip_inputs = None
         if (
-            model_skip and i > 0 and rng.random() < settings.skip_probability_func(i + 1)
+            model_skip
+            and i > 0
+            and rng.random() < settings.skip_probability_func(i + 1)
         ):  # Same for skip connections
             skip_inputs = layer_list[rng.integers(0, high=len(layer_list) - 1)]
 
-        unit_range = settings.neuron_range if i < n_layers - 1 else settings.output_range
+        unit_range = (
+            settings.neuron_range if i < n_layers - 1 else settings.output_range
+        )
         range_class_name = unit_range.__class__.__name__
         units = unit_range.random_in_range(rng)  # Dense layer units
         if (
@@ -202,7 +221,9 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                     max_units = min(max_units, bn_limit)
             if max_units != units:
                 range_class = globals()[unit_range.__class__.__name__]
-                units = range_class(settings.neuron_range.min, max_units).random_in_range(
+                units = range_class(
+                    settings.neuron_range.min, max_units
+                ).random_in_range(
                     rng
                 )  # Forcing down units to a range within parameter_limit
 
@@ -211,7 +232,9 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
             i < n_layers - 1 and settings.output_softmax_only
         ):  # Whether to limit softmax as final output only
             activation_choices = [
-                act for act in activation_choices if (act is None or act.lower() != "softmax")
+                act
+                for act in activation_choices
+                if (act is None or act.lower() != "softmax")
             ]
         activation = rng.choice(activation_choices)  # Random activation
 
@@ -247,7 +270,9 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
         rng = np.random.default_rng()
 
     input_list = []  # keeps track of autoencoder layers
-    input_shape = (settings.inout_range.random_in_range(rng),)  # output shape is the same
+    input_shape = (
+        settings.inout_range.random_in_range(rng),
+    )  # output shape is the same
     dense_units = [input_shape[0]]
 
     input_layer = Input(shape=input_shape)
@@ -263,7 +288,9 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
 
         use_bias = model_bias and rng.random() < settings.bias_probability_func(i + 1)
 
-        unit_range = Power2Range(settings.min_neurons, min(dense_units[-1], settings.max_neurons))
+        unit_range = Power2Range(
+            settings.min_neurons, min(dense_units[-1], settings.max_neurons)
+        )
         units = unit_range.random_in_range(rng)
 
         if settings.parameter_limit > 0:
@@ -277,7 +304,9 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
                     max_units = min(max_units, bias_limit)
 
             if max_units != units:
-                units = Power2Range(settings.min_neurons, max_units).random_in_range(rng)
+                units = Power2Range(settings.min_neurons, max_units).random_in_range(
+                    rng
+                )
 
         if i < n_enc_layers - 1:
             dense_units.append(units)
@@ -293,7 +322,7 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
         if i < n_dec_layers - 1:
             activation = rng.choice(settings.activations)
         else:
-            activation = 'softmax'
+            activation = "softmax"
 
         use_bias = model_bias and rng.random() < settings.bias_probability_func(i + 1)
 
@@ -341,6 +370,8 @@ def get_submodels(base_model, verbose=0):
 
 if __name__ == "__main__":
     rng = np.random.default_rng(seed=None)
-    nn = generate_fc_network(GeneratorSettings(output_softmax_only=True), rng, verbose=1)
+    nn = generate_fc_network(
+        GeneratorSettings(output_softmax_only=True), rng, verbose=1
+    )
 
     # get_submodels(nn, verbose=0)

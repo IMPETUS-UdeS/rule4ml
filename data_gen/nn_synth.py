@@ -38,7 +38,9 @@ base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 backend_build_args = {
     backend_name: {
         arg.name: arg.default if arg.default is not inspect._empty else None
-        for arg in list(inspect.signature(get_backend(backend_name).build).parameters.values())[1:]
+        for arg in list(
+            inspect.signature(get_backend(backend_name).build).parameters.values()
+        )[1:]
     }
     for backend_name in get_available_backends()
 }
@@ -191,7 +193,9 @@ def torch_to_hls4ml(
 def add_backend_to_env(backend, backend_version, xilinx_path):
     available_backends = get_available_backends()
     if backend.lower() not in available_backends:
-        raise ValueError(f"Backend {backend} not available. Choose from {available_backends}")
+        raise ValueError(
+            f"Backend {backend} not available. Choose from {available_backends}"
+        )
 
     backend_frmt = backend[0].upper() + backend[1:].lower()
     if backend_frmt.endswith("accelerator"):
@@ -200,7 +204,7 @@ def add_backend_to_env(backend, backend_version, xilinx_path):
     backend_path = os.path.join(xilinx_path, backend_frmt, backend_version, "bin")
     if not os.path.exists(backend_path):
         raise Exception(
-            f"{backend_frmt} {backend_version} installation not found at \"{backend_path}\". "
+            f'{backend_frmt} {backend_version} installation not found at "{backend_path}". '
             + "Please check if the path points to the chosen backend."
         )
 
@@ -248,7 +252,9 @@ def synthesize_keras_model(
 
     model_config = config_from_keras_model(model, hls_config)
 
-    updated_model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
+    updated_model_id = md5_hash_dict(
+        {"model_config": model_config, "hls_config": hls_config}
+    )
     if model_id is None:
         model_id = updated_model_id
 
@@ -355,7 +361,9 @@ def synthesize_torch_model(
     model_config = config_from_torch_model(model, hls_config)
     input_shape = model_config[0]["input_shape"]
 
-    updated_model_id = md5_hash_dict({"model_config": model_config, "hls_config": hls_config})
+    updated_model_id = md5_hash_dict(
+        {"model_config": model_config, "hls_config": hls_config}
+    )
     if model_id is None:
         model_id = updated_model_id
 
@@ -465,7 +473,9 @@ def parallel_synthesis(args):
         if len(backends) < len(backend_versions):
             backends += [backends[-1]] * (len(backend_versions) - len(backends))
         else:
-            backend_versions += [backend_versions[-1]] * (len(backends) - len(backend_versions))
+            backend_versions += [backend_versions[-1]] * (
+                len(backends) - len(backend_versions)
+            )
 
     for model_idx, model in enumerate(models):
         for hls_idx, hls_config in enumerate(hls_configs):
@@ -498,25 +508,31 @@ def parallel_synthesis(args):
                                 )
 
                                 if meta_entry:
-                                    meta_entry["synthesis_info"] += synth_result["meta_data"][
-                                        "synthesis_info"
-                                    ]
-                                    synth_result["meta_data"]["synthesis_info"] = meta_entry[
-                                        "synthesis_info"
-                                    ]
+                                    meta_entry["synthesis_info"] += synth_result[
+                                        "meta_data"
+                                    ]["synthesis_info"]
+                                    synth_result["meta_data"]["synthesis_info"] = (
+                                        meta_entry["synthesis_info"]
+                                    )
 
                                 updated_model_id = synth_result["meta_data"]["model_id"]
                                 if model_id is None:
                                     model_id = updated_model_id
 
-                                json_file = json_filename if json_filename else f"{model_id}.json"
+                                json_file = (
+                                    json_filename
+                                    if json_filename
+                                    else f"{model_id}.json"
+                                )
                                 json_path = os.path.join(output_dir, json_file)
 
                                 if os.path.isfile(json_path):
                                     os.remove(json_path)
                                 save_to_json(
                                     synth_result,
-                                    os.path.join(output_dir, f"{updated_model_id}.json"),
+                                    os.path.join(
+                                        output_dir, f"{updated_model_id}.json"
+                                    ),
                                     indent=2,
                                 )
 
@@ -533,15 +549,21 @@ def parallel_synthesis(args):
                                     )  # remove the tar archive that hls4ml produces
 
                                     with tarfile.open(
-                                        os.path.join(project_dir, f"{updated_model_id}.tar.gz"),
+                                        os.path.join(
+                                            project_dir, f"{updated_model_id}.tar.gz"
+                                        ),
                                         "w:gz",
                                     ) as tar:
                                         tar.add(
-                                            os.path.join(project_dir, str(updated_model_id)),
+                                            os.path.join(
+                                                project_dir, str(updated_model_id)
+                                            ),
                                             arcname=str(updated_model_id),
                                         )
 
-                                    shutil.rmtree(os.path.join(project_dir, str(updated_model_id)))
+                                    shutil.rmtree(
+                                        os.path.join(project_dir, str(updated_model_id))
+                                    )
 
                             except Exception as e:
                                 print(e)
@@ -577,7 +599,9 @@ def parallel_rnd_synthesis(args):
     while True:
         try:
             gen_network = gen_function(gen_settings, rng=rng, verbose=gen_verbose)
-            hls_config = hls4ml.utils.config_from_keras_model(gen_network, granularity=granularity)
+            hls_config = hls4ml.utils.config_from_keras_model(
+                gen_network, granularity=granularity
+            )
 
             model_precision = rng.choice(synth_settings.precisions)
             model_reuse_factor = int(synth_settings.reuse_range.random_in_range(rng))
@@ -590,28 +614,40 @@ def parallel_rnd_synthesis(args):
             if granularity == "name":
                 for layer_name in hls_config["LayerName"]:
                     layer_dict = {}
-                    if isinstance(hls_config["LayerName"][layer_name]["Precision"], dict):
-                        for prec_key in hls_config["LayerName"][layer_name]["Precision"]:
+                    if isinstance(
+                        hls_config["LayerName"][layer_name]["Precision"], dict
+                    ):
+                        for prec_key in hls_config["LayerName"][layer_name][
+                            "Precision"
+                        ]:
                             layer_dict["Precision"][prec_key] = rng.choice(
                                 synth_settings.precisions
                             )
                     else:
                         layer_dict["Precision"] = rng.choice(synth_settings.precisions)
 
-                    layer_dict["ReuseFactor"] = int(synth_settings.reuse_range.random_in_range(rng))
+                    layer_dict["ReuseFactor"] = int(
+                        synth_settings.reuse_range.random_in_range(rng)
+                    )
                     layer_dict["Strategy"] = rng.choice(synth_settings.strategies)
 
                     hls_config["LayerName"][layer_name] = layer_dict
             elif granularity == "type":
                 layer_type_dict = {}
                 for layer_type in hls_config["LayerType"]:
-                    if isinstance(hls_config["LayerType"][layer_type]["Precision"], dict):
-                        for prec_key in hls_config["LayerType"][layer_type]["Precision"]:
+                    if isinstance(
+                        hls_config["LayerType"][layer_type]["Precision"], dict
+                    ):
+                        for prec_key in hls_config["LayerType"][layer_type][
+                            "Precision"
+                        ]:
                             layer_type_dict["Precision"][prec_key] = rng.choice(
                                 synth_settings.precisions
                             )
                     else:
-                        layer_type_dict["Precision"] = rng.choice(synth_settings.precisions)
+                        layer_type_dict["Precision"] = rng.choice(
+                            synth_settings.precisions
+                        )
 
                     layer_type_dict["ReuseFactor"] = int(
                         synth_settings.reuse_range.random_in_range(rng)
@@ -667,7 +703,9 @@ def synth_from_json(args):
 
         if prj_decompress:
             project_dir = os.path.join(args["output_dir"], "projects")
-            tar_path = os.path.join(args["output_dir"], "projects", f"{model_id}.tar.gz")
+            tar_path = os.path.join(
+                args["output_dir"], "projects", f"{model_id}.tar.gz"
+            )
 
             try:
                 with tarfile.open(tar_path, "r:gz") as tar:
@@ -679,9 +717,13 @@ def synth_from_json(args):
                         if member.name.count("/") > 0
                     }
                     if len(top_level_dirs) == 1:
-                        extracted_dir = os.path.join(project_dir, next(iter(top_level_dirs)))
+                        extracted_dir = os.path.join(
+                            project_dir, next(iter(top_level_dirs))
+                        )
                     else:
-                        raise ValueError(f"Unexpected directory structure: {top_level_dirs}")
+                        raise ValueError(
+                            f"Unexpected directory structure: {top_level_dirs}"
+                        )
 
                     # rename the extracted project folder to the model_id
                     new_dir = os.path.join(project_dir, str(model_id))
@@ -762,7 +804,9 @@ def sanitize_csynth_data(args):
         del sanitized_entry["hls_config"]["board"]
 
         sanitized_entry["resource_report"] = {}
-        sanitized_entry["resource_report"]["CSynthesisReport"] = entry["resource_report"]
+        sanitized_entry["resource_report"]["CSynthesisReport"] = entry[
+            "resource_report"
+        ]
 
         sanitized_entry["latency_report"] = entry["latency_report"]
 
@@ -777,9 +821,9 @@ def sanitize_csynth_data(args):
                 "hls_config": sanitized_entry["hls_config"],
             }
         )
-        sanitized_entry["meta_data"][
-            "artifacts_file"
-        ] = f"{sanitized_entry['meta_data']['model_id']}.tar.gz"
+        sanitized_entry["meta_data"]["artifacts_file"] = (
+            f"{sanitized_entry['meta_data']['model_id']}.tar.gz"
+        )
 
         if save_files:
             old_model_id = entry["meta_data"]["model_id"]
@@ -797,7 +841,9 @@ def sanitize_csynth_data(args):
                     os.path.join(output_dir, "projects", str(new_model_id)),
                 )
 
-            if os.path.exists(os.path.join(output_dir, "projects", f"{old_model_id}.tar.gz")):
+            if os.path.exists(
+                os.path.join(output_dir, "projects", f"{old_model_id}.tar.gz")
+            ):
                 os.rename(
                     os.path.join(output_dir, "projects", f"{old_model_id}.tar.gz"),
                     os.path.join(output_dir, "projects", f"{new_model_id}.tar.gz"),
@@ -829,9 +875,9 @@ def change_json_file_keys(args):
 
         changed_entry["hls_resource_report"] = {}
         for key in entry["resource_report"]["CSynthesisReport"]:
-            changed_entry["hls_resource_report"][key.lower()] = entry["resource_report"][
-                "CSynthesisReport"
-            ][key]
+            changed_entry["hls_resource_report"][key.lower()] = entry[
+                "resource_report"
+            ]["CSynthesisReport"][key]
 
         changed_entry["resource_report"] = {}
         for key in entry["resource_report"]["VivadoSynthReport"]:
@@ -912,7 +958,9 @@ def extract_ii_from_csynth_report(args):
         if not os.path.isfile(project_file):
             continue
 
-        report_pattern = f"*{model_id}*/myproject_prj/solution1/syn/report/myproject_csynth.rpt"
+        report_pattern = (
+            f"*{model_id}*/myproject_prj/solution1/syn/report/myproject_csynth.rpt"
+        )
         report_content = read_report_from_tar(report_pattern, project_file)
         if report_content:
             report_lines = report_content.split("\n")
@@ -949,7 +997,9 @@ def extract_ii_from_csynth_report(args):
 
 
 if __name__ == "__main__":
-    benchmark_path = os.path.join(base_path, "datasets", "iccad_submit", "preprocessed", "benchmark")
+    benchmark_path = os.path.join(
+        base_path, "datasets", "iccad_submit", "preprocessed", "benchmark"
+    )
     data = read_from_json(
         os.path.join(benchmark_path, "*.json"),
     )

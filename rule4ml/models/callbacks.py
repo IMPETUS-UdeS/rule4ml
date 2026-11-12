@@ -9,7 +9,13 @@ except ImportError:
 
 class ReduceLROnPlateau:
     def __init__(
-        self, monitor="val_loss", mode="min", factor=0.5, patience=5, min_delta=0.0, min_lr=1e-6
+        self,
+        monitor="val_loss",
+        mode="min",
+        factor=0.5,
+        patience=5,
+        min_delta=0.0,
+        min_lr=1e-6,
     ):
         self.monitor = monitor
         self.mode = mode
@@ -31,7 +37,7 @@ class ReduceLROnPlateau:
     def step(self, value, wrapper, verbose=0):
         if not self._current_lrs:
             self._current_lrs = [
-                param_group['lr'] for param_group in wrapper.optimizer.param_groups
+                param_group["lr"] for param_group in wrapper.optimizer.param_groups
             ]
 
         if self._has_improved(value):
@@ -42,10 +48,10 @@ class ReduceLROnPlateau:
         self._num_bad += 1
         if self._num_bad >= self.patience:
             for idx in range(len(wrapper.optimizer.param_groups)):
-                old_lr = wrapper.optimizer.param_groups[idx]['lr']
+                old_lr = wrapper.optimizer.param_groups[idx]["lr"]
                 new_lr = max(old_lr * self.factor, self.min_lr)
                 if old_lr > self.min_lr:
-                    wrapper.optimizer.param_groups[idx]['lr'] = new_lr
+                    wrapper.optimizer.param_groups[idx]["lr"] = new_lr
                     self._current_lrs[idx] = new_lr
                     if verbose > 0:
                         print(
@@ -57,7 +63,12 @@ class ReduceLROnPlateau:
 
 class EarlyStopping:
     def __init__(
-        self, monitor="val_loss", mode="min", patience=10, min_delta=0.0, restore_best=True
+        self,
+        monitor="val_loss",
+        mode="min",
+        patience=10,
+        min_delta=0.0,
+        restore_best=True,
     ):
         self.monitor = monitor
         self.mode = mode
@@ -82,7 +93,8 @@ class EarlyStopping:
             self._num_bad = 0
             if self.restore_best:
                 self._best_state = {
-                    k: v.detach().cpu().clone() for k, v in wrapper.model.state_dict().items()
+                    k: v.detach().cpu().clone()
+                    for k, v in wrapper.model.state_dict().items()
                 }
             return False
 

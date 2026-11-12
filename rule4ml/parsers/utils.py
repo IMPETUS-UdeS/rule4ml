@@ -106,7 +106,7 @@ def fixed_precision_to_bit_width(precision: str):
 
     match = re.match(r"(ap_)?fixed<(\d+),\s*(\d+)>", precision.lower())
     if not match:
-        raise ValueError(f"Invalid format: {precision}, expecting \"ap_fixed<a, b>\"")
+        raise ValueError(f'Invalid format: {precision}, expecting "ap_fixed<a, b>"')
 
     groups = match.groups()
     if len(groups) == 3:
@@ -124,7 +124,9 @@ def get_supported_boards():
         _type_: _description_
     """
 
-    with open(os.path.join(os.path.dirname(__file__), "supported_boards.json")) as json_file:
+    with open(
+        os.path.join(os.path.dirname(__file__), "supported_boards.json")
+    ) as json_file:
         supported_boards = json.load(json_file)
 
     return supported_boards

@@ -64,7 +64,7 @@ def get_optimizer_from_str(optimizer_name, backend, **kwargs):
 
     if optimizer_name not in optimizers:
         raise ValueError(
-            f"Unsupported optimizer \"{optimizer_name}\". Supported optimizers are {list(optimizers.keys())}."
+            f'Unsupported optimizer "{optimizer_name}". Supported optimizers are {list(optimizers.keys())}.'
         )
 
     return optimizers[optimizer_name](**kwargs)
@@ -114,7 +114,7 @@ def get_loss_from_str(loss_name, backend, **kwargs):
 
     if loss_name not in losses:
         raise ValueError(
-            f"Unsupported loss \"{loss_name}\". Supported losses are {list(losses.keys())}."
+            f'Unsupported loss "{loss_name}". Supported losses are {list(losses.keys())}.'
         )
 
     return losses[loss_name](**kwargs)
@@ -147,9 +147,13 @@ class TweedieLoss(torch.nn.Module):
         y_true = y_true.clamp_min(0.0)
         y_pred = y_pred.clamp_min(self.eps)
         if self.p == 1.0:  # Poisson limit
-            loss = 2.0 * (y_true * torch.log((y_true + self.eps) / y_pred) - (y_true - y_pred))
+            loss = 2.0 * (
+                y_true * torch.log((y_true + self.eps) / y_pred) - (y_true - y_pred)
+            )
         elif self.p == 2.0:  # Gamma limit
-            loss = 2.0 * (torch.log(y_pred / (y_true + self.eps)) + (y_true - y_pred) / y_pred)
+            loss = 2.0 * (
+                torch.log(y_pred / (y_true + self.eps)) + (y_true - y_pred) / y_pred
+            )
         else:
             loss = 2.0 * (
                 (y_true * y_pred.pow(1.0 - self.p)) / (1.0 - self.p)

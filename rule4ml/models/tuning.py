@@ -26,7 +26,12 @@ class KerasSearcher:
         self.model_wrapper = KerasModelWrapper()
 
     def mlp_model_builder_generator(
-        self, inputs_df, targets_df, categorical_maps, val_inputs_df=None, val_targets_df=None
+        self,
+        inputs_df,
+        targets_df,
+        categorical_maps,
+        val_inputs_df=None,
+        val_targets_df=None,
     ):
         def mlp_model_builder(hp):
             mlp_settings = MLPSettings(
@@ -35,7 +40,9 @@ class KerasSearcher:
                     for idx in range(len(categorical_maps))
                 ],
                 numerical_dense_layers=[
-                    hp.Choice(name=f"numerical_units_{idx}", values=[16, 32, 64, 128, 256])
+                    hp.Choice(
+                        name=f"numerical_units_{idx}", values=[16, 32, 64, 128, 256]
+                    )
                     for idx in range(hp.Int("numerical_count", 1, 5))
                 ],
                 dense_layers=[
@@ -65,7 +72,9 @@ class KerasSearcher:
                 num_epochs=20,
                 batch_size=64,
                 # batch_size=hp.Choice(name="batch_size", values=[32, 64, 128, 256]),
-                learning_rate=hp.Choice(name="learning_rate", values=[1e-4, 1e-3, 1e-2]),
+                learning_rate=hp.Choice(
+                    name="learning_rate", values=[1e-4, 1e-3, 1e-2]
+                ),
                 optimizer=keras.optimizers.Adam,
                 loss_function="msle",
                 metrics=metrics,
@@ -119,7 +128,7 @@ class KerasSearcher:
             inputs_df, targets_df, categorical_maps, val_inputs_df, val_targets_df
         )
 
-        project_name = project_name or datetime.now().strftime('%Y%m%d-%H%M%S')
+        project_name = project_name or datetime.now().strftime("%Y%m%d-%H%M%S")
         self.tuner = kt.Hyperband(
             hypermodel=model_builder,
             objective="val_loss",
@@ -165,7 +174,9 @@ class KerasSearcher:
         )
 
         best_hp = self.tuner.get_best_hyperparameters(1)[0]
-        model_builder = self.mlp_model_builder_generator(inputs_df, targets_df, categorical_maps)
+        model_builder = self.mlp_model_builder_generator(
+            inputs_df, targets_df, categorical_maps
+        )
         model_builder(best_hp)
 
 
@@ -181,8 +192,14 @@ class TorchSearcher:
     def _set_model(self, gnn_settings):
         target_labels = list(self.targets_df.columns)
 
-        global_input_shape = (None, len(self.inputs_df.columns) - 1)  # -1 for sequential features
-        sequential_input_shape = (None, len(self.inputs_df["sequential_inputs"].iloc[0].columns))
+        global_input_shape = (
+            None,
+            len(self.inputs_df.columns) - 1,
+        )  # -1 for sequential features
+        sequential_input_shape = (
+            None,
+            len(self.inputs_df["sequential_inputs"].iloc[0].columns),
+        )
         output_shape = (None, len(target_labels))
 
         self.model_wrapper.set_model(
@@ -193,7 +210,7 @@ class TorchSearcher:
                 output_shape=output_shape,
                 global_categorical_maps=self.global_categorical_maps,
                 sequential_categorical_maps=self.sequential_categorical_maps,
-                name=f"{'-'.join([x.upper() for x in target_labels])}_GNN_{self.trial_number-1}",
+                name=f"{'-'.join([x.upper() for x in target_labels])}_GNN_{self.trial_number - 1}",
                 device=self.device,
             )
         )
@@ -255,7 +272,9 @@ class TorchSearcher:
         train_settings = TrainSettings(
             num_epochs=self.n_epochs,
             batch_size=batch_size,
-            learning_rate=trial.suggest_categorical("learning_rate", [1e-5, 1e-4, 1e-3]),
+            learning_rate=trial.suggest_categorical(
+                "learning_rate", [1e-5, 1e-4, 1e-3]
+            ),
             optimizer="adam",
             loss_function="msle",
             metrics=metrics,
@@ -275,7 +294,11 @@ class TorchSearcher:
         path = os.path.dirname(self.db_path)
         callbacks = [
             EarlyStopping(
-                monitor="val_loss", mode="min", patience=5, min_delta=0.0, restore_best=False
+                monitor="val_loss",
+                mode="min",
+                patience=5,
+                min_delta=0.0,
+                restore_best=False,
             ),
             ModelCheckpoint(dirpath=path, monitor="val_loss", mode="min"),
         ]
@@ -320,7 +343,9 @@ class TorchSearcher:
             study_name=self.study_name,
             storage=db_uri,
         )
-        self.study.optimize(self.gnn_objective, n_trials=n_trials, show_progress_bar=True)
+        self.study.optimize(
+            self.gnn_objective, n_trials=n_trials, show_progress_bar=True
+        )
 
     def load_tuner(
         self,
@@ -371,10 +396,15 @@ class TorchSearcher:
                 best_params[f"numerical_dense_{idx}"]
                 for idx in range(best_params["numerical_dense_count"])
             ],
-            gconv_layers=[best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])],
-            dense_layers=[best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])],
+            gconv_layers=[
+                best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])
+            ],
+            dense_layers=[
+                best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])
+            ],
             dense_dropouts=[
-                best_params[f"dropout_{idx}"] for idx in range(best_params["dense_count"])
+                best_params[f"dropout_{idx}"]
+                for idx in range(best_params["dense_count"])
             ],
             bayesian_dense=bayesian_dense,
             bayesian_output=any(bayesian_dense),
@@ -405,7 +435,9 @@ class TorchSearcher:
 
     def load_best(self):
         if self.study is None:
-            raise ValueError("No study loaded. Please run gnn_search or load_tuner first.")
+            raise ValueError(
+                "No study loaded. Please run gnn_search or load_tuner first."
+            )
 
         best_params = self.best_params()
         bayesian_dense = [
@@ -425,10 +457,15 @@ class TorchSearcher:
                 best_params[f"numerical_dense_{idx}"]
                 for idx in range(best_params["numerical_dense_count"])
             ],
-            gconv_layers=[best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])],
-            dense_layers=[best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])],
+            gconv_layers=[
+                best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])
+            ],
+            dense_layers=[
+                best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])
+            ],
             dense_dropouts=[
-                best_params[f"dropout_{idx}"] for idx in range(best_params["dense_count"])
+                best_params[f"dropout_{idx}"]
+                for idx in range(best_params["dense_count"])
             ],
             bayesian_dense=bayesian_dense,
             bayesian_output=any(bayesian_dense),

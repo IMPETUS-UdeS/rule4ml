@@ -68,7 +68,10 @@ class BoardScaler(BaseScaler):
         return out
 
     def to_config(self):
-        return {"available_resources": self.available_resources, "board_map": self.board_map}
+        return {
+            "available_resources": self.available_resources,
+            "board_map": self.board_map,
+        }
 
     @classmethod
     def from_config(cls, config):
@@ -121,7 +124,10 @@ class BoardPercentScaler(BaseScaler):
         return out
 
     def to_config(self):
-        return {"available_resources": self.available_resources, "board_map": self.board_map}
+        return {
+            "available_resources": self.available_resources,
+            "board_map": self.board_map,
+        }
 
     @classmethod
     def from_config(cls, config):

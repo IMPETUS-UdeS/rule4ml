@@ -53,7 +53,9 @@ class Power2Range:
         if rng is None:
             rng = np.random.default_rng()
 
-        rnd_exp = rng.integers(self.min_exp, high=self.max_exp, size=size, endpoint=endpoint)
+        rnd_exp = rng.integers(
+            self.min_exp, high=self.max_exp, size=size, endpoint=endpoint
+        )
         return 2**rnd_exp
 
     def to_list(self, endpoint=True):
@@ -133,7 +135,9 @@ def data_from_report(path):
     if clock_match:
         numbers_line = content.count("\n", 0, clock_match.start())
 
-        numbers_str = numbers_str = re.findall(r"\d+\.\d+|\d+", content_lines[numbers_line])[:2]
+        numbers_str = numbers_str = re.findall(
+            r"\d+\.\d+|\d+", content_lines[numbers_line]
+        )[:2]
         keys = ["target_clock", "estimated_clock"]
         latency_dict.update(
             {
@@ -166,7 +170,9 @@ def data_from_synthesis(synth_dict: dict):
                 "cycles_min": str(float(synth_dict[report]["BestLatency"])),
                 "cycles_max": str(float(synth_dict[report]["WorstLatency"])),
                 "target_clock": str(float(synth_dict[report]["TargetClockPeriod"])),
-                "estimated_clock": str(float(synth_dict[report]["EstimatedClockPeriod"])),
+                "estimated_clock": str(
+                    float(synth_dict[report]["EstimatedClockPeriod"])
+                ),
             }
         )
 
@@ -202,7 +208,9 @@ def model_name_from_config(model, model_config, hls_config):
     model_name += f"{output_size}out_"
 
     hls_model_config = hls_config["Model"]
-    model_name += f"""{hls_model_config["Precision"]}_{hls_model_config["ReuseFactor"]}rf_"""
+    model_name += (
+        f"""{hls_model_config["Precision"]}_{hls_model_config["ReuseFactor"]}rf_"""
+    )
     model_name += f"""{hls_model_config["Strategy"][0].upper()}"""
 
     return model_name
@@ -245,7 +253,9 @@ def save_to_json(data, file_path="./dataset.json", indent=2):
             json_file.write(
                 ",\n"
                 + " " * indent
-                + "{}\n]".format(json.dumps(data, indent=indent).replace("\n", "\n" + " " * indent))
+                + "{}\n]".format(
+                    json.dumps(data, indent=indent).replace("\n", "\n" + " " * indent)
+                )
             )
 
 

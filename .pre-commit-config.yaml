@@ -1,23 +1,12 @@
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.9.6
+  rev: v0.17.5
   hooks:
-    - id: ruff
-      types_or: [ python, jupyter ]
-      args: [ --fix ]
-
-- repo: https://github.com/psf/black
-  rev: 25.1.0
-  hooks:
-  - id: black
-    language_version: python3
-    args: ['--line-length=100',
-           '--skip-string-normalization']
-  - id: black-jupyter
+  - id: ruff-check
     types_or: [python, jupyter]
-    additional_dependencies: [".[jupyter]"]
-    args: ['--line-length=100',
-           '--skip-string-normalization']
+    args: [--fix]
+  - id: ruff-format
+    types_or: [python, jupyter]
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v5.0.0
@@ -32,18 +21,6 @@ repos:
   - id: mixed-line-ending
   - id: requirements-txt-fixer
   - id: trailing-whitespace
-
-- repo: https://github.com/PyCQA/isort
-  rev: 6.0.0
-  hooks:
-  - id: isort
-    args: ["--profile", "black", "--line-length=100"]
-
-- repo: https://github.com/asottile/pyupgrade
-  rev: v3.19.1
-  hooks:
-  - id: pyupgrade
-    args: ["--py36-plus"]
 
 - repo: https://github.com/mgedmin/check-manifest
   rev: "0.50"

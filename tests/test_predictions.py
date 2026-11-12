@@ -55,7 +55,9 @@ class MultiModelWrapperTests(unittest.TestCase):
         x = Dense(32, activation="relu")(x)
         outputs = Dense(5, activation="softmax")(x)
 
-        model_to_predict = keras.Model(inputs=inputs, outputs=outputs, name="Jet Classifier")
+        model_to_predict = keras.Model(
+            inputs=inputs, outputs=outputs, name="Jet Classifier"
+        )
         model_to_predict.build((None, input_size))
 
         estimator = MultiModelWrapper()
@@ -188,7 +190,9 @@ class MultiModelWrapperTests(unittest.TestCase):
                 },
                 "board": board,
             }
-            for board, strategy in itertools.product(["pynq-z2", "zcu102"], ["Latency", "Resource"])
+            for board, strategy in itertools.product(
+                ["pynq-z2", "zcu102"], ["Latency", "Resource"]
+            )
         ]
 
         estimator = MultiModelWrapper()

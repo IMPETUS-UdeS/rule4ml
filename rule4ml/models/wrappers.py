@@ -21,6 +21,7 @@ try:
 except ImportError:
     onnx = None
 
+from rule4ml.models import scaling
 from rule4ml.models.architectures import (
     KerasMCDropout,
     KerasMLP,
@@ -30,7 +31,6 @@ from rule4ml.models.architectures import (
 )
 from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.metrics import rmse, smape
-from rule4ml.models.scaling import *  # noqa: F403
 from rule4ml.models.utils import get_loss_from_str, get_optimizer_from_str
 from rule4ml.parsers.data_parser import (
     boards_data,
@@ -43,7 +43,11 @@ from rule4ml.parsers.network_parser import (
     config_from_onnx_model,
     config_from_torch_model,
 )
-from rule4ml.parsers.utils import camel_keys_to_snake, fixed_precision_to_bit_width, to_lower_keys
+from rule4ml.parsers.utils import (
+    camel_keys_to_snake,
+    fixed_precision_to_bit_width,
+    to_lower_keys,
+)
 
 
 @dataclass
@@ -107,7 +111,9 @@ class BaseModelWrapper:
         )
 
         self.global_categorical_maps = getattr(model, "global_categorical_maps", {})
-        self.sequential_categorical_maps = getattr(model, "sequential_categorical_maps", {})
+        self.sequential_categorical_maps = getattr(
+            model, "sequential_categorical_maps", {}
+        )
 
         self.output_shape = getattr(model, "output_shape", ())
 
@@ -123,12 +129,12 @@ class BaseModelWrapper:
 
         global_numerical_inputs_df = inputs_df.drop(
             self.global_categorical_maps.keys(), axis=1
-        ).select_dtypes(
-            exclude=[object]
-        )  # excluding nested "sequential_inputs" Series
+        ).select_dtypes(exclude=[object])  # excluding nested "sequential_inputs" Series
         self.global_numerical_labels = global_numerical_inputs_df.columns.values
 
-        input_dict[self.global_input_keys["numerical"]] = global_numerical_inputs_df.values
+        input_dict[self.global_input_keys["numerical"]] = (
+            global_numerical_inputs_df.values
+        )
 
         if "sequential_inputs" in inputs_df:
             seq_inputs_series = inputs_df["sequential_inputs"]
@@ -137,12 +143,16 @@ class BaseModelWrapper:
                     self.sequential_input_keys["categorical"],
                     self.sequential_categorical_maps.keys(),
                 ):
-                    input_dict[key] = seq_inputs_series.apply(lambda df: df[label]).values
+                    input_dict[key] = seq_inputs_series.apply(
+                        lambda df: df[label]
+                    ).values
 
                 seq_numerical_inputs = seq_inputs_series.apply(
-                    lambda df: df.drop(self.sequential_categorical_maps.keys(), axis=1)
-                    .select_dtypes(exclude=[object])
-                    .values
+                    lambda df: (
+                        df.drop(self.sequential_categorical_maps.keys(), axis=1)
+                        .select_dtypes(exclude=[object])
+                        .values
+                    )
                 ).values
                 seq_numerical_inputs = np.asarray([arr for arr in seq_numerical_inputs])
 
@@ -153,7 +163,9 @@ class BaseModelWrapper:
                     .columns.values
                 )
 
-                input_dict[self.sequential_input_keys["numerical"]] = seq_numerical_inputs
+                input_dict[self.sequential_input_keys["numerical"]] = (
+                    seq_numerical_inputs
+                )
 
         return input_dict
 
@@ -167,7 +179,9 @@ class BaseModelWrapper:
         scaler=None,
     ):
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before building a dataset.")
+            raise Exception(
+                "A model needs to be set or loaded before building a dataset."
+            )
 
         self.batch_size = batch_size
         self.output_labels = targets_df.columns.values
@@ -177,7 +191,8 @@ class BaseModelWrapper:
                 [
                     scaler.transform(target_row, input_row)
                     for target_row, input_row in zip(
-                        targets_df.to_dict(orient="records"), inputs_df.to_dict(orient="records")
+                        targets_df.to_dict(orient="records"),
+                        inputs_df.to_dict(orient="records"),
                     )
                 ],
                 index=targets_df.index,
@@ -201,11 +216,12 @@ class BaseModelWrapper:
             raise Exception("A model needs to be set or loaded before training.")
         if self.dataset is None:
             raise Exception("A dataset needs to be built before training a model.")
-        return
 
     def predict_from_df(self, inputs_df, targets=None, mc_dropout=False, verbose=0):
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before making predictions.")
+            raise Exception(
+                "A model needs to be set or loaded before making predictions."
+            )
 
         feature_labels = list(self.global_numerical_labels) + list(
             self.global_categorical_maps.keys()
@@ -214,16 +230,18 @@ class BaseModelWrapper:
             sequential_labels = list(self.sequential_numerical_labels) + list(
                 self.sequential_categorical_maps.keys()
             )
-            inputs_df.loc[:, "sequential_inputs"] = inputs_df["sequential_inputs"].apply(
-                lambda x: x[sequential_labels]
-            )
+            inputs_df.loc[:, "sequential_inputs"] = inputs_df[
+                "sequential_inputs"
+            ].apply(lambda x: x[sequential_labels])
             feature_labels += ["sequential_inputs"]
 
         inputs_df = inputs_df[feature_labels]
         inputs = self.build_inputs(inputs_df)
 
         start_time = time.time()
-        prediction = self._model_predict(inputs, 0, mc_dropout=mc_dropout, verbose=verbose)
+        prediction = self._model_predict(
+            inputs, 0, mc_dropout=mc_dropout, verbose=verbose
+        )
         total_time = time.time() - start_time
 
         if self.scaler:
@@ -266,16 +284,26 @@ class BaseModelWrapper:
         verbose=0,
     ):
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before making predictions.")
+            raise Exception(
+                "A model needs to be set or loaded before making predictions."
+            )
 
         if not isinstance(models_to_predict, (tuple, list)):
-            raise TypeError("models_to_predict expects a list of keras or torch models.")
+            raise TypeError(
+                "models_to_predict expects a list of keras or torch models."
+            )
         if not isinstance(hls_configs, (tuple, list)):
-            raise TypeError("hls_configs expects a list of HLS configuration dictionaries.")
+            raise TypeError(
+                "hls_configs expects a list of HLS configuration dictionaries."
+            )
         if not isinstance(hls4ml_versions, (tuple, list)):
-            raise TypeError("hls4ml_versions expects a list or tuple of version strings.")
+            raise TypeError(
+                "hls4ml_versions expects a list or tuple of version strings."
+            )
         if not isinstance(vivado_versions, (tuple, list)):
-            raise TypeError("vivado_versions expects a list or tuple of version strings.")
+            raise TypeError(
+                "vivado_versions expects a list or tuple of version strings."
+            )
 
         supported_categoricals = {}
         for key, mapping in self.global_categorical_maps.items():
@@ -286,9 +314,13 @@ class BaseModelWrapper:
             board = hls_config.get("board", "").lower()
             strategy = hls_config.get("model", {}).get("strategy", "").lower()
             if board not in supported_categoricals.get("board", []):
-                raise Exception(f"Model {self.model.name} does not support board: {board}")
+                raise Exception(
+                    f"Model {self.model.name} does not support board: {board}"
+                )
             if strategy not in supported_categoricals.get("strategy", []):
-                raise Exception(f"Model {self.model.name} does not support strategy: {strategy}")
+                raise Exception(
+                    f"Model {self.model.name} does not support strategy: {strategy}"
+                )
             accepted_hls_configs.append(hls_config)
         if not accepted_hls_configs:
             accepted_hls_configs = [None]
@@ -296,7 +328,9 @@ class BaseModelWrapper:
         accepted_hls4ml_versions = []
         for hls4ml_version in hls4ml_versions:
             if hls4ml_version:
-                if hls4ml_version.lower() not in supported_categoricals.get("hls4ml_version", []):
+                if hls4ml_version.lower() not in supported_categoricals.get(
+                    "hls4ml_version", []
+                ):
                     raise Exception(
                         f"Model {self.model.name} does not support hls4ml_version: {hls4ml_version}"
                     )
@@ -307,7 +341,9 @@ class BaseModelWrapper:
         accepted_vivado_versions = []
         for vivado_version in vivado_versions:
             if vivado_version:
-                if vivado_version.lower() not in supported_categoricals.get("vivado_version", []):
+                if vivado_version.lower() not in supported_categoricals.get(
+                    "vivado_version", []
+                ):
                     raise Exception(
                         f"Model {self.model.name} does not support vivado_version: {vivado_version}"
                     )
@@ -318,7 +354,12 @@ class BaseModelWrapper:
         global_inputs = []
         sequential_inputs = []
 
-        for model_to_predict, hls_config, hls4ml_version, vivado_version in itertools.product(
+        for (
+            model_to_predict,
+            hls_config,
+            hls4ml_version,
+            vivado_version,
+        ) in itertools.product(
             models_to_predict,
             accepted_hls_configs,
             accepted_hls4ml_versions,
@@ -333,7 +374,9 @@ class BaseModelWrapper:
             else:
                 if torch is not None:
                     if onnx is not None:
-                        raise TypeError(f"Unsupported model type: {type(model_to_predict)}")
+                        raise TypeError(
+                            f"Unsupported model type: {type(model_to_predict)}"
+                        )
                     else:
                         raise ImportError("Failed to import module onnx.")
                 elif onnx is not None:
@@ -360,7 +403,9 @@ class BaseModelWrapper:
 
         return self.predict_from_df(inputs_df, mc_dropout=mc_dropout, verbose=verbose)
 
-    def mc_predict_from_df(self, inputs_df, num_samples=50, return_all=False, verbose=0):
+    def mc_predict_from_df(
+        self, inputs_df, num_samples=50, return_all=False, verbose=0
+    ):
         """
         Perform MC Dropout predictions from a dataframe.
 
@@ -374,11 +419,15 @@ class BaseModelWrapper:
             tuple: mean and std of predictions if return_all is False, else mean, std, and all samples.
         """
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before making predictions.")
+            raise Exception(
+                "A model needs to be set or loaded before making predictions."
+            )
 
         all_predictions = []
         for _ in range(num_samples):
-            predictions = self.predict_from_df(inputs_df, mc_dropout=True, verbose=verbose)
+            predictions = self.predict_from_df(
+                inputs_df, mc_dropout=True, verbose=verbose
+            )
             all_predictions.append(predictions)
 
         all_predictions = np.array(all_predictions)
@@ -392,7 +441,12 @@ class BaseModelWrapper:
         return outputs
 
     def mc_predict(
-        self, models_to_predict, hls_configs, num_samples=50, return_all=False, verbose=0
+        self,
+        models_to_predict,
+        hls_configs,
+        num_samples=50,
+        return_all=False,
+        verbose=0,
     ):
         """
         Perform MC Dropout predictions.
@@ -408,7 +462,9 @@ class BaseModelWrapper:
             tuple: mean and std of predictions if return_all is False, else mean, std, and all samples.
         """
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before making predictions.")
+            raise Exception(
+                "A model needs to be set or loaded before making predictions."
+            )
 
         all_predictions = []
         for _ in range(num_samples):
@@ -458,7 +514,7 @@ class BaseModelWrapper:
         scaler_class = config.get("scaler_class", None)
         scaler_config = config.get("scaler_config", None)
         if scaler_class and scaler_config:
-            self.scaler = globals()[scaler_class].from_config(scaler_config)
+            self.scaler = getattr(scaling, scaler_class).from_config(scaler_config)
 
     def save(self, save_dir):
         """
@@ -519,7 +575,9 @@ class TorchModelWrapper(BaseModelWrapper):
     def __init__(self):
         super().__init__()
         if torch is None:
-            raise ImportError("Torch import failed. Please install torch to use this wrapper.")
+            raise ImportError(
+                "Torch import failed. Please install torch to use this wrapper."
+            )
 
     def set_model(self, model):
         super().set_model(model)
@@ -586,7 +644,9 @@ class TorchModelWrapper(BaseModelWrapper):
                     val_input_tensors.append(torch.tensor(value, dtype=torch.long))
                 else:
                     val_input_tensors.append(torch.tensor(value, dtype=torch.float32))
-            val_subset = torch.utils.data.TensorDataset(*val_input_tensors, val_target_tensors)
+            val_subset = torch.utils.data.TensorDataset(
+                *val_input_tensors, val_target_tensors
+            )
         else:
             total_size = len(inputs_df)
             val_size = int(total_size * val_ratio)
@@ -599,7 +659,9 @@ class TorchModelWrapper(BaseModelWrapper):
 
         def collate_fn(batch):
             batch = list(zip(*batch))
-            inputs = {key: torch.stack(batch[i]) for i, key in enumerate(input_dict.keys())}
+            inputs = {
+                key: torch.stack(batch[i]) for i, key in enumerate(input_dict.keys())
+            }
             targets = torch.stack(batch[-1]).to(dtype=torch.float32)
             return inputs, targets
 
@@ -657,7 +719,9 @@ class TorchModelWrapper(BaseModelWrapper):
                 leave=False,
             ) as pbar:
                 for inputs, targets in pbar:
-                    inputs = {key: value.to(self.device) for key, value in inputs.items()}
+                    inputs = {
+                        key: value.to(self.device) for key, value in inputs.items()
+                    }
                     targets = targets.to(self.device)
 
                     self.optimizer.zero_grad()
@@ -698,7 +762,9 @@ class TorchModelWrapper(BaseModelWrapper):
 
                 with torch.no_grad():
                     for inputs, targets in self.val_data:
-                        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+                        inputs = {
+                            key: value.to(self.device) for key, value in inputs.items()
+                        }
                         targets = targets.to(self.device)
 
                         outputs = self.model(inputs)
@@ -733,7 +799,9 @@ class TorchModelWrapper(BaseModelWrapper):
                     monitor = "_".join(monitor_parts[1:])
                     monitor_value = history[monitor_parts[0]].get(monitor, None)
                 if monitor_value is None:
-                    raise Exception(f"Monitored value {callback.monitor} not found in fit history.")
+                    raise Exception(
+                        f"Monitored value {callback.monitor} not found in fit history."
+                    )
 
                 cb_result = callback.step(monitor_value[-1], self, verbose=verbose)
                 if isinstance(callback, EarlyStopping) and cb_result:
@@ -746,7 +814,9 @@ class TorchModelWrapper(BaseModelWrapper):
         Enable MC Dropout by setting all dropout layers to train mode.
         """
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before enabling MC Dropout.")
+            raise Exception(
+                "A model needs to be set or loaded before enabling MC Dropout."
+            )
 
         def set_dropout_train(m):
             if isinstance(m, torch.nn.Dropout):
@@ -763,7 +833,8 @@ class TorchModelWrapper(BaseModelWrapper):
             if isinstance(inputs, dict):
                 input_tensors = self._process_input_dict(inputs)
                 inputs = {
-                    key: value.to(self.device) for key, value in zip(inputs.keys(), input_tensors)
+                    key: value.to(self.device)
+                    for key, value in zip(inputs.keys(), input_tensors)
                 }
 
             outputs = self.model(inputs)
@@ -806,7 +877,9 @@ class KerasModelWrapper(BaseModelWrapper):
             for key, value in input_dict.items():
                 print(f"{key}: shape={value.shape}, dtype={value.dtype}")
 
-        self.dataset = tf.data.Dataset.from_tensor_slices((input_dict, np.array(targets_df.values)))
+        self.dataset = tf.data.Dataset.from_tensor_slices(
+            (input_dict, np.array(targets_df.values))
+        )
         if val_inputs_df is not None and val_targets_df is not None:
             val_input_dict = self.build_inputs(val_inputs_df)
 
@@ -848,7 +921,9 @@ class KerasModelWrapper(BaseModelWrapper):
         self.optimizer = train_settings.optimizer
         if isinstance(self.optimizer, str):
             self.optimizer = get_optimizer_from_str(
-                self.optimizer, backend="keras", learning_rate=train_settings.learning_rate
+                self.optimizer,
+                backend="keras",
+                learning_rate=train_settings.learning_rate,
             )
 
         loss_function = train_settings.loss_function
@@ -875,7 +950,9 @@ class KerasModelWrapper(BaseModelWrapper):
         Enable MC Dropout by setting all dropout layers to train mode.
         """
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before enabling MC Dropout.")
+            raise Exception(
+                "A model needs to be set or loaded before enabling MC Dropout."
+            )
 
         for layer in self.model.layers:
             if isinstance(layer, KerasMCDropout):
@@ -935,14 +1012,18 @@ class MultiModelWrapper:
                     model_wrapper.load(f"{path}.config.json", f"{path}.weights.h5")
                     self.add_model_wrapper(model_wrapper)
                 else:
-                    raise FileNotFoundError(f"Weights file not found: {path}.weights.h5")
+                    raise FileNotFoundError(
+                        f"Weights file not found: {path}.weights.h5"
+                    )
             elif class_name in [TorchMLP.__name__, TorchGNN.__name__]:
                 if os.path.exists(f"{path}.weights.pt"):
                     model_wrapper = TorchModelWrapper()
                     model_wrapper.load(f"{path}.config.json", f"{path}.weights.pt")
                     self.add_model_wrapper(model_wrapper)
                 else:
-                    raise FileNotFoundError(f"Weights file not found: {path}.weights.pt")
+                    raise FileNotFoundError(
+                        f"Weights file not found: {path}.weights.pt"
+                    )
             else:
                 raise NotImplementedError(f"Model class not supported: {class_name}")
 
@@ -1018,8 +1099,12 @@ class MultiModelWrapper:
         hls_configs_by_estimator = {}
         if hls_configs is None:
             for estimator_key, estimator_model in self._models.items():
-                estimator_boards = self._get_categorical_values(estimator_model, "board")
-                estimator_strategies = self._get_categorical_values(estimator_model, "strategy")
+                estimator_boards = self._get_categorical_values(
+                    estimator_model, "board"
+                )
+                estimator_strategies = self._get_categorical_values(
+                    estimator_model, "strategy"
+                )
                 hls_configs_by_estimator[estimator_key] = [
                     {
                         "model": {
@@ -1043,7 +1128,9 @@ class MultiModelWrapper:
                         "hls_configs argument expects a dictionary or list of dictionaries. See docstring example for correct formatting."
                     )
                 hls_configs = [hls_configs]
-            hls_configs_by_estimator = {key: list(hls_configs) for key in self._models.keys()}
+            hls_configs_by_estimator = {
+                key: list(hls_configs) for key in self._models.keys()
+            }
 
         for estimator_configs in hls_configs_by_estimator.values():
             for idx in range(len(estimator_configs)):
@@ -1053,8 +1140,8 @@ class MultiModelWrapper:
         hls4ml_versions_by_estimator = {}
         if hls4ml_versions is None:
             for estimator_key, estimator_model in self._models.items():
-                hls4ml_versions_by_estimator[estimator_key] = self._get_categorical_values(
-                    estimator_model, "hls4ml_version"
+                hls4ml_versions_by_estimator[estimator_key] = (
+                    self._get_categorical_values(estimator_model, "hls4ml_version")
                 )
         else:
             if isinstance(hls4ml_versions, str):
@@ -1067,8 +1154,8 @@ class MultiModelWrapper:
         vivado_versions_by_estimator = {}
         if vivado_versions is None:
             for estimator_key, estimator_model in self._models.items():
-                vivado_versions_by_estimator[estimator_key] = self._get_categorical_values(
-                    estimator_model, "vivado_version"
+                vivado_versions_by_estimator[estimator_key] = (
+                    self._get_categorical_values(estimator_model, "vivado_version")
                 )
         else:
             if isinstance(vivado_versions, str):
@@ -1092,8 +1179,15 @@ class MultiModelWrapper:
                 )
             )
 
-            for model_to_predict, hls_config, hls4ml_version, vivado_version in estimator_product:
-                model_name = getattr(model_to_predict, "name", model_to_predict.__class__.__name__)
+            for (
+                model_to_predict,
+                hls_config,
+                hls4ml_version,
+                vivado_version,
+            ) in estimator_product:
+                model_name = getattr(
+                    model_to_predict, "name", model_to_predict.__class__.__name__
+                )
                 output_key = (
                     model_name,
                     hls_config["board"],
@@ -1125,10 +1219,12 @@ class MultiModelWrapper:
 
             target_labels = key.split("-")
             for idx, model_predictions in enumerate(estimator_predictions):
-                model_to_predict, hls_config, hls4ml_version, vivado_version = estimator_product[
-                    idx
-                ]
-                model_name = getattr(model_to_predict, "name", model_to_predict.__class__.__name__)
+                model_to_predict, hls_config, hls4ml_version, vivado_version = (
+                    estimator_product[idx]
+                )
+                model_name = getattr(
+                    model_to_predict, "name", model_to_predict.__class__.__name__
+                )
                 output_key = (
                     model_name,
                     hls_config["board"],
@@ -1145,21 +1241,24 @@ class MultiModelWrapper:
                     available_key = f"max_{target_labels[k].lower()}"
                     if available_key in boards_data[output_row["Board"]]:
                         predictions[f"{target_labels[k]} (%)"] = (
-                            model_predictions[k] / boards_data[output_row["Board"]][available_key]
+                            model_predictions[k]
+                            / boards_data[output_row["Board"]][available_key]
                         ) * 100
                 output_row.update(predictions)
 
         outputs_df = pd.DataFrame(outputs).round(kwargs.get("round_digits", 2))
         if not outputs_df.empty:
             sorted_boards = sorted(
-                outputs_df["Board"].unique(), key=lambda x: list(boards_data.keys()).index(x)
+                outputs_df["Board"].unique(),
+                key=lambda x: list(boards_data.keys()).index(x),
             )
             outputs_df["Board"] = pd.Categorical(
                 outputs_df["Board"], categories=sorted_boards, ordered=True
             )
 
             sorted_precisions = sorted(
-                outputs_df["Precision"].unique(), key=lambda x: fixed_precision_to_bit_width(x)[0]
+                outputs_df["Precision"].unique(),
+                key=lambda x: fixed_precision_to_bit_width(x)[0],
             )
             outputs_df["Precision"] = pd.Categorical(
                 outputs_df["Precision"], categories=sorted_precisions, ordered=True

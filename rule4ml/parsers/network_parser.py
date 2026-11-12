@@ -29,9 +29,13 @@ def config_from_keras_model(model, hls_config):
         _type_: _description_
     """
 
-    if hasattr(model, "_build_input_shape") and model._build_input_shape is not None:  # Keras 2
+    if (
+        hasattr(model, "_build_input_shape") and model._build_input_shape is not None
+    ):  # Keras 2
         model_input_shape = model._build_input_shape
-    elif hasattr(model, "_build_shapes_dict") and model._build_shapes_dict is not None:  # Keras 3
+    elif (
+        hasattr(model, "_build_shapes_dict") and model._build_shapes_dict is not None
+    ):  # Keras 3
         model_input_shape = list(model._build_shapes_dict.values())[0]
     else:
         raise AttributeError(
@@ -67,13 +71,16 @@ def config_from_keras_model(model, hls_config):
             layer, "input_shape"
         ):  # Keras 2, Sequential and Functional APIs (not including subclassing)
             input_shape = layer.input_shape
-        elif hasattr(layer, "_build_input_shape"):  # Keras 2, Subclassed from keras.Model
+        elif hasattr(
+            layer, "_build_input_shape"
+        ):  # Keras 2, Subclassed from keras.Model
             input_shape = layer._build_input_shape
 
         elif hasattr(layer, "batch_shape"):  # Keras 3, InputLayer
             input_shape = layer.batch_shape
         elif (  # Keras 3, other layers (best way we found, not documented)
-            hasattr(layer, "_build_shapes_dict") and layer._build_shapes_dict is not None
+            hasattr(layer, "_build_shapes_dict")
+            and layer._build_shapes_dict is not None
         ):
             input_shape = list(layer._build_shapes_dict.values())[0]
 
@@ -128,7 +135,9 @@ def config_from_keras_model(model, hls_config):
         elif class_name in ["Conv1D", "Conv2D", "QConv1D", "QConv2D"]:
             layer_dict["channels"] = int(input_shape[-1])
             layer_dict["filters"] = int(layer_config["filters"])
-            layer_dict["kernel_size"] = tuple([int(x) for x in layer_config["kernel_size"]])
+            layer_dict["kernel_size"] = tuple(
+                [int(x) for x in layer_config["kernel_size"]]
+            )
             layer_dict["strides"] = tuple([int(x) for x in layer_config["strides"]])
             layer_dict["padding"] = layer_config["padding"]
             layer_dict["use_bias"] = layer_config["use_bias"]
@@ -149,25 +158,31 @@ def config_from_keras_model(model, hls_config):
 
         reuse_factor = hls_config["model"]["reuse_factor"]
         if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
-            reuse_factor = hls_config["layer_type"][class_name].get("reuse_factor", reuse_factor)
+            reuse_factor = hls_config["layer_type"][class_name].get(
+                "reuse_factor", reuse_factor
+            )
         if "layer_name" in hls_config and layer.name in hls_config["layer_name"]:
-            reuse_factor = hls_config["layer_name"][layer.name].get("reuse_factor", reuse_factor)
+            reuse_factor = hls_config["layer_name"][layer.name].get(
+                "reuse_factor", reuse_factor
+            )
 
         layer_dict["reuse_factor"] = reuse_factor
         if class_name in ["Dense", "QDense"]:
             n_in = np.prod([x for x in input_shape if x is not None])
             n_out = np.prod([x for x in output_shape if x is not None])
-            layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+            layer_dict["reuse_factor"] = get_closest_reuse_factor(
+                n_in, n_out, reuse_factor
+            )
         elif class_name in ["Conv1D", "Conv2D", "QConv1D", "QConv2D"]:
             n_in = layer_dict["channels"] * np.prod(layer_dict["kernel_size"])
             n_out = layer_dict["filters"]
-            layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+            layer_dict["reuse_factor"] = get_closest_reuse_factor(
+                n_in, n_out, reuse_factor
+            )
 
         layers_data.append(layer_dict)
 
-        if (
-            nested_activation
-        ):  # activation function wrapped in a layer other than "(Q)Activation", example: Dense(units=32, activation="relu")
+        if nested_activation:  # activation function wrapped in a layer other than "(Q)Activation", example: Dense(units=32, activation="relu")
             activation_dict = {}
             activation_dict["class_name"] = "Activation"
 
@@ -283,7 +298,9 @@ def config_from_torch_model(model, hls_config):
                     "reuse_factor", reuse_factor
                 )
             if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
-                reuse_factor = hls_config["layer_name"][node.name].get("reuse_factor", reuse_factor)
+                reuse_factor = hls_config["layer_name"][node.name].get(
+                    "reuse_factor", reuse_factor
+                )
 
             layer_dict = {
                 "class_name": class_name,
@@ -307,7 +324,9 @@ def config_from_torch_model(model, hls_config):
                 layer_dict["output_shape"] = (None, layer.out_features)
 
                 use_bias = layer.bias is not None
-                layer_dict["parameters"] = (layer.in_features + int(use_bias)) * layer.out_features
+                layer_dict["parameters"] = (
+                    layer.in_features + int(use_bias)
+                ) * layer.out_features
                 layer_dict["trainable_parameters"] = layer_dict["parameters"]
 
                 layer_dict["neurons"] = layer_dict["output_shape"][-1]
@@ -322,7 +341,9 @@ def config_from_torch_model(model, hls_config):
                 layer_dict["output_shape"] = layer_dict["input_shape"]
 
                 if mapped_class_name in ["BatchNormalization"]:
-                    input_size = np.prod([x for x in layer_dict["input_shape"] if x is not None])
+                    input_size = np.prod(
+                        [x for x in layer_dict["input_shape"] if x is not None]
+                    )
                     layer_dict["parameters"] = 4 * input_size
                     layer_dict["trainable_parameters"] = 2 * input_size
                 else:
@@ -332,22 +353,33 @@ def config_from_torch_model(model, hls_config):
                 layer_dict["dtype"] = layers_data_values[idx - 1]["dtype"]
 
             else:
-                raise TypeError(f"Model has unexpected first layer of type {class_name}.")
+                raise TypeError(
+                    f"Model has unexpected first layer of type {class_name}."
+                )
 
             reuse_factor = hls_config["model"]["reuse_factor"]
-            if "layer_type" in hls_config and mapped_class_name in hls_config["layer_type"]:
+            if (
+                "layer_type" in hls_config
+                and mapped_class_name in hls_config["layer_type"]
+            ):
                 reuse_factor = hls_config["layer_type"][mapped_class_name].get(
                     "reuse_factor", reuse_factor
                 )
             if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
-                reuse_factor = hls_config["layer_name"][node.name].get("reuse_factor", reuse_factor)
+                reuse_factor = hls_config["layer_name"][node.name].get(
+                    "reuse_factor", reuse_factor
+                )
 
             layer_dict["reuse_factor"] = reuse_factor
             if mapped_class_name in ["Dense"]:
                 n_in = np.prod([x for x in layer_dict["input_shape"] if x is not None])
-                n_out = np.prod([x for x in layer_dict["output_shape"] if x is not None])
+                n_out = np.prod(
+                    [x for x in layer_dict["output_shape"] if x is not None]
+                )
 
-                layer_dict["reuse_factor"] = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+                layer_dict["reuse_factor"] = get_closest_reuse_factor(
+                    n_in, n_out, reuse_factor
+                )
 
             module_count += 1
 
@@ -361,7 +393,8 @@ def config_from_torch_model(model, hls_config):
             layers_data_values = list(layers_data.values())
 
             input_shapes = [
-                layers_data[input_node.name]["output_shape"] for input_node in node.all_input_nodes
+                layers_data[input_node.name]["output_shape"]
+                for input_node in node.all_input_nodes
             ]
             layer_dict["input_shape"] = input_shapes
 
