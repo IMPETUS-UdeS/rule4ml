@@ -18,7 +18,7 @@ jobs:
             tf-version: '2.17.0'
           - os: ubuntu-latest
             python-version: '3.12'
-            tf-version: '2.21.0'
+            tf-version: '2.19.1'
 
     steps:
     - uses: actions/checkout@v4
@@ -27,15 +27,16 @@ jobs:
         fetch-depth: 0
 
     - name: Set up uv and Python ${{ matrix.python-version }}
-      uses: astral-sh/setup-uv@v10
+      uses: astral-sh/setup-uv@v10.3.3
       with:
         python-version: ${{ matrix.python-version }}
         enable-cache: true
 
     - name: Install dependencies
       run: |
-        uv sync --locked
-        uv pip install --python .venv/bin/python -e . --group dev "tensorflow==${{ matrix.tf-version }}"
+        uv lock --check
+        uv venv .venv
+        uv pip install --python .venv/bin/python --torch-backend cpu -e . --group dev "tensorflow==${{ matrix.tf-version }}"
         uv pip check --python .venv/bin/python
 
     - name: Run tests

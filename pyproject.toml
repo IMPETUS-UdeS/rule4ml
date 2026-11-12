@@ -10,7 +10,7 @@ readme = "README.md"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [{ name = "IMPETUS Team", email = "impetus@usherbrooke.ca" }]
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.13"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -23,7 +23,7 @@ classifiers = [
 dependencies = [
     "pandas",
     "scikit-learn",
-    "tensorflow>=2.15.1",
+    "tensorflow>=2.15.1,<2.20",
     "keras",
     "keras_tuner",
     "torch",
