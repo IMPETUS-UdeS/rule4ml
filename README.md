@@ -15,10 +15,10 @@ pip install rule4ml
 
 This will only install the [base package](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/rule4ml) and its dependencies for resources and latency prediction. The [data_gen](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/) scripts and the [Jupyter notebooks](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks) are to be cloned from the repo if needed.
 
-The data generation dependencies are listed seperately in [data_gen/requirements.txt](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/requirements.txt), or can be installed with:
+The data generation dependencies are listed separately in [data_gen/requirements.txt](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/requirements.txt):
 
 ```bash
-pip install rule4ml[datagen]
+pip install -r data_gen/requirements.txt
 ```
 
 ## Getting Started

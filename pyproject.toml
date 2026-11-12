@@ -1,6 +1,42 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools_scm>=8", "wheel"]
+requires = ["setuptools>=77", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "rule4ml"
+dynamic = ["version"]
+description = "Resource utilization and Latency Estimation for ML on FPGA"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "IMPETUS Team", email = "impetus@usherbrooke.ca" }]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pandas",
+    "scikit-learn",
+    "tensorflow>=2.15.1",
+    "keras",
+    "keras_tuner",
+    "torch",
+    "torch-geometric",
+    "optuna",
+    "tqdm",
+]
+
+[dependency-groups]
+dev = ["pre-commit", "pytest"]
+
+[tool.setuptools.packages.find]
+include = ["rule4ml*"]
 
 [tool.setuptools_scm]
 version_file = "rule4ml/_version.py"
