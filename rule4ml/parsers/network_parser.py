@@ -29,18 +29,16 @@ def config_from_keras_model(model, hls_config):
         _type_: _description_
     """
 
-    if (
-        hasattr(model, "_build_input_shape") and model._build_input_shape is not None
-    ):  # Keras 2
+    if getattr(model, "_build_input_shape", None) is not None:  # Keras 2
         model_input_shape = model._build_input_shape
-    elif (
-        hasattr(model, "_build_shapes_dict") and model._build_shapes_dict is not None
-    ):  # Keras 3
-        model_input_shape = list(model._build_shapes_dict.values())[0]
-    else:
+    else:  # Keras 3
+        model_input_shape = _input_shape(model)
+    if model_input_shape is None:
         raise AttributeError(
             "Could not get model input shape. Make sure model.build() was called previously."
         )
+    if any(isinstance(dim, (list, tuple)) for dim in model_input_shape):
+        raise NotImplementedError("Models with multiple inputs are not supported.")
 
     dummy_input = tf.random.uniform((1, *model_input_shape[1:]))
     _ = model(dummy_input)
@@ -78,16 +76,12 @@ def config_from_keras_model(model, hls_config):
 
         elif hasattr(layer, "batch_shape"):  # Keras 3, InputLayer
             input_shape = layer.batch_shape
-        elif (  # Keras 3, other layers (best way we found, not documented)
-            hasattr(layer, "_build_shapes_dict")
-            and layer._build_shapes_dict is not None
-        ):
-            input_shape = list(layer._build_shapes_dict.values())[0]
-
-        else:
-            raise AttributeError(
-                f"Could not get the input shape for layer {layer.name}. Make sure model.build() was called previously."
-            )
+        else:  # Keras 3, other layers
+            input_shape = _input_shape(layer)
+            if input_shape is None:
+                raise AttributeError(
+                    f"Could not get the input shape for layer {layer.name}. Make sure model.build() was called previously."
+                )
 
         input_shape = np.asarray(input_shape).flatten()
         input_shape = tuple(input_shape)
@@ -200,6 +194,17 @@ def config_from_keras_model(model, hls_config):
             layers_data.append(activation_dict)
 
     return layers_data
+
+
+def _input_shape(layer):
+    try:  # Symbolic graph
+        inputs = tf.nest.flatten(layer.input)
+    except (AttributeError, ValueError):  # No graph, shapes recorded at build
+        build_shapes = getattr(layer, "_build_shapes_dict", None) or {}
+        return next(iter(build_shapes.values()), None)
+
+    shapes = [tuple(tensor.shape) for tensor in inputs]
+    return shapes[0] if len(shapes) == 1 else shapes
 
 
 def keras_model_from_config(model_config):

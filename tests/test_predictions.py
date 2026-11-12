@@ -97,6 +97,34 @@ class MultiModelWrapperTests(unittest.TestCase):
         self.assertIsInstance(prediction_df, pd.DataFrame)
         self.assertFalse(prediction_df.empty)
 
+    def test_keras_cnn_prediction(self):
+        inputs = Input(shape=(32, 32, 3))
+        x = keras.layers.Conv2D(8, 3, padding="same", activation="relu")(inputs)
+        x = keras.layers.MaxPooling2D()(x)
+        x = keras.layers.Flatten()(x)
+        outputs = Dense(10, activation="softmax")(x)
+        model_to_predict = keras.Model(inputs=inputs, outputs=outputs)
+
+        estimator = MultiModelWrapper()
+        estimator.load_default_models()
+
+        hls_config = {
+            "board": "alveo-u250",
+            "model": {
+                "strategy": "Resource",
+                "precision": "ap_fixed<16,6>",
+                "reuse_factor": 1,
+            },
+        }
+        prediction_df = estimator.predict(
+            model_to_predict,
+            hls_configs=[hls_config],
+            hls4ml_versions=["0.8.1"],
+            vivado_versions=["2023.2"],
+        )
+        self.assertEqual(len(prediction_df), 1)
+        self.assertFalse(prediction_df.isna().any().any())
+
     def test_torch_sequential_prediction(self):
         input_size = 10
         model_to_predict = torch.nn.Sequential(
