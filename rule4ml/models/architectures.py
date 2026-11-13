@@ -495,7 +495,7 @@ class TorchGNN(torch.nn.Module):
         xs = []
         for gconv, norm in zip(self.gconvs, self.norms):
             x_seq = gconv(x_seq, edge_index=edge_indices)
-            x_seq = norm(x_seq)
+            x_seq = norm(x_seq, batch)
             x_seq = torch.nn.functional.relu(x_seq)
             xs.append(x_seq)
         x_seq = self.jumping_knowledge(xs)
