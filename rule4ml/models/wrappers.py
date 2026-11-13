@@ -34,8 +34,6 @@ from rule4ml.parsers.utils import (
 
 @dataclass
 class TrainSettings:
-    # Default settings
-
     num_epochs: int = 50
     batch_size: int = 32
     learning_rate: float = 1e-4
@@ -466,7 +464,6 @@ class BaseModelWrapper:
         self.reset()
 
         with open(config_path) as json_file:
-            # Load the class config
             config = json.load(json_file)
             self.from_config(config)
 

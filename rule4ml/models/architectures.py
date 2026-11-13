@@ -22,7 +22,6 @@ else:
 
 @dataclass
 class MLPSettings:
-    # Default settings
     embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
     numerical_dense_layers: list = field(default_factory=lambda: [16])
     dense_layers: list = field(default_factory=lambda: [64, 32, 64, 32])
@@ -52,7 +51,6 @@ class MLPSettings:
 
 @dataclass
 class GNNSettings:
-    # Default settings
     numerical_dense_layers: list = field(default_factory=lambda: [32])
     gconv_layers: list = field(default_factory=lambda: [128, 64])
 
@@ -337,7 +335,7 @@ class TorchGNN(torch.nn.Module):
         )
         gnn_dim = sum(settings.seq_embedding_layers) + seq_numerical_dim
 
-        # Project global features to the same dimension as the GNN node features?
+        # unused, kept so v2 state dicts load
         g_token_dim = sum(settings.global_embedding_layers) + g_in_dim
         self.g_projection = torch.nn.Sequential(
             torch.nn.Linear(g_token_dim, gnn_dim),
@@ -352,14 +350,7 @@ class TorchGNN(torch.nn.Module):
                 torch.nn.ReLU(),
                 torch.nn.Linear(units, units),
             )
-            self.gconvs.append(
-                # torch_geometric.nn.SAGEConv(
-                #     in_channels=gnn_dim,
-                #     out_channels=units,
-                #     bias=True,
-                # )
-                torch_geometric.nn.GINConv(nn=mlp)
-            )
+            self.gconvs.append(torch_geometric.nn.GINConv(nn=mlp))
             self.norms.append(torch_geometric.nn.GraphNorm(in_channels=units))
             gnn_dim = units
         self.jumping_knowledge = torch_geometric.nn.JumpingKnowledge(mode="cat")
@@ -367,7 +358,6 @@ class TorchGNN(torch.nn.Module):
         self.attention_pool = torch_geometric.nn.AttentionalAggregation(
             gate_nn=torch.nn.Sequential(torch.nn.Linear(sum(settings.gconv_layers), 1))
         )
-        self.global_pool = torch_geometric.nn.global_mean_pool
 
         concat_dim = (
             sum(settings.global_embedding_layers)
@@ -511,7 +501,6 @@ class TorchGNN(torch.nn.Module):
         x_seq = self.jumping_knowledge(xs)
 
         pooled_seq = self.attention_pool(x_seq, index=batch)
-        # pooled_seq = self.global_pool(x_seq, batch=batch)
 
         self.kl_loss = 0.0
         x = torch.cat([*x_global_categorical, x_global_numerical, pooled_seq], dim=-1)

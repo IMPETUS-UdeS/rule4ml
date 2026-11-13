@@ -14,7 +14,6 @@ from rule4ml.parsers.utils import (
     unwrap_nested_dicts,
 )
 
-# Loading boards info
 boards_path = os.path.join(os.path.dirname(__file__), "supported_boards.json")
 boards_data = {}
 with open(boards_path) as json_file:
@@ -62,8 +61,6 @@ default_vivado_map = {
 @dataclass
 class ParsedDataFilter:
     """Helper data class for filtering parsed data."""
-
-    # Default settings
 
     # The min/max settings are ignored if <= 0
     min_layers: int = 0
@@ -268,7 +265,6 @@ def read_from_json(
         results = executor.map(read_json_files, batches)
     json_data = [entry for result in results for entry in result if entry]
 
-    # Optionally filter the json data
     if data_filter is not None:
         json_data = [
             model_data
@@ -337,7 +333,6 @@ def get_layers_data(model_config):
         else:
             layer_stride_height = layer_stride_width = layer_strides
 
-        # layer_use_bias = 1 if layer_config.get("use_bias", False) else 0
         reuse_factor = layer_config["reuse_factor"]
 
         data = {

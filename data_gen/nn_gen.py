@@ -133,7 +133,6 @@ class GeneratorSettings:
 
     parameter_limit: int = 4096
 
-    # Global probabilities
     global_bias_probability: float = 0.9
     global_bn_probability: float = 0.2
     global_dropout_probability: float = 0.4
@@ -151,7 +150,6 @@ class GeneratorSettings:
     def default_skip_prob(x):
         return max(0, 0.8 - 2 ** (-x / 5))
 
-    # Layer-wise probablities
     bias_probability_func: Callable[[float], float] = default_bias_prob
     bn_probability_func: Callable[[float], float] = default_bn_prob
     dropout_probability_func: Callable[[float], float] = default_dropout_prob
@@ -221,26 +219,22 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
     if rng is None:
         rng = np.random.default_rng()
 
-    layer_list = []  # keeps track of NN layers
+    layer_list = []
 
     input_shape = (settings.input_range.random_in_range(rng),)
     input_layer = Input(shape=input_shape)
     layer_list.append(input_layer)
 
-    # Network-level decisions
     model_bias = rng.random() < settings.global_bias_probability
     model_bn = rng.random() < settings.global_bn_probability
     model_dropout = rng.random() < settings.global_dropout_probability
     model_skip = rng.random() < settings.global_skip_probability
 
-    # Layers generation
     n_layers = settings.layer_range.random_in_range(rng)
     for i in range(n_layers):
-        x = layer_list[-1]  # Get the previous layer
+        x = layer_list[-1]
 
-        use_bias = model_bias and rng.random() < settings.bias_probability_func(
-            i + 1
-        )  # Whether the new Dense layer uses bias
+        use_bias = model_bias and rng.random() < settings.bias_probability_func(i + 1)
         use_bn = (
             model_bn
             and i < n_layers - 1
@@ -249,7 +243,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                 settings.parameter_limit <= 0
                 or x.shape[1] <= settings.parameter_limit // 4
             )
-        )  # Whether BatchNorm is added after the new Dense layer
+        )
 
         dropout_rate = 0.0
         if (
@@ -257,7 +251,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
             and not use_bn
             and i < n_layers - 1
             and rng.random() < settings.dropout_probability_func(i + 1)
-        ):  # Same for dropout
+        ):
             dropout_rate = settings.dropout_range.random_in_range(rng)
 
         skip_inputs = None
@@ -265,19 +259,17 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
             model_skip
             and i > 0
             and rng.random() < settings.skip_probability_func(i + 1)
-        ):  # Same for skip connections
+        ):
             skip_inputs = layer_list[rng.integers(0, high=len(layer_list) - 1)]
 
         unit_range = (
             settings.neuron_range if i < n_layers - 1 else settings.output_range
         )
         range_class_name = unit_range.__class__.__name__
-        units = unit_range.random_in_range(rng)  # Dense layer units
-        if (
-            settings.parameter_limit > 0
-        ):  # Number of units might change depending on the hard parameter limit
+        units = unit_range.random_in_range(rng)
+        if settings.parameter_limit > 0:
             max_units = min(units, settings.parameter_limit // x.shape[1])
-            if use_bias:  # Considering bias usage
+            if use_bias:
                 bias_limit = (settings.parameter_limit - max_units) // x.shape[1]
                 if bias_limit <= 0:
                     max_units = 1
@@ -285,7 +277,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                     if range_class_name == Power2Range.__name__:
                         bias_limit = 2 ** int(np.log2(bias_limit))
                     max_units = min(max_units, bias_limit)
-            if use_bn:  # Considering batchnorm (parameters = 4 * output_shape of Dense)
+            if use_bn:  # batchnorm has 4 parameters per unit
                 bn_limit = (settings.parameter_limit // 4) // x.shape[1]
                 if bn_limit <= 0:
                     max_units = 1
@@ -293,23 +285,20 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                     if range_class_name == Power2Range.__name__:
                         bn_limit = 2 ** int(np.log2(bn_limit))
                     max_units = min(max_units, bn_limit)
-            if max_units != units:  # Force units into a range within parameter_limit
+            if max_units != units:
                 units = type(unit_range)(
                     min(unit_range.min, max_units), max_units
                 ).random_in_range(rng)
 
         activation_choices = settings.activations
-        if (
-            i < n_layers - 1 and settings.output_softmax_only
-        ):  # Whether to limit softmax as final output only
+        if i < n_layers - 1 and settings.output_softmax_only:
             activation_choices = [
                 act
                 for act in activation_choices
                 if (act is None or act.lower() != "softmax")
             ]
-        activation = rng.choice(activation_choices)  # Random activation
+        activation = rng.choice(activation_choices)
 
-        # Layer gen
         layer_list += generate_fc_layer(
             x, units, activation, use_bias, use_bn, dropout_rate, skip_inputs
         )
@@ -340,7 +329,7 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
     if rng is None:
         rng = np.random.default_rng()
 
-    input_list = []  # keeps track of autoencoder layers
+    input_list = []
     input_shape = (
         settings.inout_range.random_in_range(rng),
     )  # output shape is the same
@@ -352,7 +341,7 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
     model_bias = rng.random() < settings.global_bias_probability
 
     n_enc_layers = settings.layer_range.random_in_range(rng)
-    n_dec_layers = n_enc_layers  # same number of decoder layers
+    n_dec_layers = n_enc_layers
 
     for i in range(n_enc_layers):
         x = input_list[-1]
@@ -436,12 +425,3 @@ def get_submodels(base_model, verbose=0):
         submodels.append(model)
 
     return submodels
-
-
-if __name__ == "__main__":
-    rng = np.random.default_rng(seed=None)
-    nn = generate_fc_network(
-        GeneratorSettings(output_softmax_only=True), rng, verbose=1
-    )
-
-    # get_submodels(nn, verbose=0)

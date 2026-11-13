@@ -134,10 +134,10 @@ def print_hls_config(d, indent=0):
 def save_to_json(data, file_path="./dataset.json", indent=2):
     """Append a record to a JSON list file, creating the file if needed."""
 
-    if not os.path.isfile(file_path):  # Create file if it doesn't exist
+    if not os.path.isfile(file_path):
         with open(file_path, "w") as json_file:
             json.dump([data], json_file, indent=indent)
-    else:  # If it exists then just append to the file
+    else:
         with open(file_path, "r+") as json_file:
             json_file.seek(os.stat(file_path).st_size - 2)
             json_file.write(
