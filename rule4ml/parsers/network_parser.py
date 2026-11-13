@@ -18,16 +18,7 @@ except ImportError:
 
 
 def config_from_keras_model(model, hls_config):
-    """
-    _summary_
-
-    Args:
-        model (_type_): _description_
-        hls_config (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
+    """Parse a Keras model into per-layer configs with hls4ml reuse factors."""
 
     if getattr(model, "_build_input_shape", None) is not None:  # Keras 2
         model_input_shape = model._build_input_shape
@@ -259,16 +250,7 @@ def keras_model_from_config(model_config):
 
 
 def config_from_torch_model(model, hls_config):
-    """
-    _summary_
-
-    Args:
-        model (_type_): _description_
-        hls_config (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
+    """Parse a Torch model into per-layer configs with hls4ml reuse factors."""
 
     if torch is None:
         raise ImportError("Failed to import module torch.")
@@ -433,15 +415,7 @@ def config_from_torch_model(model, hls_config):
 
 
 def config_from_onnx_model(model, hls_config):
-    """_summary_
-
-    Args:
-        model (_type_): _description_
-        hls_config (_type_): _description_
-
-    Raises:
-        ImportError: _description_
-    """
+    """Placeholder, ONNX parsing is not implemented."""
 
     if onnx is None:
         raise ImportError("Failed to import module onnx.")

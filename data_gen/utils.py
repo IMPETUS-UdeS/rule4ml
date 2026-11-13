@@ -9,14 +9,7 @@ import psutil
 
 
 class IntRange:
-    """
-    _summary_
-
-    Args:
-        min_int (int): _description_
-        max_int (int): _description_
-        step (int, optional): _description_. Defaults to 1.
-    """
+    """Integer range with a step."""
 
     def __init__(self, min_int: int, max_int: int, step: int = 1):
         self.min = min(min_int, max_int)
@@ -34,13 +27,7 @@ class IntRange:
 
 
 class Power2Range:
-    """
-    _summary_
-
-    Args:
-        min_int (int):
-        max_int (int):
-    """
+    """Range of powers of two."""
 
     def __init__(self, min_int: int, max_int: int):
         self.min = min(min_int, max_int)
@@ -63,13 +50,7 @@ class Power2Range:
 
 
 class FloatRange:
-    """
-    _summary_
-
-    Args:
-        min_float (float):
-        max_float (float):
-    """
+    """Continuous float range."""
 
     def __init__(self, min_float: float, max_float: float):
         self.min = min(min_float, max_float)
@@ -89,12 +70,6 @@ def data_from_report(path):
     """
     Grabs resource usage and latency info from the synthesis report file (.rpt)
     Might not work for all Vivado versions. (tested on 2019.X)
-
-    Args:
-        path (_type_): _description_
-
-    Returns:
-        _type_: _description_
     """
 
     with open(path) as file:
@@ -135,9 +110,7 @@ def data_from_report(path):
     if clock_match:
         numbers_line = content.count("\n", 0, clock_match.start())
 
-        numbers_str = numbers_str = re.findall(
-            r"\d+\.\d+|\d+", content_lines[numbers_line]
-        )[:2]
+        numbers_str = re.findall(r"\d+\.\d+|\d+", content_lines[numbers_line])[:2]
         keys = ["target_clock", "estimated_clock"]
         latency_dict.update(
             {
@@ -180,17 +153,7 @@ def data_from_synthesis(synth_dict: dict):
 
 
 def model_name_from_config(model, model_config, hls_config):
-    """
-    _summary_
-
-    Args:
-        model (_type_): _description_
-        model_config (_type_): _description_
-        hls_config (_type_): _description_
-
-    Returns:
-        str: _description_
-    """
+    """Build a descriptive model name from layer sizes and the HLS config."""
 
     model_name = ""
     if hasattr(model, "name"):
@@ -217,14 +180,6 @@ def model_name_from_config(model, model_config, hls_config):
 
 
 def print_hls_config(d, indent=0):
-    """
-    _summary_
-
-    Args:
-        d (_type_): _description_
-        indent (int, optional): _description_. Defaults to 0.
-    """
-
     for key, value in d.items():
         print("  " * indent + str(key), end="")
         if isinstance(value, dict):
@@ -235,14 +190,7 @@ def print_hls_config(d, indent=0):
 
 
 def save_to_json(data, file_path="./dataset.json", indent=2):
-    """
-    _summary_
-
-    Args:
-        data (_type_): _description_
-        file_path (str, optional): _description_. Defaults to './dataset.json'.
-        indent (int, optional): _description_. Defaults to 2.
-    """
+    """Append a record to a JSON list file, creating the file if needed."""
 
     if not os.path.isfile(file_path):  # Create file if it doesn't exist
         with open(file_path, "w") as json_file:
@@ -260,16 +208,6 @@ def save_to_json(data, file_path="./dataset.json", indent=2):
 
 
 def md5_hash_dict(d):
-    """
-    _summary_
-
-    Args:
-        d (dict): _description_
-
-    Returns:
-        _type_: _description_
-    """
-
     dict_string = json.dumps(d, sort_keys=True)
     md5_hash = hashlib.md5(dict_string.encode()).hexdigest()
 
@@ -277,13 +215,6 @@ def md5_hash_dict(d):
 
 
 def get_cpu_info():
-    """
-    _summary_
-
-    Returns:
-        _type_: _description_
-    """
-
     all_cpu_info = cpuinfo.get_cpu_info()
     brand = all_cpu_info["brand_raw"].split("@")[0].replace("CPU ", "").strip()
     arch = all_cpu_info["arch"]

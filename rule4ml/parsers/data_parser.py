@@ -63,29 +63,7 @@ default_vivado_map = {
 
 @dataclass
 class ParsedDataFilter:
-    """
-    Helper data class for filtering parsed data.
-
-    Args: (all optional, default values inside data class)
-        min_layers (int): _description_
-        max_layers (int): _description_
-        min_reuse_factor (int): _description_
-        max_reuse_factor (int): _description_
-
-        min_input_size (int): _description_
-        max_input_size (int): _description_
-
-        min_output_size (int): _description_
-        min_output_size (int): _description_
-
-        min_softmax_count (int): _description_
-        max_softmax_count (int): _description_
-        output_softmax_only (bool): _description_
-
-        exclude_layers (list): _description_
-        strategies (list): _description_
-        precisions (list): _description_
-    """
+    """Helper data class for filtering parsed data."""
 
     # Default settings
 
@@ -127,16 +105,7 @@ class ParsedDataFilter:
 
 
 def filter_match(parsed_data, data_filter: ParsedDataFilter):
-    """
-    _summary_
-
-    Args:
-        parsed_data (_type_): _description_
-        data_filter (ParsedDataFilter): _description_
-
-    Returns:
-        _type_: _description_
-    """
+    """Return whether a parsed record passes the data filter."""
 
     n_layers = len(parsed_data["model_config"])
     if (data_filter.min_layers > 0 and n_layers < data_filter.min_layers) or (
@@ -273,8 +242,8 @@ def read_json_files(filenames):
                 if not isinstance(data, list):
                     data = [data]
                 json_data.extend(data)
-        except Exception as e:
-            raise ValueError(f'Error reading JSON file "{filename}": {e}')
+        except (OSError, ValueError) as e:
+            raise ValueError(f'Error reading JSON file "{filename}": {e}') from e
 
     return json_data
 
@@ -282,17 +251,7 @@ def read_json_files(filenames):
 def read_from_json(
     file_patterns, data_filter: ParsedDataFilter = None, max_workers=1, batch_size=128
 ):
-    """
-    _summary_
-
-    Args:
-        file_patterns (_type_): _description_
-        data_filter (ParsedDataFilter): _description_
-        max_workers (int, optional): _description_. Defaults to 8.
-
-    Returns:
-        _type_: _description_
-    """
+    """Load records from JSON files matching the glob patterns, optionally filtered."""
 
     if isinstance(file_patterns, (list, tuple)):
         file_patterns = list(file_patterns)
@@ -410,8 +369,7 @@ def get_layers_data(model_config, target_depth=None):
     layers_data = []
     for idx, layer_config in enumerate(model_config):
         layer_type = layer_config["class_name"].lower()
-        if layer_type.startswith("q"):  # qkeras layers
-            layer_type = layer_type[1:]
+        layer_type = layer_type.removeprefix("q")  # qkeras layers
 
         if layer_type == "activation":
             layer_type = get_activation_name(layer_config["activation"])
@@ -476,7 +434,7 @@ def get_layers_data(model_config, target_depth=None):
     if target_depth is not None:
         pad_count = target_depth - len(layers_data)
         if pad_count > 0:
-            pad = [{key: 0 for key in layers_data[0].keys()}] * pad_count
+            pad = [{key: 0 for key in layers_data[0]}] * pad_count
             layers_data.extend(pad)
 
     return layers_data
@@ -510,19 +468,7 @@ def get_sequential_data(parsed_data, max_workers=1, batch_size=128):
 
 
 def get_global_inputs(model_config, hls_config, **kwargs):
-    """
-    Gets the global input features from the model and HLS configurations.
-
-    Args:
-        model_config (_type_): _description_
-        hls_config (_type_): _description_
-        **kwargs: Additional keyword arguments,
-            such as 'clock_period', 'hls4ml_version',
-            'vivado_version', etc.
-
-    Returns:
-        dict: A dictionary containing the extracted global features.
-    """
+    """Gets the global input features from the model and HLS configurations."""
 
     features_to_extract = {
         "dense": {
@@ -823,12 +769,12 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
         return feature_dict
 
-    def adjust_feature_values(features, keys=[]):
+    def adjust_feature_values(features, keys=()):
         for feature in features.values():
             count = feature.get("count", 1)
             for k1 in keys:
                 if k1 in feature:
-                    for k2 in feature[k1].keys():
+                    for k2 in feature[k1]:
                         if np.isinf(feature[k1][k2]):  # Replace inf values
                             feature[k1][k2] = 0
 
@@ -895,17 +841,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
 
 def get_prediction_targets(model_data, resource_key, norm_board=None):
-    """
-    _summary_
-
-    Args:
-        model_data (_type_): _description_
-        resource_key (_type_): _description_
-        norm_board (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
+    """Extract resource and latency targets, optionally relative to the board."""
 
     latency_report = model_data["latency_report"]
     if resource_key:
@@ -988,15 +924,7 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
 
 
 def get_network_fixed_ops(model_json):
-    """
-    _summary_
-
-    Args:
-        model_json (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
+    """Count fixed-point add, mult, logical and lookup ops per layer and in total."""
 
     fops_dict = {
         "total_add": 0,
@@ -1017,8 +945,7 @@ def get_network_fixed_ops(model_json):
         use_bias = layer_json.get("use_bias", False)
 
         layer_class = layer_json["class_name"].lower()
-        if layer_class.startswith("q"):  # QKeras layers
-            layer_class = layer_class[1:]
+        layer_class = layer_class.removeprefix("q")  # QKeras layers
 
         if layer_class == "add":
             inbound_count = max(2, len(layer_json.get("inbound_layers", [])))
@@ -1121,7 +1048,9 @@ def batch_to_dataframe(
     # Encode sequential categorical features
     for key, mapping in sequential_categorical_maps.items():
         df["sequential_inputs"] = df["sequential_inputs"].apply(
-            lambda sdf: sdf.assign(**{key: sdf[key].map(lambda x: mapping.get(x, x))})
+            lambda sdf, key=key, mapping=mapping: sdf.assign(
+                **{key: sdf[key].map(lambda x: mapping.get(x, x))}
+            )
         )
 
     return df
@@ -1145,7 +1074,7 @@ def to_dataframe(
     for i in range(len(sequential_inputs)):
         pad_count = max_depth - len(sequential_inputs[i])
         if pad_count > 0:
-            pad = [{key: 0 for key in sequential_inputs[i][0].keys()}] * pad_count
+            pad = [{key: 0 for key in sequential_inputs[i][0]}] * pad_count
             sequential_inputs[i].extend(pad)
 
     n = len(global_inputs)
@@ -1164,10 +1093,8 @@ def to_dataframe(
         for (m, g, s, t) in batches
     ]
 
-    dataframes = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for df in executor.map(lambda p: batch_to_dataframe(*p), args):
-            dataframes.append(df)
+        dataframes = list(executor.map(lambda p: batch_to_dataframe(*p), args))
 
     return pd.concat(dataframes, axis=0).reset_index(drop=True)
 

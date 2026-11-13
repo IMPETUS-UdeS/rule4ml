@@ -203,7 +203,7 @@ def add_backend_to_env(backend, backend_version, xilinx_path):
 
     backend_path = os.path.join(xilinx_path, backend_frmt, backend_version, "bin")
     if not os.path.exists(backend_path):
-        raise Exception(
+        raise FileNotFoundError(
             f'{backend_frmt} {backend_version} installation not found at "{backend_path}". '
             + "Please check if the path points to the chosen backend."
         )
@@ -229,23 +229,6 @@ def synthesize_keras_model(
 ):
     """
     Synthesize a given Keras model with a specific config, returning the synthesis results.
-
-    Args:
-        model (keras.Model): The Keras model to synthesize.
-        output_dir (_type_): _description_
-        hls_config (_type_): _description_
-        clock_period (_type_): _description_
-        part_number (_type_): _description_
-        io_type (_type_): _description_
-        backend (_type_): _description_
-        backend_version (_type_): _description_
-        xilinx_path (str, optional): _description_. Defaults to "/opt/Xilinx".
-        model_id (_type_, optional): _description_. Defaults to None.
-        model_name (str, optional): _description_. Defaults to "".
-        verbose (int, optional): _description_. Defaults to 0.
-
-    Returns:
-        dict: _description_
     """
 
     add_backend_to_env(backend, backend_version, xilinx_path)
@@ -337,23 +320,6 @@ def synthesize_torch_model(
 ):
     """
     Synthesize a given Pytorch model with a specific config, returning the synthesis results.
-
-    Args:
-        model (torch.nn.Module): The Pytorch model to synthesize.
-        output_dir (_type_): _description_
-        hls_config (_type_): _description_
-        clock_period (_type_): _description_
-        part_number (_type_): _description_
-        io_type (_type_): _description_
-        backend (_type_): _description_
-        backend_version (_type_): _description_
-        xilinx_path (str, optional): _description_. Defaults to "/opt/Xilinx".
-        model_id (_type_, optional): _description_. Defaults to None.
-        model_name (str, optional): _description_. Defaults to "".
-        verbose (int, optional): _description_. Defaults to 0.
-
-    Returns:
-        dict: _description_
     """
 
     add_backend_to_env(backend, backend_version, xilinx_path)
@@ -430,12 +396,7 @@ def synthesize_torch_model(
 
 
 def parallel_synthesis(args):
-    """
-    _summary_
-
-    Args:
-        args (dict): _description_
-    """
+    """Synthesize each model with each HLS config and save the reports."""
 
     output_dir = args.get("output_dir", os.path.join(base_path, "datasets"))
 
@@ -565,17 +526,12 @@ def parallel_synthesis(args):
                                         os.path.join(project_dir, str(updated_model_id))
                                     )
 
-                            except Exception as e:
+                            except Exception as e:  # noqa: BLE001, keep the batch running
                                 print(e)
 
 
 def parallel_rnd_synthesis(args):
-    """
-    _summary_
-
-    Args:
-        args (dict): _description_
-    """
+    """Generate random networks and synthesize them, one job of a parallel run."""
 
     job_id = args["job_id"]
     args["json_filename"] = f"dataset-{job_id}.json"
@@ -680,7 +636,7 @@ def parallel_rnd_synthesis(args):
             idx += 1
             if n_models > 0 and idx >= n_models:
                 break
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001, keep the batch running
             print(e)
 
 
@@ -729,7 +685,7 @@ def synth_from_json(args):
                     new_dir = os.path.join(project_dir, str(model_id))
                     if extracted_dir != new_dir:
                         os.rename(extracted_dir, new_dir)
-            except Exception as e:
+            except (OSError, EOFError, ValueError, tarfile.TarError) as e:
                 print(e)
                 continue
 
@@ -916,7 +872,7 @@ def read_report_from_tar(pattern, tar_path):
                     if report_file:
                         report_content = report_file.read().decode("utf-8")
                         break
-    except Exception as e:
+    except (OSError, EOFError, UnicodeDecodeError, tarfile.TarError) as e:
         print(f"Error reading tar file {tar_path}: {e}")
         return ""
 
@@ -949,10 +905,13 @@ def extract_ii_from_csynth_report(args):
         model_id = entry["meta_data"].get("model_id", None)
         if model_id is None:
             model_id = entry["meta_data"]["artifacts_file"].split(".")[0]
-        if "CSynthesisReport" in entry["resource_report"]:
-            if csynth_counter is not None and csynth_lock is not None:
-                with csynth_lock:
-                    csynth_counter.value += 1
+        if (
+            "CSynthesisReport" in entry["resource_report"]
+            and csynth_counter is not None
+            and csynth_lock is not None
+        ):
+            with csynth_lock:
+                csynth_counter.value += 1
 
         project_file = os.path.join(project_dir, f"{model_id}.tar.gz")
         if not os.path.isfile(project_file):

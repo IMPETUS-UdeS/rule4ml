@@ -66,16 +66,7 @@ def to_lower_keys(d: dict, recursive=True):
 
 
 def unwrap_nested_dicts(d, prefix=None):
-    """
-    _summary_
-
-    Args:
-        d (_type_): _description_
-        prefix (_type_, optional): _description_. Defaults to None.
-
-    Returns:
-        _type_: _description_
-    """
+    """Flatten nested dicts, joining keys with underscores."""
 
     if not isinstance(d, dict):
         return d
@@ -109,13 +100,6 @@ def fixed_precision_to_bit_width(precision: str):
 
 
 def get_supported_boards():
-    """
-    _summary_
-
-    Returns:
-        _type_: _description_
-    """
-
     with open(
         os.path.join(os.path.dirname(__file__), "supported_boards.json")
     ) as json_file:
@@ -125,19 +109,6 @@ def get_supported_boards():
 
 
 def get_board_from_part(part_number):
-    """
-    _summary_
-
-    Args:
-        part_number (_type_): _description_
-
-    Raises:
-        ValueError: _description_
-
-    Returns:
-        _type_: _description_
-    """
-
     supported_boards = get_supported_boards()
 
     for key, value in supported_boards.items():
@@ -148,19 +119,6 @@ def get_board_from_part(part_number):
 
 
 def get_part_from_board(board_name):
-    """
-    _summary_
-
-    Args:
-        board_name (_type_): _description_
-
-    Raises:
-        ValueError: _description_
-
-    Returns:
-        _type_: _description_
-    """
-
     supported_boards = get_supported_boards()
 
     if board_name not in supported_boards:
@@ -172,7 +130,7 @@ def get_part_from_board(board_name):
 # https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L262
 def _validate_reuse_factor(n_in, n_out, rf):
     multfactor = min(n_in, rf)
-    multiplier_limit = int(math.ceil((n_in * n_out) / float(multfactor)))
+    multiplier_limit = math.ceil((n_in * n_out) / float(multfactor))
     _assert = ((multiplier_limit % n_out) == 0) or (rf >= n_in)
     _assert = _assert and (((rf % n_in) == 0) or (rf < n_in))
     _assert = _assert and (((n_in * n_out) % rf) == 0)

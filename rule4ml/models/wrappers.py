@@ -52,19 +52,6 @@ from rule4ml.parsers.utils import (
 
 @dataclass
 class TrainSettings:
-    """
-    _summary_
-
-    Args: (all optional, default values inside data class)
-        num_epochs (int): _description_
-        batch_size (int): _description_
-        learning_rate (float): _description_
-
-        optimizer (str): _description_
-        loss_function (str): _description_
-        metrics (list): _description_
-    """
-
     # Default settings
 
     num_epochs: int = 50
@@ -119,7 +106,9 @@ class BaseModelWrapper:
 
     def build_inputs(self, inputs_df):
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before building inputs.")
+            raise RuntimeError(
+                "A model needs to be set or loaded before building inputs."
+            )
 
         input_dict = {}
         for key, label in zip(
@@ -144,7 +133,7 @@ class BaseModelWrapper:
                     self.sequential_categorical_maps.keys(),
                 ):
                     input_dict[key] = seq_inputs_series.apply(
-                        lambda df: df[label]
+                        lambda df, label=label: df[label]
                     ).values
 
                 seq_numerical_inputs = seq_inputs_series.apply(
@@ -179,7 +168,7 @@ class BaseModelWrapper:
         scaler=None,
     ):
         if self.model is None:
-            raise Exception(
+            raise RuntimeError(
                 "A model needs to be set or loaded before building a dataset."
             )
 
@@ -213,13 +202,13 @@ class BaseModelWrapper:
 
     def fit(self):
         if self.model is None:
-            raise Exception("A model needs to be set or loaded before training.")
+            raise RuntimeError("A model needs to be set or loaded before training.")
         if self.dataset is None:
-            raise Exception("A dataset needs to be built before training a model.")
+            raise RuntimeError("A dataset needs to be built before training a model.")
 
     def predict_from_df(self, inputs_df, targets=None, mc_dropout=False, verbose=0):
         if self.model is None:
-            raise Exception(
+            raise RuntimeError(
                 "A model needs to be set or loaded before making predictions."
             )
 
@@ -284,7 +273,7 @@ class BaseModelWrapper:
         verbose=0,
     ):
         if self.model is None:
-            raise Exception(
+            raise RuntimeError(
                 "A model needs to be set or loaded before making predictions."
             )
 
@@ -314,11 +303,11 @@ class BaseModelWrapper:
             board = hls_config.get("board", "").lower()
             strategy = hls_config.get("model", {}).get("strategy", "").lower()
             if board not in supported_categoricals.get("board", []):
-                raise Exception(
+                raise ValueError(
                     f"Model {self.model.name} does not support board: {board}"
                 )
             if strategy not in supported_categoricals.get("strategy", []):
-                raise Exception(
+                raise ValueError(
                     f"Model {self.model.name} does not support strategy: {strategy}"
                 )
             accepted_hls_configs.append(hls_config)
@@ -331,7 +320,7 @@ class BaseModelWrapper:
                 if hls4ml_version.lower() not in supported_categoricals.get(
                     "hls4ml_version", []
                 ):
-                    raise Exception(
+                    raise ValueError(
                         f"Model {self.model.name} does not support hls4ml_version: {hls4ml_version}"
                     )
                 accepted_hls4ml_versions.append(hls4ml_version)
@@ -344,7 +333,7 @@ class BaseModelWrapper:
                 if vivado_version.lower() not in supported_categoricals.get(
                     "vivado_version", []
                 ):
-                    raise Exception(
+                    raise ValueError(
                         f"Model {self.model.name} does not support vivado_version: {vivado_version}"
                     )
                 accepted_vivado_versions.append(vivado_version)
@@ -419,7 +408,7 @@ class BaseModelWrapper:
             tuple: mean and std of predictions if return_all is False, else mean, std, and all samples.
         """
         if self.model is None:
-            raise Exception(
+            raise RuntimeError(
                 "A model needs to be set or loaded before making predictions."
             )
 
@@ -462,7 +451,7 @@ class BaseModelWrapper:
             tuple: mean and std of predictions if return_all is False, else mean, std, and all samples.
         """
         if self.model is None:
-            raise Exception(
+            raise RuntimeError(
                 "A model needs to be set or loaded before making predictions."
             )
 
@@ -517,12 +506,7 @@ class BaseModelWrapper:
             self.scaler = getattr(scaling, scaler_class).from_config(scaler_config)
 
     def save(self, save_dir):
-        """
-        Save the class config and model weights.
-
-        Args:
-            save_dir (_type_): _description_
-        """
+        """Save the class config and model weights."""
 
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
@@ -535,12 +519,7 @@ class BaseModelWrapper:
         self._save_weights(save_dir)
 
     def load(self, config_path, weights_path):
-        """
-        Load saved class config.
-
-        Args:
-            config_path (_type_): _description_
-        """
+        """Load saved class config."""
 
         if not config_path.endswith(".json"):
             raise ValueError("Config file name must end with .json")
@@ -678,7 +657,7 @@ class TorchModelWrapper(BaseModelWrapper):
             collate_fn=collate_fn,
         )
 
-    def fit(self, train_settings: TrainSettings, callbacks=[], verbose=0):
+    def fit(self, train_settings: TrainSettings, callbacks=(), verbose=0):
         super().fit()
 
         self.optimizer = train_settings.optimizer
@@ -799,7 +778,7 @@ class TorchModelWrapper(BaseModelWrapper):
                     monitor = "_".join(monitor_parts[1:])
                     monitor_value = history[monitor_parts[0]].get(monitor, None)
                 if monitor_value is None:
-                    raise Exception(
+                    raise ValueError(
                         f"Monitored value {callback.monitor} not found in fit history."
                     )
 
@@ -814,7 +793,7 @@ class TorchModelWrapper(BaseModelWrapper):
         Enable MC Dropout by setting all dropout layers to train mode.
         """
         if self.model is None:
-            raise Exception(
+            raise RuntimeError(
                 "A model needs to be set or loaded before enabling MC Dropout."
             )
 
@@ -848,7 +827,9 @@ class TorchModelWrapper(BaseModelWrapper):
         if not weights_path.endswith(".pt"):
             raise ValueError("Weights filename must end with .pt")
 
-        self.model.load_state_dict(torch.load(weights_path, map_location=self.device))
+        self.model.load_state_dict(
+            torch.load(weights_path, map_location=self.device, weights_only=True)
+        )
 
 
 class KerasModelWrapper(BaseModelWrapper):
@@ -915,7 +896,7 @@ class KerasModelWrapper(BaseModelWrapper):
             self.train_data = train_data
             self.val_data = None
 
-    def fit(self, train_settings: TrainSettings, callbacks=[], verbose=0):
+    def fit(self, train_settings: TrainSettings, callbacks=(), verbose=0):
         super().fit()
 
         self.optimizer = train_settings.optimizer
@@ -950,7 +931,7 @@ class KerasModelWrapper(BaseModelWrapper):
         Enable MC Dropout by setting all dropout layers to train mode.
         """
         if self.model is None:
-            raise Exception(
+            raise RuntimeError(
                 "A model needs to be set or loaded before enabling MC Dropout."
             )
 
@@ -975,12 +956,10 @@ class KerasModelWrapper(BaseModelWrapper):
 
 
 class MultiModelWrapper:
-    """
-    _summary_
-    """
+    """One predictor per target group, with predictions merged per model and config."""
 
-    _default_precisions = ["ap_fixed<2, 1>", "ap_fixed<8, 3>", "ap_fixed<16, 6>"]
-    _default_reuse_factors = [1, 2, 4, 8, 16, 32, 64]
+    _default_precisions = ("ap_fixed<2, 1>", "ap_fixed<8, 3>", "ap_fixed<16, 6>")
+    _default_reuse_factors = (1, 2, 4, 8, 16, 32, 64)
 
     def __init__(self):
         self._models: dict[str, BaseModelWrapper] = {}
@@ -1090,7 +1069,7 @@ class MultiModelWrapper:
         """
 
         if not self._models:
-            raise Exception("No models have been added to the MultiModelWrapper.")
+            raise RuntimeError("No models have been added to the MultiModelWrapper.")
 
         if not isinstance(models_to_predict, (tuple, list)):
             models_to_predict = [models_to_predict]
@@ -1128,9 +1107,7 @@ class MultiModelWrapper:
                         "hls_configs argument expects a dictionary or list of dictionaries. See docstring example for correct formatting."
                     )
                 hls_configs = [hls_configs]
-            hls_configs_by_estimator = {
-                key: list(hls_configs) for key in self._models.keys()
-            }
+            hls_configs_by_estimator = {key: list(hls_configs) for key in self._models}
 
         for estimator_configs in hls_configs_by_estimator.values():
             for idx in range(len(estimator_configs)):
@@ -1147,7 +1124,7 @@ class MultiModelWrapper:
             if isinstance(hls4ml_versions, str):
                 hls4ml_versions = [hls4ml_versions]
             hls4ml_versions_by_estimator = {
-                key: list(hls4ml_versions) for key in self._models.keys()
+                key: list(hls4ml_versions) for key in self._models
             }
 
         vivado_versions = kwargs.get("vivado_versions", None)
@@ -1161,7 +1138,7 @@ class MultiModelWrapper:
             if isinstance(vivado_versions, str):
                 vivado_versions = [vivado_versions]
             vivado_versions_by_estimator = {
-                key: list(vivado_versions) for key in self._models.keys()
+                key: list(vivado_versions) for key in self._models
             }
 
         outputs = []
@@ -1266,7 +1243,7 @@ class MultiModelWrapper:
 
         return outputs_df
 
-    def _get_categorical_values(self, model_wrapper, key, fallback=[]):
+    def _get_categorical_values(self, model_wrapper, key, fallback=()):
         categorical_maps = getattr(model_wrapper, "global_categorical_maps", {}) or {}
         if key in categorical_maps:
             map_keys = list(categorical_maps[key].keys())

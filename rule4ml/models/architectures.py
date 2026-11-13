@@ -25,16 +25,6 @@ else:
 
 @dataclass
 class MLPSettings:
-    """
-    _summary_
-
-    Args: (all optional, default values inside data class)
-        embedding_layers (list): _description_
-        numerical_dense_layers (list): _description_
-        dense_layers (list): _description_
-        dense_dropouts (list): _description_
-    """
-
     # Default settings
     embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
     numerical_dense_layers: list = field(default_factory=lambda: [16])
@@ -63,28 +53,6 @@ class MLPSettings:
 
 @dataclass
 class TransformerSettings:
-    """
-    _summary_
-
-    Args: (all optional, default values inside data class)
-        global_dense_layers (list): _description_
-        seq_dense_layers (list): _description_
-
-        global_numerical_dense_layers (list): _description_
-        layer_numerical_dense_layers (list): _description_
-
-        num_blocks (int): _description_
-        num_heads (int): _description_
-        ff_dim (int): _description_
-        output_dim (int): _description_
-        dropout_rate (int): _description_
-
-        global_embedding_layers (list): _description_
-        seq_embedding_layers (list): _description_
-        dense_layers (list): _description_
-        dense_dropouts (list): _description_
-    """
-
     # Default settings
     global_dense_layers: list = field(default_factory=lambda: [64, 128])
     seq_dense_layers: list = field(default_factory=lambda: [64, 128])
@@ -133,12 +101,6 @@ class TransformerSettings:
 
 @dataclass
 class GNNSettings:
-    """
-    _summary_
-
-    Args: (all optional, default values inside data class)
-    """
-
     # Default settings
     numerical_dense_layers: list = field(default_factory=lambda: [32])
     gconv_layers: list = field(default_factory=lambda: [128, 64])
@@ -479,7 +441,7 @@ class TorchMLP(torch.nn.Module):
         self.settings = settings
 
         self.global_input_keys = {
-            "categorical": [name for name in self.embeddings.keys()],
+            "categorical": [name for name in self.embeddings],
             "numerical": f"g{len(categorical_maps)}_numerical_layer",
         }
         self.global_input_shape = input_shape
@@ -643,14 +605,14 @@ class TorchGNN(torch.nn.Module):
         self.settings = settings
 
         self.global_input_keys = {
-            "categorical": [name for name in self.global_embeddings.keys()],
+            "categorical": [name for name in self.global_embeddings],
             "numerical": f"g{len(global_categorical_maps)}_numerical_layer",
         }
         self.global_input_shape = global_input_shape
         self.global_categorical_maps = global_categorical_maps
 
         self.sequential_input_keys = {
-            "categorical": [name for name in self.sequential_embeddings.keys()],
+            "categorical": [name for name in self.sequential_embeddings],
             "numerical": f"s{len(sequential_categorical_maps)}_numerical_layer",
         }
         self.sequential_input_shape = sequential_input_shape
@@ -675,13 +637,9 @@ class TorchGNN(torch.nn.Module):
     def forward(self, inputs):
         x_global_categorical = []
         for idx, key in enumerate(self.global_embeddings.keys()):
-            try:
-                x_global_categorical.append(
-                    self.global_embeddings[key](inputs[key]).squeeze(1)
-                )
-            except Exception as e:
-                print(f"Input: {inputs[key].shape}")
-                raise e
+            x_global_categorical.append(
+                self.global_embeddings[key](inputs[key]).squeeze(1)
+            )
 
         x_global_numerical = inputs[self.global_input_keys["numerical"]]
         for idx, key in enumerate(self.numerical_layers.keys()):
@@ -791,17 +749,6 @@ class TorchGNN(torch.nn.Module):
 
 
 class KerasTransformerBlock(keras.layers.Layer):
-    """
-    _summary_
-
-    Args:
-        embed_dim (_type_): _description_
-        num_heads (_type_): _description_
-        ff_dim (_type_): _description_
-        output_dim (_type_): _description_
-        dropout_rate (_type_): _description_. Defaults to 0.1
-    """
-
     def __init__(
         self,
         embed_dim,
@@ -930,9 +877,6 @@ class KerasMCDropout(keras.layers.Dropout):
         """
         Expose an additional attribute to better control the call method's
         'training' argument for MC Dropout at inference time.
-
-        Args:
-            rate (_type_): _description_
         """
         self.enable_mc = kwargs.pop("enable_mc", False)
         super().__init__(rate, **kwargs)

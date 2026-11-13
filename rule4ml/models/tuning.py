@@ -18,9 +18,7 @@ from rule4ml.models.wrappers import KerasModelWrapper, TorchModelWrapper, TrainS
 
 
 class KerasSearcher:
-    """
-    _summary_
-    """
+    """Hyperparameter search for Keras predictors."""
 
     def __init__(self):
         self.model_wrapper = KerasModelWrapper()

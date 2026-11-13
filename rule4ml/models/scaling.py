@@ -1,15 +1,11 @@
 import math
 
 import numpy as np
-
-try:
-    import torch
-except Exception:
-    torch = None
+import torch
 
 
 def _is_torch(x):
-    return (torch is not None) and isinstance(x, torch.Tensor)
+    return isinstance(x, torch.Tensor)
 
 
 class BaseScaler:
@@ -94,7 +90,7 @@ class BoardPercentScaler(BaseScaler):
             for name, idx in self.board_map.items():
                 if idx == board:
                     return name.lower()
-        except Exception:
+        except (TypeError, ValueError):
             if isinstance(board, str):
                 return board.lower()
             return board
