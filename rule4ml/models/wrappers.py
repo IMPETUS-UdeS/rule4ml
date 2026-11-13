@@ -1,52 +1,30 @@
 import itertools
 import json
 import os
-import time
 from dataclasses import dataclass, field
 
-import keras
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from sklearn.metrics import r2_score
+import torch
 from tqdm.auto import tqdm
 
-try:
-    import torch
-except ImportError:
-    torch = None
-
-try:
-    import onnx
-except ImportError:
-    onnx = None
-
-from rule4ml.models import scaling
+from rule4ml.features import model_features
+from rule4ml.models import metrics, scaling
 from rule4ml.models.architectures import (
     KerasMCDropout,
     KerasMLP,
-    KerasTransformer,
     TorchGNN,
     TorchMLP,
 )
 from rule4ml.models.callbacks import EarlyStopping
-from rule4ml.models.metrics import rmse, smape
 from rule4ml.models.utils import get_loss_from_str, get_optimizer_from_str
 from rule4ml.parsers.data_parser import (
     boards_data,
-    get_global_inputs,
-    get_layers_data,
-    to_dataframe,
-)
-from rule4ml.parsers.network_parser import (
-    config_from_keras_model,
-    config_from_onnx_model,
-    config_from_torch_model,
 )
 from rule4ml.parsers.utils import (
     camel_keys_to_snake,
     fixed_precision_to_bit_width,
-    to_lower_keys,
 )
 
 
@@ -60,7 +38,7 @@ class TrainSettings:
 
     optimizer: str = "adam"
     loss_function: str = "mae"
-    metrics: list = field(default_factory=lambda: ["mape"])
+    metrics: list = field(default_factory=list)
 
 
 class BaseModelWrapper:
@@ -79,398 +57,348 @@ class BaseModelWrapper:
 
         self.output_labels = []
         self.output_shape = ()
+        self.report = None
 
         if hasattr(self, "model") and self.model is not None:
             del self.model
 
         self.model = None
-        self.dataset = None
         self.scaler = None
 
-    def set_model(self, model):
-        self.model = model
+    def set_model(
+        self,
+        model,
+        global_labels,
+        target_labels,
+        sequential_labels=(),
+        report=None,
+        scaler=None,
+    ):
+        """Attach a model with its numerical feature labels, targets and scaler.
 
+        Categorical inputs come from the model's maps. Resource targets are read
+        from `report` ("resource_report" or "hls_resource_report").
+        """
+        self.model = model
         self.global_input_keys = getattr(
             model, "global_input_keys", {"categorical": [], "numerical": ""}
         )
         self.sequential_input_keys = getattr(
             model, "sequential_input_keys", {"categorical": [], "numerical": ""}
         )
-
         self.global_categorical_maps = getattr(model, "global_categorical_maps", {})
         self.sequential_categorical_maps = getattr(
             model, "sequential_categorical_maps", {}
         )
-
         self.output_shape = getattr(model, "output_shape", ())
 
-    def build_inputs(self, inputs_df):
-        if self.model is None:
-            raise RuntimeError(
-                "A model needs to be set or loaded before building inputs."
-            )
-
-        input_dict = {}
-        for key, label in zip(
-            self.global_input_keys["categorical"], self.global_categorical_maps.keys()
-        ):
-            input_dict[key] = inputs_df[label].values
-
-        global_numerical_inputs_df = inputs_df.drop(
-            self.global_categorical_maps.keys(), axis=1
-        ).select_dtypes(exclude=[object])  # excluding nested "sequential_inputs" Series
-        self.global_numerical_labels = global_numerical_inputs_df.columns.values
-
-        input_dict[self.global_input_keys["numerical"]] = (
-            global_numerical_inputs_df.values
-        )
-
-        if "sequential_inputs" in inputs_df:
-            seq_inputs_series = inputs_df["sequential_inputs"]
-            if not seq_inputs_series.empty:
-                for key, label in zip(
-                    self.sequential_input_keys["categorical"],
-                    self.sequential_categorical_maps.keys(),
-                ):
-                    input_dict[key] = seq_inputs_series.apply(
-                        lambda df, label=label: df[label]
-                    ).values
-
-                seq_numerical_inputs = seq_inputs_series.apply(
-                    lambda df: (
-                        df.drop(self.sequential_categorical_maps.keys(), axis=1)
-                        .select_dtypes(exclude=[object])
-                        .values
-                    )
-                ).values
-                seq_numerical_inputs = np.asarray([arr for arr in seq_numerical_inputs])
-
-                self.sequential_numerical_labels = (
-                    seq_inputs_series.iloc[0]
-                    .drop(self.sequential_categorical_maps.keys(), axis=1)
-                    .select_dtypes(exclude=[object])
-                    .columns.values
-                )
-
-                input_dict[self.sequential_input_keys["numerical"]] = (
-                    seq_numerical_inputs
-                )
-
-        return input_dict
-
-    def build_dataset(
-        self,
-        inputs_df,
-        targets_df,
-        batch_size,
-        val_inputs_df=None,
-        val_targets_df=None,
-        scaler=None,
-    ):
-        if self.model is None:
-            raise RuntimeError(
-                "A model needs to be set or loaded before building a dataset."
-            )
-
-        self.batch_size = batch_size
-        self.output_labels = targets_df.columns.values
-
-        if scaler:
-            targets_df = pd.DataFrame(
-                [
-                    scaler.transform(target_row, input_row)
-                    for target_row, input_row in zip(
-                        targets_df.to_dict(orient="records"),
-                        inputs_df.to_dict(orient="records"),
-                    )
-                ],
-                index=targets_df.index,
-            )
-            if val_targets_df is not None:
-                val_targets_df = pd.DataFrame(
-                    [
-                        scaler.transform(target_row, input_row)
-                        for target_row, input_row in zip(
-                            val_targets_df.to_dict(orient="records"),
-                            val_inputs_df.to_dict(orient="records"),
-                        )
-                    ],
-                    index=val_targets_df.index,
-                )
+        self.global_numerical_labels = list(global_labels)
+        self.sequential_numerical_labels = list(sequential_labels)
+        self.output_labels = list(target_labels)
+        self.report = report
         self.scaler = scaler
-        return targets_df, val_targets_df
 
-    def fit(self):
+        for attribute, labels, maps in [
+            ("global_input_shape", global_labels, self.global_categorical_maps),
+            (
+                "sequential_input_shape",
+                sequential_labels,
+                self.sequential_categorical_maps,
+            ),
+        ]:
+            shape = getattr(model, attribute, None)
+            width = len(labels) + len(maps)
+            if (shape[-1] if shape else 0) != width:
+                raise ValueError(
+                    f"{attribute} {shape} does not fit {len(labels)} numerical "
+                    f"labels plus {len(maps)} categorical inputs"
+                )
+        if self.output_shape[-1] != len(target_labels):
+            raise ValueError(
+                f"Output shape {self.output_shape} does not fit {len(target_labels)} targets"
+            )
+
+    def fit(
+        self, dataset, train_settings, val_dataset=None, seed=0, callbacks=(), verbose=0
+    ):
+        """Train on a prepared Dataset, skipping records without every target.
+
+        `seed` fixes the batch order.
+        """
         if self.model is None:
             raise RuntimeError("A model needs to be set or loaded before training.")
-        if self.dataset is None:
-            raise RuntimeError("A dataset needs to be built before training a model.")
 
-    def predict_from_df(self, inputs_df, targets=None, mc_dropout=False, verbose=0):
-        if self.model is None:
-            raise RuntimeError(
-                "A model needs to be set or loaded before making predictions."
-            )
+        train = self.training_data(dataset, fit_scaler=True)
+        val = None if val_dataset is None else self.training_data(val_dataset)
+        return self._fit(train, val, train_settings, seed, callbacks, verbose)
 
-        feature_labels = list(self.global_numerical_labels) + list(
-            self.global_categorical_maps.keys()
-        )
-        if len(self.sequential_numerical_labels) > 0:
-            sequential_labels = list(self.sequential_numerical_labels) + list(
-                self.sequential_categorical_maps.keys()
-            )
-            inputs_df.loc[:, "sequential_inputs"] = inputs_df[
-                "sequential_inputs"
-            ].apply(lambda x: x[sequential_labels])
-            feature_labels += ["sequential_inputs"]
+    def training_data(self, dataset, fit_scaler=False):
+        """Model inputs and scaled float32 targets of records with every target."""
+        targets = dataset.targets(self.output_labels, self.report)
+        dataset = dataset.subset(np.flatnonzero(np.isfinite(targets).all(axis=1)))
+        if len(dataset) == 0:
+            raise ValueError(f"No records have every target of {self.output_labels}")
 
-        inputs_df = inputs_df[feature_labels]
-        inputs = self.build_inputs(inputs_df)
-
-        start_time = time.time()
-        prediction = self._model_predict(
-            inputs, 0, mc_dropout=mc_dropout, verbose=verbose
-        )
-        total_time = time.time() - start_time
-
+        targets = dataset.targets(self.output_labels, self.report)
+        inputs, numerical, codes = self._dataset_inputs(dataset)
         if self.scaler:
-            prediction = np.asarray(
+            target_rows = [
+                dict(zip(self.output_labels, row)) for row in targets.tolist()
+            ]
+            if fit_scaler:
+                self.scaler.fit(target_rows)
+            targets = np.array(
                 [
-                    list(
-                        self.scaler.inverse(
-                            dict(zip(self.output_labels, pred_row)),
-                            dict(zip(inputs_df.columns, inputs_df.iloc[idx])),
-                        ).values()
+                    [
+                        self.scaler.transform(target_row, input_row)[label]
+                        for label in self.output_labels
+                    ]
+                    for target_row, input_row in zip(
+                        target_rows, self._scaler_rows(numerical, codes)
                     )
-                    for idx, pred_row in enumerate(prediction)
                 ]
             )
+        return inputs, targets.astype(np.float32)
 
-        if verbose > 1:
-            r2 = r2_score(targets, prediction, force_finite=False)
-            print(f"R2 Score: {r2:.2f}")
+    def predict_dataset(self, dataset, mc_dropout=False, verbose=0):
+        """Raw-unit predictions for every record of a Dataset, in order.
 
-            smape_value = smape(targets, prediction)
-            print(f"SMAPE: {smape_value:.2f}%")
+        Torch runs all records as one batch. Keras uses its default batch size.
+        """
+        inputs, numerical, codes = self._dataset_inputs(dataset)
+        return self._predict(
+            inputs, numerical, codes, mc_dropout=mc_dropout, verbose=verbose
+        )
 
-            rmse_value = rmse(targets, prediction)
-            print(f"RMSE: {rmse_value:.2f}")
-
-            avg_inference_time = total_time / len(inputs_df)
-            print(f"Average Inference Time: {avg_inference_time:.2E} seconds")
-
-            return prediction, r2, smape_value, rmse_value, avg_inference_time
-
-        return prediction
+    def evaluate(self, dataset, report=None, verbose=0):
+        """wa-hls4ml metrics per output label, over the records where it is known."""
+        targets = dataset.targets(self.output_labels, report or self.report)
+        predictions = self.predict_dataset(dataset, verbose=verbose)
+        return metrics.evaluate(targets, predictions, self.output_labels)
 
     def predict(
         self,
         models_to_predict,
         hls_configs,
-        hls4ml_versions,
-        vivado_versions,
+        hls4ml_versions=(),
+        vivado_versions=(),
         mc_dropout=False,
         verbose=0,
     ):
-        if self.model is None:
-            raise RuntimeError(
-                "A model needs to be set or loaded before making predictions."
-            )
-
-        if not isinstance(models_to_predict, (tuple, list)):
-            raise TypeError(
-                "models_to_predict expects a list of keras or torch models."
-            )
-        if not isinstance(hls_configs, (tuple, list)):
-            raise TypeError(
-                "hls_configs expects a list of HLS configuration dictionaries."
-            )
-        if not isinstance(hls4ml_versions, (tuple, list)):
-            raise TypeError(
-                "hls4ml_versions expects a list or tuple of version strings."
-            )
-        if not isinstance(vivado_versions, (tuple, list)):
-            raise TypeError(
-                "vivado_versions expects a list or tuple of version strings."
-            )
-
-        supported_categoricals = {}
-        for key, mapping in self.global_categorical_maps.items():
-            supported_categoricals[key] = list(to_lower_keys(mapping).keys())
-
-        accepted_hls_configs = []
-        for hls_config in hls_configs:
-            board = hls_config.get("board", "").lower()
-            strategy = hls_config.get("model", {}).get("strategy", "").lower()
-            if board not in supported_categoricals.get("board", []):
-                raise ValueError(
-                    f"Model {self.model.name} does not support board: {board}"
-                )
-            if strategy not in supported_categoricals.get("strategy", []):
-                raise ValueError(
-                    f"Model {self.model.name} does not support strategy: {strategy}"
-                )
-            accepted_hls_configs.append(hls_config)
-        if not accepted_hls_configs:
-            accepted_hls_configs = [None]
-
-        accepted_hls4ml_versions = []
-        for hls4ml_version in hls4ml_versions:
-            if hls4ml_version:
-                if hls4ml_version.lower() not in supported_categoricals.get(
-                    "hls4ml_version", []
-                ):
-                    raise ValueError(
-                        f"Model {self.model.name} does not support hls4ml_version: {hls4ml_version}"
-                    )
-                accepted_hls4ml_versions.append(hls4ml_version)
-        if not accepted_hls4ml_versions:
-            accepted_hls4ml_versions = [None]
-
-        accepted_vivado_versions = []
-        for vivado_version in vivado_versions:
-            if vivado_version:
-                if vivado_version.lower() not in supported_categoricals.get(
-                    "vivado_version", []
-                ):
-                    raise ValueError(
-                        f"Model {self.model.name} does not support vivado_version: {vivado_version}"
-                    )
-                accepted_vivado_versions.append(vivado_version)
-        if not accepted_vivado_versions:
-            accepted_vivado_versions = [None]
-
-        global_inputs = []
-        sequential_inputs = []
-
-        for (
-            model_to_predict,
-            hls_config,
-            hls4ml_version,
-            vivado_version,
-        ) in itertools.product(
-            models_to_predict,
-            accepted_hls_configs,
-            accepted_hls4ml_versions,
-            accepted_vivado_versions,
-        ):
-            if isinstance(model_to_predict, keras.Model):
-                model_config = config_from_keras_model(model_to_predict, hls_config)
-            elif torch is not None and isinstance(model_to_predict, torch.nn.Module):
-                model_config = config_from_torch_model(model_to_predict, hls_config)
-            elif onnx is not None and isinstance(model_to_predict, onnx.ModelProto):
-                model_config = config_from_onnx_model(model_to_predict, hls_config)
-            else:
-                if torch is not None:
-                    if onnx is not None:
-                        raise TypeError(
-                            f"Unsupported model type: {type(model_to_predict)}"
-                        )
-                    else:
-                        raise ImportError("Failed to import module onnx.")
-                elif onnx is not None:
-                    raise ImportError("Failed to import module torch.")
-
-            global_inputs.append(
-                get_global_inputs(
-                    model_config,
-                    hls_config,
-                    hls4ml_version=hls4ml_version,
-                    vivado_version=vivado_version,
-                )
-            )
-            sequential_inputs.append(get_layers_data(model_config))
-
-        inputs_df = to_dataframe(
-            global_inputs=global_inputs,
-            sequential_inputs=sequential_inputs,
-            global_categorical_maps=self.global_categorical_maps,
-            sequential_categorical_maps=self.sequential_categorical_maps,
-            meta_data=[],
-            targets=[],
+        features = self._features(
+            models_to_predict, hls_configs, hls4ml_versions, vivado_versions
         )
-
-        return self.predict_from_df(inputs_df, mc_dropout=mc_dropout, verbose=verbose)
-
-    def mc_predict_from_df(
-        self, inputs_df, num_samples=50, return_all=False, verbose=0
-    ):
-        """
-        Perform MC Dropout predictions from a dataframe.
-
-        Args:
-            inputs_df (pd.DataFrame): input dataframe.
-            num_samples (int, optional): number of samples for MC Dropout. Defaults to 100.
-            return_all (bool, optional): whether to return all samples or just the mean and std. Defaults to False.
-            verbose (int, optional): verbosity level. Defaults to 0.
-
-        Returns:
-            tuple: mean and std of predictions if return_all is False, else mean, std, and all samples.
-        """
-        if self.model is None:
-            raise RuntimeError(
-                "A model needs to be set or loaded before making predictions."
-            )
-
-        all_predictions = []
-        for _ in range(num_samples):
-            predictions = self.predict_from_df(
-                inputs_df, mc_dropout=True, verbose=verbose
-            )
-            all_predictions.append(predictions)
-
-        all_predictions = np.array(all_predictions)
-        predictions_mean = np.mean(all_predictions, axis=0)
-        predictions_std = np.std(all_predictions, axis=0)
-
-        outputs = (predictions_mean, predictions_std)
-        if return_all:
-            outputs += (all_predictions,)
-
-        return outputs
+        return self.predict_features(features, mc_dropout=mc_dropout, verbose=verbose)
 
     def mc_predict(
         self,
         models_to_predict,
         hls_configs,
+        hls4ml_versions=(),
+        vivado_versions=(),
         num_samples=50,
         return_all=False,
         verbose=0,
     ):
-        """
-        Perform MC Dropout predictions.
+        """MC dropout predictions: mean and std over samples, plus samples if asked."""
+        features = self._features(
+            models_to_predict, hls_configs, hls4ml_versions, vivado_versions
+        )
+        inputs = self._inputs_from_features(features)
+        samples = np.array(
+            [
+                self._predict(*inputs, mc_dropout=True, verbose=verbose)
+                for _ in range(num_samples)
+            ]
+        )
+        outputs = (samples.mean(axis=0), samples.std(axis=0))
+        return (*outputs, samples) if return_all else outputs
 
-        Args:
-            models_to_predict (list): list of models to predict.
-            hls_configs (list): list of HLS configuration dictionaries.
-            num_samples (int, optional): number of samples for MC Dropout. Defaults to 100.
-            return_all (bool, optional): whether to return all samples or just the mean and std. Defaults to False.
-            verbose (int, optional): verbosity level. Defaults to 0.
+    def _features(
+        self, models_to_predict, hls_configs, hls4ml_versions, vivado_versions
+    ):
+        if self.model is None:
+            raise RuntimeError(
+                "A model needs to be set or loaded before making predictions."
+            )
+        for name, value in [
+            ("models_to_predict", models_to_predict),
+            ("hls_configs", hls_configs),
+            ("hls4ml_versions", hls4ml_versions),
+            ("vivado_versions", vivado_versions),
+        ]:
+            if not isinstance(value, (tuple, list)):
+                raise TypeError(f"{name} expects a list or tuple")
+        return [
+            model_features(*combo)
+            for combo in itertools.product(
+                models_to_predict,
+                *self.accepted_settings(hls_configs, hls4ml_versions, vivado_versions),
+            )
+        ]
 
-        Returns:
-            tuple: mean and std of predictions if return_all is False, else mean, std, and all samples.
-        """
+    def accepted_settings(self, hls_configs, hls4ml_versions, vivado_versions):
+        """Validate settings against the training categories, None when empty."""
+        supported = {
+            key: self.categorical_values(key) for key in self.global_categorical_maps
+        }
+        for hls_config in hls_configs:
+            board = hls_config.get("board", "").lower()
+            strategy = hls_config.get("model", {}).get("strategy", "").lower()
+            if board not in supported.get("board", []):
+                raise ValueError(
+                    f"Model {self.model.name} does not support board: {board}"
+                )
+            if strategy not in supported.get("strategy", []):
+                raise ValueError(
+                    f"Model {self.model.name} does not support strategy: {strategy}"
+                )
+
+        accepted_versions = []
+        for key, versions in [
+            ("hls4ml_version", hls4ml_versions),
+            ("vivado_version", vivado_versions),
+        ]:
+            versions = [version for version in versions if version]
+            if not versions and key in supported:
+                raise ValueError(
+                    f"Model {self.model.name} needs {key}s, one of: {supported[key]}"
+                )
+            for version in versions:
+                if version.lower() not in supported.get(key, []):
+                    raise ValueError(
+                        f"Model {self.model.name} does not support {key}: {version}"
+                    )
+            accepted_versions.append(versions or [None])
+
+        return [list(hls_configs) or [None], *accepted_versions]
+
+    def categorical_values(self, label):
+        """Lowercased training values of a global category, in map order."""
+        return [value.lower() for value in self.global_categorical_maps.get(label, {})]
+
+    def predict_features(self, features, mc_dropout=False, verbose=0):
+        """Predict from (global_inputs, layers) pairs of model_features."""
         if self.model is None:
             raise RuntimeError(
                 "A model needs to be set or loaded before making predictions."
             )
 
-        all_predictions = []
-        for _ in range(num_samples):
-            predictions = self.predict(
-                models_to_predict, hls_configs, mc_dropout=True, verbose=verbose
+        inputs, numerical, codes = self._inputs_from_features(features)
+        return self._predict(
+            inputs, numerical, codes, mc_dropout=mc_dropout, verbose=verbose
+        )
+
+    def _predict(self, inputs, numerical, codes, mc_dropout=False, verbose=0):
+        prediction = self._model_predict(
+            inputs, 0, mc_dropout=mc_dropout, verbose=verbose
+        )
+        if self.scaler:
+            prediction = np.asarray(
+                [
+                    list(
+                        self.scaler.inverse(
+                            dict(zip(self.output_labels, pred_row)), input_row
+                        ).values()
+                    )
+                    for pred_row, input_row in zip(
+                        prediction, self._scaler_rows(numerical, codes)
+                    )
+                ]
             )
-            all_predictions.append(predictions)
+        return prediction
 
-        all_predictions = np.array(all_predictions)
-        predictions_mean = np.mean(all_predictions, axis=0)
-        predictions_std = np.std(all_predictions, axis=0)
+    def _scaler_rows(self, numerical, codes):
+        return [
+            {
+                **dict(zip(self.global_numerical_labels, numerical[idx].tolist())),
+                **{
+                    label: label_codes[idx].item()
+                    for label, label_codes in codes.items()
+                },
+            }
+            for idx in range(len(numerical))
+        ]
 
-        outputs = (predictions_mean, predictions_std)
-        if return_all:
-            outputs += (all_predictions,)
+    def _inputs_from_features(self, features):
+        global_rows = [global_inputs for global_inputs, _ in features]
+        codes = {
+            label: np.array([mapping[row[label]] for row in global_rows])
+            for label, mapping in self.global_categorical_maps.items()
+        }
+        numerical = np.array(
+            [
+                [row[label] for label in self.global_numerical_labels]
+                for row in global_rows
+            ]
+        )
+        inputs = dict(zip(self.global_input_keys["categorical"], codes.values()))
+        inputs[self.global_input_keys["numerical"]] = numerical
 
-        return outputs
+        if len(self.sequential_numerical_labels) > 0:
+            layer_rows = [layers for _, layers in features]
+            depth = max(len(layers) for layers in layer_rows)
+            for key, (label, mapping) in zip(
+                self.sequential_input_keys["categorical"],
+                self.sequential_categorical_maps.items(),
+            ):
+                inputs[key] = np.array(
+                    [
+                        [mapping[layer[label]] for layer in layers]
+                        + [0] * (depth - len(layers))
+                        for layers in layer_rows
+                    ]
+                )
+            padding = [0] * len(self.sequential_numerical_labels)
+            inputs[self.sequential_input_keys["numerical"]] = np.array(
+                [
+                    [
+                        [layer[label] for label in self.sequential_numerical_labels]
+                        for layer in layers
+                    ]
+                    + [padding] * (depth - len(layers))
+                    for layers in layer_rows
+                ]
+            )
+
+        return inputs, numerical, codes
+
+    def _dataset_inputs(self, dataset):
+        """Model inputs of every Dataset record, plus numerical and category codes.
+
+        Selected features must be finite, and layers distinguishable from padding.
+        """
+        codes = {
+            label: dataset.encode(label, mapping)
+            for label, mapping in self.global_categorical_maps.items()
+        }
+        numerical = dataset.columns(self.global_numerical_labels)
+        _check_finite(numerical, self.global_numerical_labels)
+        inputs = dict(zip(self.global_input_keys["categorical"], codes.values()))
+        inputs[self.global_input_keys["numerical"]] = numerical
+
+        if self.sequential_numerical_labels:
+            for key, (label, mapping) in zip(
+                self.sequential_input_keys["categorical"],
+                self.sequential_categorical_maps.items(),
+            ):
+                inputs[key] = dataset.pad_layers(
+                    dataset.encode(label, mapping, per_layer=True)
+                )
+            layer_values = dataset.columns(
+                self.sequential_numerical_labels, per_layer=True
+            )
+            _check_finite(layer_values, self.sequential_numerical_labels)
+            if not layer_values.any(axis=1).all():
+                raise ValueError(
+                    "Some layers have all-zero sequential features and would read "
+                    "as padding"
+                )
+            inputs[self.sequential_input_keys["numerical"]] = dataset.pad_layers(
+                layer_values
+            )
+
+        return inputs, numerical, codes
 
     def to_config(self):
         return {
@@ -480,6 +408,7 @@ class BaseModelWrapper:
             "sequential_categorical_maps": self.sequential_categorical_maps,
             "output_labels": list(self.output_labels),
             "output_shape": self.output_shape,
+            "report": self.report,
             "model_class": self.model.__class__.__name__,
             "model_config": self.model.to_config(),
             "scaler_class": self.scaler.__class__.__name__ if self.scaler else None,
@@ -487,23 +416,23 @@ class BaseModelWrapper:
         }
 
     def from_config(self, config):
-        self.global_numerical_labels = config["global_numerical_labels"]
-        self.sequential_numerical_labels = config["sequential_numerical_labels"]
-        self.global_categorical_maps = config["global_categorical_maps"]
-        self.sequential_categorical_maps = config["sequential_categorical_maps"]
-
-        self.output_labels = config["output_labels"]
-        self.output_shape = config["output_shape"]
-
-        model_class = config["model_class"]
-        self.model_config = config["model_config"]
-        self.model = globals()[model_class].from_config(self.model_config)
-        self.set_model(self.model)
-
-        scaler_class = config.get("scaler_class", None)
-        scaler_config = config.get("scaler_config", None)
-        if scaler_class and scaler_config:
-            self.scaler = getattr(scaling, scaler_class).from_config(scaler_config)
+        model = globals()[config["model_class"]].from_config(config["model_config"])
+        scaler = None
+        if config.get("scaler_class") and config.get("scaler_config"):
+            scaler = getattr(scaling, config["scaler_class"]).from_config(
+                config["scaler_config"]
+            )
+        sequential_labels = config["sequential_numerical_labels"]
+        if not getattr(model, "sequential_input_shape", None):
+            sequential_labels = ()  # older MLP bundles list layer labels they never read
+        self.set_model(
+            model,
+            config["global_numerical_labels"],
+            config["output_labels"],
+            sequential_labels,
+            report=config.get("report"),
+            scaler=scaler,
+        )
 
     def save(self, save_dir):
         """Save the class config and model weights."""
@@ -537,7 +466,7 @@ class BaseModelWrapper:
 
         self._load_weights(weights_path)
 
-    def _enable_mc_dropout(self):
+    def _fit(self, train, val, train_settings, seed, callbacks, verbose):
         raise NotImplementedError("This method should be implemented in subclasses.")
 
     def _model_predict(self, inputs, batch_size, mc_dropout, verbose=0):
@@ -553,113 +482,24 @@ class BaseModelWrapper:
 class TorchModelWrapper(BaseModelWrapper):
     def __init__(self):
         super().__init__()
-        if torch is None:
-            raise ImportError(
-                "Torch import failed. Please install torch to use this wrapper."
-            )
 
-    def set_model(self, model):
-        super().set_model(model)
+    def set_model(self, model, *args, **kwargs):
+        super().set_model(model, *args, **kwargs)
         self.device = model.device
 
-    def _process_input_dict(self, input_dict):
-        input_tensors = []
-        for key, value in input_dict.items():
-            if (
-                key in self.global_input_keys["categorical"]
-                or key in self.sequential_input_keys["categorical"]
-            ):
-                # Convert categorical inputs to long tensors
-                input_tensors.append(torch.tensor(value, dtype=torch.long))
-            else:
-                # Convert numerical inputs to float tensors
-                input_tensors.append(torch.tensor(value, dtype=torch.float32))
-
-        return input_tensors
-
-    def build_dataset(
-        self,
-        inputs_df,
-        targets_df,
-        batch_size,
-        val_ratio=0.2,
-        val_inputs_df=None,
-        val_targets_df=None,
-        train_repeats=1,
-        shuffle=True,
-        scaler=None,
-        verbose=0,
-    ):
-        targets_df, val_targets_df = super().build_dataset(
-            targets_df, batch_size, val_targets_df=val_targets_df, scaler=scaler
-        )
-
-        input_dict = self.build_inputs(inputs_df)
-        if verbose > 0:
-            for key, value in input_dict.items():
-                print(f"{key}: {value.shape}")
-
-        input_tensors = self._process_input_dict(input_dict)
-        target_tensors = torch.tensor(targets_df.values)
-
-        self.dataset = torch.utils.data.TensorDataset(*input_tensors, target_tensors)
-        if val_inputs_df is not None and val_targets_df is not None:
-            indices = torch.randperm(len(self.dataset))
-            train_indices = indices.tolist() * train_repeats
-            train_subset = torch.utils.data.Subset(self.dataset, train_indices)
-
-            val_input_dict = self.build_inputs(val_inputs_df)
-            if verbose > 0:
-                for key, value in val_input_dict.items():
-                    print(f"val_{key}: {value.shape}")
-
-            val_target_tensors = torch.tensor(val_targets_df.values)
-            val_input_tensors = []
-            for key, value in val_input_dict.items():
-                if (
-                    key in self.global_input_keys["categorical"]
-                    or key in self.sequential_input_keys["categorical"]
-                ):
-                    val_input_tensors.append(torch.tensor(value, dtype=torch.long))
-                else:
-                    val_input_tensors.append(torch.tensor(value, dtype=torch.float32))
-            val_subset = torch.utils.data.TensorDataset(
-                *val_input_tensors, val_target_tensors
+    def _tensors(self, inputs):
+        categorical = {
+            *self.global_input_keys["categorical"],
+            *self.sequential_input_keys["categorical"],
+        }
+        return {
+            key: torch.tensor(
+                value, dtype=torch.long if key in categorical else torch.float32
             )
-        else:
-            total_size = len(inputs_df)
-            val_size = int(total_size * val_ratio)
+            for key, value in inputs.items()
+        }
 
-            indices = torch.randperm(total_size)
-            val_indices = indices[:val_size].tolist()
-            train_indices = indices[val_size:].tolist() * train_repeats
-            train_subset = torch.utils.data.Subset(self.dataset, train_indices)
-            val_subset = torch.utils.data.Subset(self.dataset, val_indices)
-
-        def collate_fn(batch):
-            batch = list(zip(*batch))
-            inputs = {
-                key: torch.stack(batch[i]) for i, key in enumerate(input_dict.keys())
-            }
-            targets = torch.stack(batch[-1]).to(dtype=torch.float32)
-            return inputs, targets
-
-        self.train_data = torch.utils.data.DataLoader(
-            train_subset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            collate_fn=collate_fn,
-        )
-        self.val_data = torch.utils.data.DataLoader(
-            val_subset,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=collate_fn,
-        )
-
-    def fit(self, train_settings: TrainSettings, callbacks=(), verbose=0):
-        super().fit()
-
+    def _fit(self, train, val, train_settings, seed, callbacks, verbose):
         self.optimizer = train_settings.optimizer
         if isinstance(self.optimizer, str):
             self.optimizer = get_optimizer_from_str(
@@ -674,92 +514,74 @@ class TorchModelWrapper(BaseModelWrapper):
             loss_function = get_loss_from_str(loss_function, backend="torch")
 
         metric_functions = train_settings.metrics
+        history = {"train": {"loss": [], **{m.name: [] for m in metric_functions}}}
+        if val is not None:
+            history["val"] = {"loss": [], **{m.name: [] for m in metric_functions}}
+            val = (self._tensors(val[0]), torch.from_numpy(val[1]))
 
-        history = {
-            "train": {
-                "loss": [],
-                **{m.name: [] for m in metric_functions},
-            },
-        }
-        if self.val_data:
-            history["val"] = {
-                "loss": [],
-                **{m.name: [] for m in metric_functions},
-            }
-
-        num_batches = len(self.train_data)
+        inputs, targets = self._tensors(train[0]), torch.from_numpy(train[1])
+        batch_size = train_settings.batch_size
+        num_batches = -(-len(targets) // batch_size)
+        generator = torch.Generator().manual_seed(seed)
         for epoch in range(train_settings.num_epochs):
             self.model.train()
-            train_loss = 0.0
+            order = torch.randperm(len(targets), generator=generator)
+            train_loss, seen = 0.0, 0
 
             with tqdm(
-                self.train_data,
+                order.split(batch_size),
                 desc=f"Epoch {epoch + 1}/{train_settings.num_epochs}",
                 leave=False,
             ) as pbar:
-                for inputs, targets in pbar:
-                    inputs = {
-                        key: value.to(self.device) for key, value in inputs.items()
+                for rows in pbar:
+                    batch = {
+                        key: value[rows].to(self.device)
+                        for key, value in inputs.items()
                     }
-                    targets = targets.to(self.device)
+                    batch_targets = targets[rows].to(self.device)
 
                     self.optimizer.zero_grad()
-                    outputs = self.model(inputs)
+                    outputs = self.model(batch)
 
-                    loss = loss_function(outputs, targets)
+                    loss = loss_function(outputs, batch_targets)
                     if hasattr(self.model, "kl_loss"):
-                        loss += 1 / num_batches * self.model.kl_loss
+                        loss += self.model.kl_loss / num_batches
 
                     loss.backward()
                     self.optimizer.step()
 
-                    train_loss += loss.item()
+                    train_loss += loss.item() * len(rows)
+                    seen += len(rows)
                     for m in metric_functions:
-                        m.update(targets.detach(), outputs.detach(), self.output_labels)
+                        m.update(
+                            batch_targets.detach(), outputs.detach(), self.output_labels
+                        )
 
-                    postfix = {"loss": f"{(train_loss / (pbar.n + 1)):.6f}"}
+                    postfix = {"loss": f"{train_loss / seen:.6f}"}
                     for m in metric_functions:
-                        current_metric = m.result().item()
-                        postfix[m.name] = f"{current_metric:.6f}"
-
+                        postfix[m.name] = f"{m.result().item():.6f}"
                     pbar.set_postfix(postfix)
 
-            avg_train_loss = train_loss / len(self.train_data)
-            history["train"]["loss"].append(avg_train_loss)
+            history["train"]["loss"].append(train_loss / seen)
             for m in metric_functions:
                 history["train"][m.name].append(m.result().item())
-                m.reset()  # Reset metrics for validation or next epoch
+                m.reset()
 
             summary = f"Epoch {epoch + 1}/{train_settings.num_epochs}\n"
-            summary += f"loss: {avg_train_loss:.6f} -"
+            summary += f"loss: {history['train']['loss'][-1]:.6f} -"
             for m in metric_functions:
                 summary += f" {m.name}: {history['train'][m.name][-1]:.6f} -"
 
-            if self.val_data:
-                self.model.eval()
-                val_loss = 0.0
-
-                with torch.no_grad():
-                    for inputs, targets in self.val_data:
-                        inputs = {
-                            key: value.to(self.device) for key, value in inputs.items()
-                        }
-                        targets = targets.to(self.device)
-
-                        outputs = self.model(inputs)
-
-                        loss = loss_function(outputs, targets)
-                        val_loss += loss.item()
-                        for m in metric_functions:
-                            m.update(targets, outputs, self.output_labels)
-
-                avg_val_loss = val_loss / len(self.val_data)
-                history["val"]["loss"].append(avg_val_loss)
+            if val is not None:
+                val_loss = self._validation_loss(
+                    val, loss_function, metric_functions, batch_size
+                )
+                history["val"]["loss"].append(val_loss)
                 for m in metric_functions:
                     history["val"][m.name].append(m.result().item())
                     m.reset()
 
-                summary += f" val_loss: {avg_val_loss:.6f} -"
+                summary += f" val_loss: {val_loss:.6f} -"
                 for m in metric_functions:
                     summary += f" val_{m.name}: {history['val'][m.name][-1]:.6f} -"
 
@@ -788,6 +610,23 @@ class TorchModelWrapper(BaseModelWrapper):
 
         return history
 
+    def _validation_loss(self, val, loss_function, metric_functions, batch_size):
+        """Record-weighted validation loss, updating the metrics."""
+        inputs, targets = val
+        self.model.eval()
+        total = 0.0
+        with torch.no_grad():
+            for rows in torch.arange(len(targets)).split(batch_size):
+                batch = {
+                    key: value[rows].to(self.device) for key, value in inputs.items()
+                }
+                batch_targets = targets[rows].to(self.device)
+                outputs = self.model(batch)
+                total += loss_function(outputs, batch_targets).item() * len(rows)
+                for m in metric_functions:
+                    m.update(batch_targets, outputs, self.output_labels)
+        return total / len(targets)
+
     def _enable_mc_dropout(self):
         """
         Enable MC Dropout by setting all dropout layers to train mode.
@@ -810,10 +649,9 @@ class TorchModelWrapper(BaseModelWrapper):
 
         with torch.no_grad():
             if isinstance(inputs, dict):
-                input_tensors = self._process_input_dict(inputs)
                 inputs = {
                     key: value.to(self.device)
-                    for key, value in zip(inputs.keys(), input_tensors)
+                    for key, value in self._tensors(inputs).items()
                 }
 
             outputs = self.model(inputs)
@@ -836,69 +674,7 @@ class KerasModelWrapper(BaseModelWrapper):
     def __init__(self):
         super().__init__()
 
-    def build_dataset(
-        self,
-        inputs_df,
-        targets_df,
-        batch_size,
-        val_ratio=0.2,
-        val_inputs_df=None,
-        val_targets_df=None,
-        train_repeats=1,
-        shuffle=True,
-        scaler=None,
-        verbose=0,
-    ):
-        targets_df, val_targets_df = super().build_dataset(
-            targets_df, batch_size, val_targets_df=val_targets_df, scaler=scaler
-        )
-
-        input_dict = self.build_inputs(inputs_df)
-        if verbose > 0:
-            for key, value in input_dict.items():
-                print(f"{key}: shape={value.shape}, dtype={value.dtype}")
-
-        self.dataset = tf.data.Dataset.from_tensor_slices(
-            (input_dict, np.array(targets_df.values))
-        )
-        if val_inputs_df is not None and val_targets_df is not None:
-            val_input_dict = self.build_inputs(val_inputs_df)
-
-            train_data = self.dataset.repeat(train_repeats)
-            if shuffle:
-                train_data = train_data.shuffle(len(train_data))
-            train_data = train_data.batch(batch_size)
-
-            val_data = tf.data.Dataset.from_tensor_slices(
-                (val_input_dict, np.array(val_targets_df.values))
-            )
-            val_data = val_data.batch(batch_size)
-
-            self.train_data = train_data
-            self.val_data = val_data
-        elif val_ratio > 0.0:
-            val_len = int(len(self.dataset) * val_ratio)
-            val_data = self.dataset.take(val_len)
-            val_data = val_data.batch(batch_size)
-            train_data = self.dataset.skip(val_len).repeat(train_repeats)
-            if shuffle:
-                train_data = train_data.shuffle(len(self.dataset) - val_len)
-            train_data = train_data.batch(batch_size)
-
-            self.train_data = train_data
-            self.val_data = val_data
-        else:
-            train_data = self.dataset.repeat(train_repeats)
-            if shuffle:
-                train_data = train_data.shuffle(len(train_data))
-            train_data = train_data.batch(batch_size)
-
-            self.train_data = train_data
-            self.val_data = None
-
-    def fit(self, train_settings: TrainSettings, callbacks=(), verbose=0):
-        super().fit()
-
+    def _fit(self, train, val, train_settings, seed, callbacks, verbose):
         self.optimizer = train_settings.optimizer
         if isinstance(self.optimizer, str):
             self.optimizer = get_optimizer_from_str(
@@ -917,31 +693,35 @@ class KerasModelWrapper(BaseModelWrapper):
             metrics=train_settings.metrics,
         )
 
+        batch_size = train_settings.batch_size
+        train_data = (
+            tf.data.Dataset.from_tensor_slices(train)
+            .shuffle(len(train[1]), seed=seed)
+            .batch(batch_size)
+        )
+        val_data = (
+            None
+            if val is None
+            else tf.data.Dataset.from_tensor_slices(val).batch(batch_size)
+        )
         return self.model.fit(
-            self.train_data,
+            train_data,
             epochs=train_settings.num_epochs,
-            batch_size=train_settings.batch_size,
-            validation_data=self.val_data,
+            validation_data=val_data,
             callbacks=callbacks,
             verbose=verbose,
         )
 
-    def _enable_mc_dropout(self):
-        """
-        Enable MC Dropout by setting all dropout layers to train mode.
-        """
-        if self.model is None:
-            raise RuntimeError(
-                "A model needs to be set or loaded before enabling MC Dropout."
-            )
-
-        for layer in self.model.layers:
-            if isinstance(layer, KerasMCDropout):
-                layer.training = True
-
     def _model_predict(self, inputs, batch_size, mc_dropout, verbose=0):
-        if mc_dropout:
-            self._enable_mc_dropout()
+        dropouts = [
+            layer
+            for layer in self.model._flatten_layers(include_self=False)
+            if isinstance(layer, KerasMCDropout)
+        ]
+        if any(layer.enable_mc != mc_dropout for layer in dropouts):
+            for layer in dropouts:
+                layer.enable_mc = mc_dropout
+            self.model.predict_function = None  # the flag is traced into the graph
         return self.model.predict(inputs, batch_size, verbose=verbose)
 
     def _save_weights(self, save_dir):
@@ -985,7 +765,7 @@ class MultiModelWrapper:
             with open(f"{path}.config.json") as f:
                 config = json.load(f)
             class_name = config.get("model_class", None)
-            if class_name in [KerasMLP.__name__, KerasTransformer.__name__]:
+            if class_name == KerasMLP.__name__:
                 if os.path.exists(f"{path}.weights.h5"):
                     model_wrapper = KerasModelWrapper()
                     model_wrapper.load(f"{path}.config.json", f"{path}.weights.h5")
@@ -1006,85 +786,52 @@ class MultiModelWrapper:
             else:
                 raise NotImplementedError(f"Model class not supported: {class_name}")
 
-    def predict(self, models_to_predict, **kwargs):
+    def predict(
+        self,
+        models_to_predict,
+        *,
+        hls_configs=None,
+        hls4ml_versions=None,
+        vivado_versions=None,
+        round_digits=2,
+        verbose=0,
+    ):
+        """DataFrame of predictions, one row per model, config and versions.
+
+        `hls_configs` is a dict or a list of dicts like {"board": ..., "model":
+        {"strategy": ..., "precision": ..., "reuse_factor": ...}}, camelCase or
+        snake_case. Versions are a string or a list. None takes each estimator's
+        training values, with default precisions and reuse factors for configs.
         """
-        Predict FPGA implementation metrics for one or more models across one or more
-        configuration(s), and return the results as a tabular `pandas.DataFrame`.
-
-        This method evaluates every combination of:
-        - each entry in `models_to_predict`,
-        - each entry in `hls_configs` (either provided or auto-generated from defaults or values seen during training),
-        - each entry in `hls4ml_versions` (either provided or auto-generated from defaults or values seen during training),
-        - each entry in `vivado_versions` (either provided or auto-generated from defaults or values seen during training)
-
-        Parameters
-        ----------
-        models_to_predict : A Keras/Torch model or a list/tuple of such models
-            A single model or a collection of models to evaluate.
-
-        **kwargs
-            Optional keyword arguments:
-
-            hls_configs : dict or list[dict], optional
-                One configuration dictionary or a list of configuration dictionaries describing the
-                target board and hls4ml model settings. Keys may be in camelCase or snake_case; they
-                are normalized internally.
-
-                Expected structure (minimum):
-                {
-                    "board": "<board_name>",
-                    "model": {
-                        "strategy": "<strategy>",
-                        "precision": "<precision>",
-                        "reuse_factor": <int>
-                    }
-                }
-
-                If omitted, configurations are generated from defaults and values seen during each estimator's training.
-
-            hls4ml_versions : str or list[str] or tuple[str], optional
-                The hls4ml version(s) to associate with the model(s) being predicted.
-
-            vivado_versions : str or list[str] or tuple[str], optional
-                The Vivado version(s) to associate with the model(s) being predicted.
-
-            round_digits : int, default=2
-                Number of decimal places to round the output DataFrame values to.
-
-            verbose : int, default=0
-                Verbosity level forwarded to each estimator's `predict` call.
-
-        Returns
-        -------
-        pandas.DataFrame
-            A DataFrame of predictions with one row per (model, hls_config) pair.
-
-        Raises
-        ------
-        TypeError
-            If `hls_configs` is provided but is not a dict or a list/tuple of dicts.
-
-        ValueError
-            If a configuration specifies a board that is not present in `boards_data`.
-        """
-
         if not self._models:
             raise RuntimeError("No models have been added to the MultiModelWrapper.")
 
         if not isinstance(models_to_predict, (tuple, list)):
             models_to_predict = [models_to_predict]
 
-        hls_configs = kwargs.get("hls_configs", None)
-        hls_configs_by_estimator = {}
-        if hls_configs is None:
-            for estimator_key, estimator_model in self._models.items():
-                estimator_boards = self._get_categorical_values(
-                    estimator_model, "board"
+        if hls_configs is not None:
+            if isinstance(hls_configs, dict):
+                hls_configs = [hls_configs]
+            elif not isinstance(hls_configs, (tuple, list)):
+                raise TypeError(
+                    "hls_configs expects a dictionary or a list of dictionaries."
                 )
-                estimator_strategies = self._get_categorical_values(
-                    estimator_model, "strategy"
-                )
-                hls_configs_by_estimator[estimator_key] = [
+            hls_configs = [camel_keys_to_snake(config) for config in hls_configs]
+
+        columns = (
+            "Model",
+            "Board",
+            "Strategy",
+            "Precision",
+            "Reuse Factor",
+            "HLS4ML Version",
+            "Vivado Version",
+        )
+        output_rows, feature_cache = {}, {}
+        for target_key, estimator in self._models.items():
+            configs = hls_configs
+            if configs is None:
+                configs = [
                     {
                         "model": {
                             "strategy": strategy,
@@ -1094,159 +841,81 @@ class MultiModelWrapper:
                         "board": board,
                     }
                     for board, strategy, precision, reuse_factor in itertools.product(
-                        estimator_boards,
-                        estimator_strategies,
+                        estimator.categorical_values("board"),
+                        estimator.categorical_values("strategy"),
                         MultiModelWrapper._default_precisions,
                         MultiModelWrapper._default_reuse_factors,
                     )
                 ]
-        else:
-            if not isinstance(hls_configs, (tuple, list)):
-                if not isinstance(hls_configs, dict):
-                    raise TypeError(
-                        "hls_configs argument expects a dictionary or list of dictionaries. See docstring example for correct formatting."
+
+            versions = []
+            for label, values in [
+                ("hls4ml_version", hls4ml_versions),
+                ("vivado_version", vivado_versions),
+            ]:
+                if values is None:
+                    values = estimator.categorical_values(label)
+                elif isinstance(values, str):
+                    values = [values]
+                versions.append(list(values))
+
+            rows, features = [], []
+            for combo in itertools.product(
+                enumerate(models_to_predict),
+                *estimator.accepted_settings(configs, *versions),
+            ):
+                (index, model), config, hls4ml_version, vivado_version = combo
+                metadata = (
+                    getattr(model, "name", model.__class__.__name__),
+                    config["board"],
+                    config["model"]["strategy"],
+                    config["model"]["precision"],
+                    config["model"]["reuse_factor"],
+                    hls4ml_version,
+                    vivado_version,
+                )
+                config_key = json.dumps(config, sort_keys=True, default=str)
+                # names and shown settings can repeat across models and configs
+                row_key = (index, config_key, hls4ml_version, vivado_version)
+                if row_key not in output_rows:
+                    output_rows[row_key] = dict(zip(columns, metadata))
+                rows.append(output_rows[row_key])
+
+                feature_key = (id(model), config_key, hls4ml_version, vivado_version)
+                if feature_key not in feature_cache:
+                    feature_cache[feature_key] = model_features(
+                        model, config, hls4ml_version, vivado_version
                     )
-                hls_configs = [hls_configs]
-            hls_configs_by_estimator = {key: list(hls_configs) for key in self._models}
+                features.append(feature_cache[feature_key])
 
-        for estimator_configs in hls_configs_by_estimator.values():
-            for idx in range(len(estimator_configs)):
-                estimator_configs[idx] = camel_keys_to_snake(estimator_configs[idx])
-
-        hls4ml_versions = kwargs.get("hls4ml_versions", None)
-        hls4ml_versions_by_estimator = {}
-        if hls4ml_versions is None:
-            for estimator_key, estimator_model in self._models.items():
-                hls4ml_versions_by_estimator[estimator_key] = (
-                    self._get_categorical_values(estimator_model, "hls4ml_version")
-                )
-        else:
-            if isinstance(hls4ml_versions, str):
-                hls4ml_versions = [hls4ml_versions]
-            hls4ml_versions_by_estimator = {
-                key: list(hls4ml_versions) for key in self._models
-            }
-
-        vivado_versions = kwargs.get("vivado_versions", None)
-        vivado_versions_by_estimator = {}
-        if vivado_versions is None:
-            for estimator_key, estimator_model in self._models.items():
-                vivado_versions_by_estimator[estimator_key] = (
-                    self._get_categorical_values(estimator_model, "vivado_version")
-                )
-        else:
-            if isinstance(vivado_versions, str):
-                vivado_versions = [vivado_versions]
-            vivado_versions_by_estimator = {
-                key: list(vivado_versions) for key in self._models
-            }
-
-        outputs = []
-        outputs_by_key: dict[str, dict] = {}
-        for key, estimator_model in self._models.items():
-            estimator_hls_configs = hls_configs_by_estimator[key] or [None]
-            estimator_hls4ml_versions = hls4ml_versions_by_estimator[key] or [None]
-            estimator_vivado_versions = vivado_versions_by_estimator[key] or [None]
-            estimator_product = list(
-                itertools.product(
-                    models_to_predict,
-                    estimator_hls_configs,
-                    estimator_hls4ml_versions,
-                    estimator_vivado_versions,
-                )
-            )
-
-            for (
-                model_to_predict,
-                hls_config,
-                hls4ml_version,
-                vivado_version,
-            ) in estimator_product:
-                model_name = getattr(
-                    model_to_predict, "name", model_to_predict.__class__.__name__
-                )
-                output_key = (
-                    model_name,
-                    hls_config["board"],
-                    hls_config["model"]["strategy"],
-                    hls_config["model"]["precision"],
-                    hls_config["model"]["reuse_factor"],
-                    hls4ml_version,
-                    vivado_version,
-                )
-                if output_key not in outputs_by_key:
-                    outputs_by_key[output_key] = {
-                        "Model": model_name,
-                        "Board": hls_config["board"],
-                        "Strategy": hls_config["model"]["strategy"],
-                        "Precision": hls_config["model"]["precision"],
-                        "Reuse Factor": hls_config["model"]["reuse_factor"],
-                        "HLS4ML Version": hls4ml_version,
-                        "Vivado Version": vivado_version,
-                    }
-                    outputs.append(outputs_by_key[output_key])
-
-            estimator_predictions = estimator_model.predict(
-                models_to_predict,
-                estimator_hls_configs,
-                estimator_hls4ml_versions,
-                estimator_vivado_versions,
-                verbose=kwargs.get("verbose", 0),
-            ).astype(float)
-
-            target_labels = key.split("-")
-            for idx, model_predictions in enumerate(estimator_predictions):
-                model_to_predict, hls_config, hls4ml_version, vivado_version = (
-                    estimator_product[idx]
-                )
-                model_name = getattr(
-                    model_to_predict, "name", model_to_predict.__class__.__name__
-                )
-                output_key = (
-                    model_name,
-                    hls_config["board"],
-                    hls_config["model"]["strategy"],
-                    hls_config["model"]["precision"],
-                    hls_config["model"]["reuse_factor"],
-                    hls4ml_version,
-                    vivado_version,
-                )
-                output_row = outputs_by_key[output_key]
-                predictions = {}
-                for k in range(len(model_predictions)):
-                    predictions[target_labels[k]] = model_predictions[k]
-                    available_key = f"max_{target_labels[k].lower()}"
-                    if available_key in boards_data[output_row["Board"]]:
-                        predictions[f"{target_labels[k]} (%)"] = (
-                            model_predictions[k]
-                            / boards_data[output_row["Board"]][available_key]
+            predictions = estimator.predict_features(features, verbose=verbose)
+            targets = target_key.split("-")
+            for row, prediction in zip(rows, predictions.astype(float), strict=True):
+                board = boards_data[row["Board"]]
+                for target, value in zip(targets, prediction, strict=True):
+                    row[target] = value
+                    if f"max_{target.lower()}" in board:
+                        row[f"{target} (%)"] = (
+                            value / board[f"max_{target.lower()}"]
                         ) * 100
-                output_row.update(predictions)
 
-        outputs_df = pd.DataFrame(outputs).round(kwargs.get("round_digits", 2))
+        outputs_df = pd.DataFrame(list(output_rows.values())).round(round_digits)
         if not outputs_df.empty:
-            sorted_boards = sorted(
-                outputs_df["Board"].unique(),
-                key=lambda x: list(boards_data.keys()).index(x),
-            )
-            outputs_df["Board"] = pd.Categorical(
-                outputs_df["Board"], categories=sorted_boards, ordered=True
-            )
-
-            sorted_precisions = sorted(
-                outputs_df["Precision"].unique(),
-                key=lambda x: fixed_precision_to_bit_width(x)[0],
-            )
-            outputs_df["Precision"] = pd.Categorical(
-                outputs_df["Precision"], categories=sorted_precisions, ordered=True
-            )
+            for column, sort_key in [
+                ("Board", list(boards_data).index),
+                ("Precision", lambda value: fixed_precision_to_bit_width(value)[0]),
+            ]:
+                outputs_df[column] = pd.Categorical(
+                    outputs_df[column],
+                    categories=sorted(outputs_df[column].unique(), key=sort_key),
+                    ordered=True,
+                )
 
         return outputs_df
 
-    def _get_categorical_values(self, model_wrapper, key, fallback=()):
-        categorical_maps = getattr(model_wrapper, "global_categorical_maps", {}) or {}
-        if key in categorical_maps:
-            map_keys = list(categorical_maps[key].keys())
-            return [k.lower() if isinstance(k, str) else k for k in map_keys]
 
-        return list(fallback)
+def _check_finite(values, labels):
+    finite = np.isfinite(values).all(axis=0)
+    if not finite.all():
+        bad = [label for label, ok in zip(labels, finite) if not ok]
+        raise ValueError(f"Features with non-finite values: {bad}")

@@ -1,17 +1,15 @@
 import json
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from glob import glob
 
 import numpy as np
-import pandas as pd
 
 from rule4ml.parsers.utils import (
     camel_keys_to_snake,
     fixed_precision_to_bit_width,
     get_activation_name,
-    get_board_from_part,
     to_lower_keys,
     unwrap_nested_dicts,
 )
@@ -281,81 +279,12 @@ def read_from_json(
     return json_data
 
 
-def process_global_batch(model_batch, resource_key, normalize):
-    batch_meta, batch_inputs, batch_targets = [], [], []
-
-    for model_data in model_batch:
-        if not model_data:
-            continue
-
-        model_config = model_data["model_config"]
-        hls_config = model_data["hls_config"]
-        if (target_part := model_data.get("target_part", None)) is not None:
-            hls_config["board"] = get_board_from_part(target_part)
-
-        clock_period = hls_config.get("clock_period", None)
-        if not clock_period:
-            clock_period = model_data["latency_report"].get("target_clock", None)
-        if clock_period is not None:
-            clock_period = float(clock_period)
-
-        hls4ml_version = model_data.get("hls4ml_version", None)
-        vivado_version = model_data.get("vivado_version", None)
-        if not vivado_version:
-            vivado_version = model_data.get("backend_version", None)
-
-        batch_meta.append(unwrap_nested_dicts(model_data["meta_data"]))
-        batch_inputs.append(
-            unwrap_nested_dicts(
-                get_global_inputs(
-                    model_config,
-                    hls_config,
-                    clock_period=clock_period,
-                    hls4ml_version=hls4ml_version,
-                    vivado_version=vivado_version,
-                )
-            )
-        )
-
-        norm_board = hls_config["board"] if normalize else None
-        batch_targets.append(
-            unwrap_nested_dicts(
-                get_prediction_targets(model_data, resource_key, norm_board)
-            )
-        )
-
-    return batch_meta, batch_inputs, batch_targets
-
-
-def get_global_data(
-    parsed_data, resource_key=None, normalize=False, max_workers=1, batch_size=128
-):
-    batches = list(batch_iterable(parsed_data, batch_size))
-
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(process_global_batch, b, resource_key, normalize)
-            for b in batches
-        ]
-
-        # Flatten the batched results
-        meta, inputs, targets = [], [], []
-        for future in futures:
-            m, i, t = future.result()
-            meta.extend(m)
-            inputs.extend(i)
-            targets.extend(t)
-
-    return meta, inputs, targets
-
-
-def get_layers_data(model_config, target_depth=None):
+def get_layers_data(model_config):
     """
     Processes the layers data of a model.
 
     Args:
         model_data (dict): The model data containing configuration and layer information.
-        target_depth (int, optional): The target depth for padding the layers data.
 
     Returns:
         list: A list of processed layer data dictionaries.
@@ -430,41 +359,7 @@ def get_layers_data(model_config, target_depth=None):
         }
         layers_data.append(data)
 
-    # Optional zero-padding
-    if target_depth is not None:
-        pad_count = target_depth - len(layers_data)
-        if pad_count > 0:
-            pad = [{key: 0 for key in layers_data[0]}] * pad_count
-            layers_data.extend(pad)
-
     return layers_data
-
-
-def process_model_batch(model_batch, max_model_depth):
-    result = []
-    for model_data in model_batch:
-        if not model_data:
-            continue
-
-        layers_data = get_layers_data(
-            model_data["model_config"], target_depth=max_model_depth
-        )
-        result.append(layers_data)
-    return result
-
-
-def get_sequential_data(parsed_data, max_workers=1, batch_size=128):
-    max_model_depth = max(len(model["model_config"]) for model in parsed_data if model)
-
-    batches = list(batch_iterable(parsed_data, batch_size))
-
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(process_model_batch, b, max_model_depth) for b in batches
-        ]
-        results = [r for f in futures for r in f.result()]
-
-    return results
 
 
 def get_global_inputs(model_config, hls_config, **kwargs):
@@ -840,14 +735,11 @@ def get_global_inputs(model_config, hls_config, **kwargs):
     return inputs
 
 
-def get_prediction_targets(model_data, resource_key, norm_board=None):
-    """Extract resource and latency targets, optionally relative to the board."""
+def get_prediction_targets(model_data):
+    """Extract raw resource and latency targets from synthesis reports."""
 
     latency_report = model_data["latency_report"]
-    if resource_key:
-        resource_report = model_data["resource_report"][resource_key]
-    else:
-        resource_report = model_data["resource_report"]
+    resource_report = model_data["resource_report"]
 
     resource_report = to_lower_keys(resource_report)
     latency_report = to_lower_keys(latency_report)
@@ -866,35 +758,7 @@ def get_prediction_targets(model_data, resource_key, norm_board=None):
     if isinstance(lut, str):
         lut = float(lut.strip())
 
-    if norm_board is None:
-        targets = {
-            "bram": bram,
-            "dsp": dsp,
-            "ff": ff,
-            "lut": lut,
-        }
-    else:
-        board_data = boards_data[norm_board]
-        max_bram = board_data["max_bram"]
-        max_dsp = board_data["max_dsp"]
-        max_ff = board_data["max_ff"]
-        max_lut = board_data["max_lut"]
-
-        # targets = {
-        #     "bram": max(1 / max_bram, min(bram / max_bram, 2.0)) * 100,
-        #     "dsp": max(1 / max_dsp, min(dsp / max_dsp, 2.0)) * 100,
-        #     "ff": max(1 / max_ff, min(ff / max_ff, 2.0)) * 100,
-        #     "lut": max(1 / max_lut, min(lut / max_lut, 2.0)) * 100,
-        # }
-
-        targets = {
-            "bram": max(1 / max_bram, (bram / max_bram)) * 100
-            if bram is not None
-            else None,
-            "dsp": max(1 / max_dsp, (dsp / max_dsp)) * 100 if dsp is not None else None,
-            "ff": max(1 / max_ff, (ff / max_ff)) * 100 if ff is not None else None,
-            "lut": max(1 / max_lut, (lut / max_lut)) * 100 if lut is not None else None,
-        }
+    targets = {"bram": bram, "dsp": dsp, "ff": ff, "lut": lut}
 
     cycles_min = latency_report.get("cycles_min", None)
     cycles_max = latency_report.get("cycles_max", None)
@@ -1009,109 +873,3 @@ def get_network_fixed_ops(model_json):
         fops_dict["total_lookup"] += layer_lookup
 
     return fops_dict
-
-
-def batch_to_dataframe(
-    meta_batch,
-    global_batch,
-    seq_batch,
-    target_batch,
-    global_categorical_maps,
-    sequential_categorical_maps,
-):
-    # Unwrap dicts
-    meta_batch = [unwrap_nested_dicts(m) for m in meta_batch]
-    global_batch = [unwrap_nested_dicts(g) for g in global_batch]
-    target_batch = [unwrap_nested_dicts(t) for t in target_batch]
-
-    # Convert sequential to DataFrames
-    sequential_wrapped = []
-    for layers in seq_batch:
-        df = pd.DataFrame([unwrap_nested_dicts(layer) for layer in layers])
-        sequential_wrapped.append({"sequential_inputs": df})
-
-    # Build per-batch DataFrame
-    df = pd.concat(
-        [
-            pd.DataFrame(meta_batch),
-            pd.DataFrame(global_batch),
-            pd.DataFrame(sequential_wrapped),
-            pd.DataFrame(target_batch),
-        ],
-        axis=1,
-    )
-
-    # Encode global categorical features
-    for key, mapping in global_categorical_maps.items():
-        df[key] = df[key].map(mapping)
-
-    # Encode sequential categorical features
-    for key, mapping in sequential_categorical_maps.items():
-        df["sequential_inputs"] = df["sequential_inputs"].apply(
-            lambda sdf, key=key, mapping=mapping: sdf.assign(
-                **{key: sdf[key].map(lambda x: mapping.get(x, x))}
-            )
-        )
-
-    return df
-
-
-def to_dataframe(
-    meta_data,
-    global_inputs,
-    sequential_inputs,
-    global_categorical_maps,
-    sequential_categorical_maps,
-    targets,
-    max_workers=1,
-    batch_size=128,
-):
-    """
-    Batched and parallelized to_dataframe implementation.
-    """
-
-    max_depth = max(len(layers) for layers in sequential_inputs)
-    for i in range(len(sequential_inputs)):
-        pad_count = max_depth - len(sequential_inputs[i])
-        if pad_count > 0:
-            pad = [{key: 0 for key in sequential_inputs[i][0]}] * pad_count
-            sequential_inputs[i].extend(pad)
-
-    n = len(global_inputs)
-    batches = [
-        (
-            meta_data[i : i + batch_size],
-            global_inputs[i : i + batch_size],
-            sequential_inputs[i : i + batch_size],
-            targets[i : i + batch_size],
-        )
-        for i in range(0, n, batch_size)
-    ]
-
-    args = [
-        (m, g, s, t, global_categorical_maps, sequential_categorical_maps)
-        for (m, g, s, t) in batches
-    ]
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        dataframes = list(executor.map(lambda p: batch_to_dataframe(*p), args))
-
-    return pd.concat(dataframes, axis=0).reset_index(drop=True)
-
-
-def json_to_df(json_data, global_maps, sequential_maps, normalize, max_workers=16):
-    meta_data, global_inputs, targets = get_global_data(
-        json_data, normalize=normalize, max_workers=max_workers
-    )
-    sequential_inputs = get_sequential_data(json_data, max_workers=max_workers)
-
-    df = to_dataframe(
-        meta_data=meta_data,
-        global_inputs=global_inputs,
-        sequential_inputs=sequential_inputs,
-        global_categorical_maps=global_maps,
-        sequential_categorical_maps=sequential_maps,
-        targets=targets,
-        max_workers=max_workers,
-    )
-    return df

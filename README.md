@@ -59,7 +59,7 @@ prediction_df = estimator.predict(model_to_predict)
 
 # Further formatting can be applied to organize the DataFrame
 if not prediction_df.empty:
-    prediction_df = prediction_df.groupby(
+    prediction_df = prediction_df.set_index(
         [
             "Model",
             "Board",
@@ -68,9 +68,8 @@ if not prediction_df.empty:
             "Reuse Factor",
             "HLS4ML Version",
             "Vivado Version",
-        ],
-        observed=True,
-    ).mean()  # each row is unique in the groupby, mean() is only called to convert DataFrameGroupBy
+        ]
+    )
 
 # Outside of Jupyter notebooks, we recommend saving the DataFrame as HTML for better readability
 prediction_df.to_html("keras_example.html")

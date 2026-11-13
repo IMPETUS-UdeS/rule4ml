@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import keras
@@ -17,20 +18,42 @@ from rule4ml.models.metrics import (
 from rule4ml.models.wrappers import KerasModelWrapper, TorchModelWrapper, TrainSettings
 
 
+@dataclass(frozen=True)
+class SearchData:
+    """Datasets and features every trial of a search trains on."""
+
+    train: object  # rule4ml.dataset.Dataset
+    val: object
+    global_labels: list
+    target_labels: list
+    global_categorical_maps: dict
+    sequential_labels: list = field(default_factory=list)
+    sequential_categorical_maps: dict = field(default_factory=dict)
+    report: str | None = None
+    scaler: object = None
+
+    def set_model(self, wrapper, model):
+        wrapper.set_model(
+            model,
+            self.global_labels,
+            self.target_labels,
+            self.sequential_labels,
+            report=self.report,
+            scaler=self.scaler,
+        )
+
+
 class KerasSearcher:
     """Hyperparameter search for Keras predictors."""
 
     def __init__(self):
         self.model_wrapper = KerasModelWrapper()
+        self.arrays = None
 
-    def mlp_model_builder_generator(
-        self,
-        inputs_df,
-        targets_df,
-        categorical_maps,
-        val_inputs_df=None,
-        val_targets_df=None,
-    ):
+    def mlp_model_builder_generator(self, data: SearchData):
+        self.arrays = None
+        categorical_maps = data.global_categorical_maps
+
         def mlp_model_builder(hp):
             mlp_settings = MLPSettings(
                 embedding_layers=[
@@ -53,10 +76,10 @@ class KerasSearcher:
                 ],
             )
 
-            input_shape = (None, len(inputs_df.columns))
-            output_shape = (None, len(targets_df.columns))
+            input_shape = (None, len(data.global_labels) + len(categorical_maps))
+            output_shape = (None, len(data.target_labels))
 
-            target_labels = list(targets_df.columns)
+            target_labels = data.target_labels
             metrics = [
                 KerasParametricSMAPE(idx, name=f"smape_{target_labels[idx]}", eps=1)
                 for idx in range(len(target_labels))
@@ -92,19 +115,12 @@ class KerasSearcher:
                 loss=self.train_settings.loss_function,
                 metrics=self.train_settings.metrics,
             )
-            self.model_wrapper.set_model(mlp_model)
+            data.set_model(self.model_wrapper, mlp_model)
 
-            if self.model_wrapper.dataset is None:
-                self.model_wrapper.build_dataset(
-                    inputs_df,
-                    targets_df,
-                    self.train_settings.batch_size,
-                    val_ratio=0.15,
-                    val_inputs_df=val_inputs_df,
-                    val_targets_df=val_targets_df,
-                    train_repeats=10,
-                    shuffle=True,
-                    verbose=0,
+            if self.arrays is None:  # input names do not depend on hyperparameters
+                self.arrays = (
+                    self.model_wrapper.training_data(data.train, fit_scaler=True),
+                    self.model_wrapper.training_data(data.val),
                 )
 
             return self.model_wrapper.model
@@ -112,19 +128,9 @@ class KerasSearcher:
         return mlp_model_builder
 
     def mlp_search(
-        self,
-        inputs_df,
-        targets_df,
-        categorical_maps,
-        val_inputs_df=None,
-        val_targets_df=None,
-        directory="./mlp_search",
-        project_name=None,
-        verbose=0,
+        self, data: SearchData, directory="./mlp_search", project_name=None, verbose=0
     ):
-        model_builder = self.mlp_model_builder_generator(
-            inputs_df, targets_df, categorical_maps, val_inputs_df, val_targets_df
-        )
+        model_builder = self.mlp_model_builder_generator(data)
 
         project_name = project_name or datetime.now().strftime("%Y%m%d-%H%M%S")
         self.tuner = kt.Hyperband(
@@ -140,25 +146,17 @@ class KerasSearcher:
         if verbose > 0:
             self.tuner.search_space_summary()
 
+        (inputs, targets), val = self.arrays
         self.tuner.search(
-            self.model_wrapper.train_data,
-            validation_data=self.model_wrapper.val_data,
-            batch_size=self.model_wrapper.batch_size,
+            inputs,
+            targets,
+            validation_data=val,
+            batch_size=self.train_settings.batch_size,
         )
 
-    def load_tuner(
-        self,
-        inputs_df,
-        targets_df,
-        categorical_maps,
-        directory,
-        project_name,
-        val_inputs_df=None,
-        val_targets_df=None,
-    ):
-        model_builder = self.mlp_model_builder_generator(
-            inputs_df, targets_df, categorical_maps, val_inputs_df, val_targets_df
-        )
+    def load_tuner(self, data: SearchData, directory, project_name):
+        """Load a finished search and set an untrained model with the best settings."""
+        model_builder = self.mlp_model_builder_generator(data)
 
         self.tuner = kt.Hyperband(
             hypermodel=model_builder,
@@ -171,16 +169,14 @@ class KerasSearcher:
             overwrite=False,
         )
 
-        best_hp = self.tuner.get_best_hyperparameters(1)[0]
-        model_builder = self.mlp_model_builder_generator(
-            inputs_df, targets_df, categorical_maps
-        )
-        model_builder(best_hp)
+        model_builder(self.tuner.get_best_hyperparameters(1)[0])
 
 
 class TorchSearcher:
-    def __init__(self, device=None):
+    def __init__(self, device=None, seed=0):
         self.model_wrapper = TorchModelWrapper()
+        self.data = None
+        self.seed = seed
         self.study = None
         self.study_name = None
         self.db_path = None
@@ -188,30 +184,24 @@ class TorchSearcher:
         self.trial_number = 0
 
     def _set_model(self, gnn_settings):
-        target_labels = list(self.targets_df.columns)
-
-        global_input_shape = (
-            None,
-            len(self.inputs_df.columns) - 1,
-        )  # -1 for sequential features
-        sequential_input_shape = (
-            None,
-            len(self.inputs_df["sequential_inputs"].iloc[0].columns),
+        data = self.data
+        model = TorchGNN(
+            settings=gnn_settings,
+            global_input_shape=(
+                None,
+                len(data.global_labels) + len(data.global_categorical_maps),
+            ),
+            sequential_input_shape=(
+                None,
+                len(data.sequential_labels) + len(data.sequential_categorical_maps),
+            ),
+            output_shape=(None, len(data.target_labels)),
+            global_categorical_maps=data.global_categorical_maps,
+            sequential_categorical_maps=data.sequential_categorical_maps,
+            name=f"{'-'.join([x.upper() for x in data.target_labels])}_GNN_{self.trial_number - 1}",
+            device=self.device,
         )
-        output_shape = (None, len(target_labels))
-
-        self.model_wrapper.set_model(
-            TorchGNN(
-                settings=gnn_settings,
-                global_input_shape=global_input_shape,
-                sequential_input_shape=sequential_input_shape,
-                output_shape=output_shape,
-                global_categorical_maps=self.global_categorical_maps,
-                sequential_categorical_maps=self.sequential_categorical_maps,
-                name=f"{'-'.join([x.upper() for x in target_labels])}_GNN_{self.trial_number - 1}",
-                device=self.device,
-            )
-        )
+        data.set_model(self.model_wrapper, model)
 
     def gnn_objective(self, trial):
         self.trial_number += 1
@@ -225,11 +215,11 @@ class TorchSearcher:
         gnn_settings = GNNSettings(
             global_embedding_layers=[
                 trial.suggest_categorical(f"global_embedding_{idx}", [8, 16, 32])
-                for idx in range(len(self.global_categorical_maps))
+                for idx in range(len(self.data.global_categorical_maps))
             ],
             seq_embedding_layers=[
                 trial.suggest_categorical(f"seq_embedding_{idx}", [8, 16, 32])
-                for idx in range(len(self.sequential_categorical_maps))
+                for idx in range(len(self.data.sequential_categorical_maps))
             ],
             numerical_dense_layers=[
                 trial.suggest_categorical(f"numerical_dense_{idx}", [16, 32, 64])
@@ -252,7 +242,7 @@ class TorchSearcher:
         )
         self._set_model(gnn_settings)
 
-        target_labels = list(self.targets_df.columns)
+        target_labels = self.data.target_labels
         metrics = [
             TorchParametricSMAPE(idx, name=f"smape_{target_labels[idx]}", eps=1e-6)
             for idx in range(len(target_labels))
@@ -278,17 +268,6 @@ class TorchSearcher:
             metrics=metrics,
         )
 
-        if self.model_wrapper.dataset is None or self.batch_size != batch_size:
-            self.model_wrapper.build_dataset(
-                inputs_df=self.inputs_df,
-                targets_df=self.targets_df,
-                batch_size=train_settings.batch_size,
-                val_ratio=0.15,
-                val_inputs_df=self.val_inputs_df,
-                val_targets_df=self.val_targets_df,
-                shuffle=True,
-            )
-
         path = os.path.dirname(self.db_path)
         callbacks = [
             EarlyStopping(
@@ -301,17 +280,19 @@ class TorchSearcher:
             ModelCheckpoint(dirpath=path, monitor="val_loss", mode="min"),
         ]
 
-        history = self.model_wrapper.fit(train_settings, callbacks=callbacks, verbose=1)
+        history = self.model_wrapper.fit(
+            self.data.train,
+            train_settings,
+            val_dataset=self.data.val,
+            seed=self.seed,
+            callbacks=callbacks,
+            verbose=1,
+        )
         return np.min(history["val"]["loss"])
 
     def gnn_search(
         self,
-        inputs_df,
-        targets_df,
-        global_categorical_maps,
-        sequential_categorical_maps,
-        val_inputs_df=None,
-        val_targets_df=None,
+        data: SearchData,
         directory="./torch_search",
         project_name=None,
         n_trials=20,
@@ -319,13 +300,7 @@ class TorchSearcher:
         batch_size=None,
         direction="minimize",
     ):
-        self.num_epochs = n_epochs
-        self.inputs_df = inputs_df
-        self.targets_df = targets_df
-        self.val_inputs_df = val_inputs_df
-        self.val_targets_df = val_targets_df
-        self.global_categorical_maps = global_categorical_maps
-        self.sequential_categorical_maps = sequential_categorical_maps
+        self.data = data
         self.n_epochs = n_epochs
         self.batch_size = batch_size
 
@@ -341,27 +316,14 @@ class TorchSearcher:
             study_name=self.study_name,
             storage=db_uri,
         )
+        self.study.set_user_attr("num_epochs", n_epochs)
+        self.study.set_user_attr("batch_size", batch_size)
         self.study.optimize(
             self.gnn_objective, n_trials=n_trials, show_progress_bar=True
         )
 
-    def load_tuner(
-        self,
-        inputs_df,
-        targets_df,
-        global_categorical_maps,
-        sequential_categorical_maps,
-        directory,
-        project_name,
-        val_inputs_df=None,
-        val_targets_df=None,
-    ):
-        self.inputs_df = inputs_df
-        self.targets_df = targets_df
-        self.val_inputs_df = val_inputs_df
-        self.val_targets_df = val_targets_df
-        self.global_categorical_maps = global_categorical_maps
-        self.sequential_categorical_maps = sequential_categorical_maps
+    def load_tuner(self, data: SearchData, directory, project_name):
+        self.data = data
 
         self.study_name = project_name
         self.db_path = os.path.join(directory, f"{project_name}.db")
@@ -384,11 +346,11 @@ class TorchSearcher:
         gnn_settings = GNNSettings(
             global_embedding_layers=[
                 best_params[f"global_embedding_{idx}"]
-                for idx in range(len(self.global_categorical_maps))
+                for idx in range(len(self.data.global_categorical_maps))
             ],
             seq_embedding_layers=[
                 best_params[f"seq_embedding_{idx}"]
-                for idx in range(len(self.sequential_categorical_maps))
+                for idx in range(len(self.data.sequential_categorical_maps))
             ],
             numerical_dense_layers=[
                 best_params[f"numerical_dense_{idx}"]
@@ -412,18 +374,20 @@ class TorchSearcher:
     def best_train_settings(self):
         best_params = self.best_params()
         train_settings = TrainSettings(
-            num_epochs=best_params.get("num_epochs", 20),
-            batch_size=best_params.get("batch_size", 64),
+            num_epochs=self.study.user_attrs.get("num_epochs", 20),
+            batch_size=best_params.get("batch_size")
+            or self.study.user_attrs.get("batch_size")
+            or 64,
             learning_rate=best_params.get("learning_rate", 1e-4),
             optimizer=best_params.get("optimizer", "adam"),
             loss_function=best_params.get("loss_function", "msle"),
             metrics=[
                 TorchParametricSMAPE(idx, name=f"smape_{idx}", eps=1)
-                for idx in range(len(self.targets_df.columns))
+                for idx in range(len(self.data.target_labels))
             ]
             + [
                 TorchParametricR2(idx, name=f"r2_{idx}", eps=1)
-                for idx in range(len(self.targets_df.columns))
+                for idx in range(len(self.data.target_labels))
             ],
         )
         return train_settings
@@ -432,40 +396,9 @@ class TorchSearcher:
         return self.study.best_trial if self.study else None
 
     def load_best(self):
+        """Set an untrained model with the best trial's settings."""
         if self.study is None:
             raise ValueError(
                 "No study loaded. Please run gnn_search or load_tuner first."
             )
-
-        best_params = self.best_params()
-        bayesian_dense = [
-            best_params.get(f"bayesian_dense_{idx}", False)
-            for idx in range(best_params["dense_count"])
-        ]
-        gnn_settings = GNNSettings(
-            global_embedding_layers=[
-                best_params[f"global_embedding_{idx}"]
-                for idx in range(len(self.global_categorical_maps))
-            ],
-            seq_embedding_layers=[
-                best_params[f"seq_embedding_{idx}"]
-                for idx in range(len(self.sequential_categorical_maps))
-            ],
-            numerical_dense_layers=[
-                best_params[f"numerical_dense_{idx}"]
-                for idx in range(best_params["numerical_dense_count"])
-            ],
-            gconv_layers=[
-                best_params[f"gconv_{idx}"] for idx in range(best_params["gconv_count"])
-            ],
-            dense_layers=[
-                best_params[f"dense_{idx}"] for idx in range(best_params["dense_count"])
-            ],
-            dense_dropouts=[
-                best_params[f"dropout_{idx}"]
-                for idx in range(best_params["dense_count"])
-            ],
-            bayesian_dense=bayesian_dense,
-            bayesian_output=any(bayesian_dense),
-        )
-        self._set_model(gnn_settings)
+        self._set_model(self.best_gnn_settings())

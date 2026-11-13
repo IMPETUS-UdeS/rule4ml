@@ -15,26 +15,56 @@ else:
     kops = None
 
 
+def evaluate(y_true, y_pred, labels):
+    """wa-hls4ml metrics per target, each over the records where it is known."""
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    if (
+        y_true.ndim != 2
+        or y_true.shape != y_pred.shape
+        or y_true.shape[1] != len(labels)
+    ):
+        raise ValueError("Targets and predictions must have shape (records, labels)")
+    if not np.isfinite(y_pred).all():
+        raise ValueError("Predictions contain non-finite values")
+
+    scores = {}
+    for idx, label in enumerate(labels):
+        known = np.isfinite(y_true[:, idx])
+        true, pred = y_true[known, idx], y_pred[known, idx]
+        scores[label] = {
+            "n": int(known.sum()),
+            "n_missing": int((~known).sum()),
+            "smape": smape(true, pred) if known.any() else np.nan,
+            "rmse": rmse(true, pred) if known.any() else np.nan,
+            "r2": r2(true, pred),
+        }
+    return scores
+
+
 def smape(y_true, y_pred):
-    y_true = np.asarray(y_true, dtype=np.float32)
-    y_pred = np.asarray(y_pred, dtype=np.float32)
-
-    y_true = y_true.squeeze()
-    y_pred = y_pred.squeeze()
-
-    return 200 * np.mean(
-        np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1)
+    """SMAPE in percent, with +1 in the denominator as in wa-hls4ml."""
+    y_true = np.asarray(y_true, dtype=np.float64).squeeze()
+    y_pred = np.asarray(y_pred, dtype=np.float64).squeeze()
+    return float(
+        200 * np.mean(np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1))
     )
 
 
 def rmse(y_true, y_pred):
-    y_true = np.asarray(y_true, dtype=np.float32)
-    y_pred = np.asarray(y_pred, dtype=np.float32)
+    y_true = np.asarray(y_true, dtype=np.float64).squeeze()
+    y_pred = np.asarray(y_pred, dtype=np.float64).squeeze()
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
-    y_true = y_true.squeeze()
-    y_pred = y_pred.squeeze()
 
-    return np.sqrt(np.mean((y_true - y_pred) ** 2))
+def r2(y_true, y_pred):
+    """Coefficient of determination, NaN when the targets have no variance."""
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    total = np.sum((y_true - y_true.mean()) ** 2) if len(y_true) else 0.0
+    if total == 0:
+        return np.nan
+    return float(1 - np.sum((y_true - y_pred) ** 2) / total)
 
 
 class KerasParametricMAPE(tf.keras.metrics.Metric):

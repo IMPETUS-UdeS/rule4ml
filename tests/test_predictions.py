@@ -1,12 +1,25 @@
 import itertools
 import os
+from pathlib import Path
 
 import keras
+import numpy as np
 import pytest
 import torch
 from keras import layers
 
-from rule4ml.models.wrappers import MultiModelWrapper
+import rule4ml
+from rule4ml.models.wrappers import (
+    KerasModelWrapper,
+    MultiModelWrapper,
+    TorchModelWrapper,
+)
+
+WEIGHTS = Path(rule4ml.__file__).parent / "models" / "weights"
+HLS_CONFIG = {
+    "board": "zcu102",
+    "model": {"strategy": "Resource", "precision": "ap_fixed<8,3>", "reuse_factor": 4},
+}
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
@@ -60,6 +73,36 @@ def test_predict_mixed_models(estimator):
     )
     assert set(prediction_df["Model"]) == {"TopQuarks", "Jet Classifier"}
     assert set(prediction_df["Board"]) == {"pynq-z2", "zcu102"}
+
+
+def test_predict_same_names(estimator):
+    predictions = estimator.predict(
+        [_torch_sequential(), _torch_sequential()],
+        hls_configs=[HLS_CONFIG],
+        hls4ml_versions=["0.8.1"],
+        vivado_versions=["2023.2"],
+    )
+    assert list(predictions["Model"]) == ["Sequential", "Sequential"]
+
+
+@pytest.mark.parametrize(
+    ("wrapper_class", "bundle", "versions"),
+    [
+        (TorchModelWrapper, "v2/gnn/LUT.weights.pt", (["0.8.1"], ["2023.2"])),
+        (KerasModelWrapper, "v2/mlp/LUT.weights.h5", ([], [])),
+    ],
+)
+def test_mc_dropout(wrapper_class, bundle, versions):
+    wrapper = wrapper_class()
+    config = bundle.split(".weights")[0] + ".config.json"
+    wrapper.load(str(WEIGHTS / config), str(WEIGHTS / bundle))
+    args = ([TopQuarks()], [HLS_CONFIG], *versions)
+
+    before = wrapper.predict(*args)
+    mean, std, samples = wrapper.mc_predict(*args, num_samples=20, return_all=True)
+    assert mean.shape == std.shape == (1, 1)
+    assert len(np.unique(samples)) > 1
+    assert np.array_equal(wrapper.predict(*args), before)
 
 
 @pytest.fixture(scope="module")

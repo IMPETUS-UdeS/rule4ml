@@ -9,6 +9,9 @@ def _is_torch(x):
 
 
 class BaseScaler:
+    def fit(self, target_rows):
+        """Learn statistics from training target rows, nothing for fixed scalers."""
+
     def transform(self, target_row, input_row):
         raise NotImplementedError()
 
@@ -153,11 +156,11 @@ class Log1pScaler(BaseScaler):
         else:
             return math.expm1(float(z) * sig + mu)
 
-    def fit(self, dict_list):
+    def fit(self, target_rows):
         from collections import defaultdict
 
         by_key = defaultdict(list)
-        for d in dict_list:
+        for d in target_rows:
             for k, v in d.items():
                 by_key[k].append(self._fwd(v))
         for k, arr in by_key.items():
