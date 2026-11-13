@@ -81,6 +81,7 @@ class BaseModelWrapper:
         Categorical inputs come from the model's maps. Resource targets are read
         from `report` ("resource_report" or "hls_resource_report").
         """
+
         self.model = model
         self.global_input_keys = getattr(
             model, "global_input_keys", {"categorical": [], "numerical": ""}
@@ -115,6 +116,7 @@ class BaseModelWrapper:
                     f"{attribute} {shape} does not fit {len(labels)} numerical "
                     f"labels plus {len(maps)} categorical inputs"
                 )
+
         if self.output_shape[-1] != len(target_labels):
             raise ValueError(
                 f"Output shape {self.output_shape} does not fit {len(target_labels)} targets"
@@ -127,15 +129,18 @@ class BaseModelWrapper:
 
         `seed` fixes the batch order.
         """
+
         if self.model is None:
             raise RuntimeError("A model needs to be set or loaded before training.")
 
         train = self.training_data(dataset, fit_scaler=True)
         val = None if val_dataset is None else self.training_data(val_dataset)
+
         return self._fit(train, val, train_settings, seed, callbacks, verbose)
 
     def training_data(self, dataset, fit_scaler=False):
         """Model inputs and scaled float32 targets of records with every target."""
+
         targets = dataset.targets(self.output_labels, self.report)
         dataset = dataset.subset(np.flatnonzero(np.isfinite(targets).all(axis=1)))
         if len(dataset) == 0:
@@ -147,6 +152,7 @@ class BaseModelWrapper:
             target_rows = [
                 dict(zip(self.output_labels, row)) for row in targets.tolist()
             ]
+
             if fit_scaler:
                 self.scaler.fit(target_rows)
             targets = np.array(
@@ -167,6 +173,7 @@ class BaseModelWrapper:
 
         Torch runs all records as one batch. Keras uses its default batch size.
         """
+
         inputs, numerical, codes = self._dataset_inputs(dataset)
         return self._predict(
             inputs, numerical, codes, mc_dropout=mc_dropout, verbose=verbose
@@ -174,6 +181,7 @@ class BaseModelWrapper:
 
     def evaluate(self, dataset, report=None, verbose=0):
         """wa-hls4ml metrics per output label, over the records where it is known."""
+
         targets = dataset.targets(self.output_labels, report or self.report)
         predictions = self.predict_dataset(dataset, verbose=verbose)
         return metrics.evaluate(targets, predictions, self.output_labels)
@@ -203,16 +211,19 @@ class BaseModelWrapper:
         verbose=0,
     ):
         """MC dropout predictions: mean and std over samples, plus samples if asked."""
+
         features = self._features(
             models_to_predict, hls_configs, hls4ml_versions, vivado_versions
         )
         inputs = self._inputs_from_features(features)
+
         samples = np.array(
             [
                 self._predict(*inputs, mc_dropout=True, verbose=verbose)
                 for _ in range(num_samples)
             ]
         )
+
         outputs = (samples.mean(axis=0), samples.std(axis=0))
         return (*outputs, samples) if return_all else outputs
 
@@ -223,6 +234,7 @@ class BaseModelWrapper:
             raise RuntimeError(
                 "A model needs to be set or loaded before making predictions."
             )
+
         for name, value in [
             ("models_to_predict", models_to_predict),
             ("hls_configs", hls_configs),
@@ -231,6 +243,7 @@ class BaseModelWrapper:
         ]:
             if not isinstance(value, (tuple, list)):
                 raise TypeError(f"{name} expects a list or tuple")
+
         return [
             model_features(*combo)
             for combo in itertools.product(
@@ -241,9 +254,11 @@ class BaseModelWrapper:
 
     def accepted_settings(self, hls_configs, hls4ml_versions, vivado_versions):
         """Validate settings against the training categories, None when empty."""
+
         supported = {
             key: self.categorical_values(key) for key in self.global_categorical_maps
         }
+
         for hls_config in hls_configs:
             board = hls_config.get("board", "").lower()
             strategy = hls_config.get("model", {}).get("strategy", "").lower()
@@ -266,21 +281,25 @@ class BaseModelWrapper:
                 raise ValueError(
                     f"Model {self.model.name} needs {key}s, one of: {supported[key]}"
                 )
+
             for version in versions:
                 if version.lower() not in supported.get(key, []):
                     raise ValueError(
                         f"Model {self.model.name} does not support {key}: {version}"
                     )
+
             accepted_versions.append(versions or [None])
 
         return [list(hls_configs) or [None], *accepted_versions]
 
     def categorical_values(self, label):
         """Lowercased training values of a global category, in map order."""
+
         return [value.lower() for value in self.global_categorical_maps.get(label, {})]
 
     def predict_features(self, features, mc_dropout=False, verbose=0):
         """Predict from (global_inputs, layers) pairs of model_features."""
+
         if self.model is None:
             raise RuntimeError(
                 "A model needs to be set or loaded before making predictions."
@@ -295,6 +314,7 @@ class BaseModelWrapper:
         prediction = self._model_predict(
             inputs, 0, mc_dropout=mc_dropout, verbose=verbose
         )
+
         if self.scaler:
             prediction = np.asarray(
                 [
@@ -308,6 +328,7 @@ class BaseModelWrapper:
                     )
                 ]
             )
+
         return prediction
 
     def _scaler_rows(self, numerical, codes):
@@ -334,6 +355,7 @@ class BaseModelWrapper:
                 for row in global_rows
             ]
         )
+
         inputs = dict(zip(self.global_input_keys["categorical"], codes.values()))
         inputs[self.global_input_keys["numerical"]] = numerical
 
@@ -351,6 +373,7 @@ class BaseModelWrapper:
                         for layers in layer_rows
                     ]
                 )
+
             padding = [0] * len(self.sequential_numerical_labels)
             inputs[self.sequential_input_keys["numerical"]] = np.array(
                 [
@@ -370,12 +393,15 @@ class BaseModelWrapper:
 
         Selected features must be finite, and layers distinguishable from padding.
         """
+
         codes = {
             label: dataset.encode(label, mapping)
             for label, mapping in self.global_categorical_maps.items()
         }
+
         numerical = dataset.columns(self.global_numerical_labels)
         _check_finite(numerical, self.global_numerical_labels)
+
         inputs = dict(zip(self.global_input_keys["categorical"], codes.values()))
         inputs[self.global_input_keys["numerical"]] = numerical
 
@@ -387,15 +413,18 @@ class BaseModelWrapper:
                 inputs[key] = dataset.pad_layers(
                     dataset.encode(label, mapping, per_layer=True)
                 )
+
             layer_values = dataset.columns(
                 self.sequential_numerical_labels, per_layer=True
             )
             _check_finite(layer_values, self.sequential_numerical_labels)
+
             if not layer_values.any(axis=1).all():
                 raise ValueError(
                     "Some layers have all-zero sequential features and would read "
                     "as padding"
                 )
+
             inputs[self.sequential_input_keys["numerical"]] = dataset.pad_layers(
                 layer_values
             )
@@ -421,14 +450,17 @@ class BaseModelWrapper:
         model = getattr(architectures, config["model_class"]).from_config(
             config["model_config"]
         )
+
         scaler = None
         if config.get("scaler_class") and config.get("scaler_config"):
             scaler = getattr(scaling, config["scaler_class"]).from_config(
                 config["scaler_config"]
             )
+
         sequential_labels = config["sequential_numerical_labels"]
         if not getattr(model, "sequential_input_shape", None):
             sequential_labels = ()  # older MLP bundles list layer labels they never read
+
         self.set_model(
             model,
             config["global_numerical_labels"],
@@ -495,6 +527,7 @@ class TorchModelWrapper(BaseModelWrapper):
             *self.global_input_keys["categorical"],
             *self.sequential_input_keys["categorical"],
         }
+
         return {
             key: torch.tensor(
                 value, dtype=torch.long if key in categorical else torch.float32
@@ -526,6 +559,7 @@ class TorchModelWrapper(BaseModelWrapper):
         batch_size = train_settings.batch_size
         num_batches = -(-len(targets) // batch_size)
         generator = torch.Generator().manual_seed(seed)
+
         for epoch in range(train_settings.num_epochs):
             self.model.train()
             order = torch.randperm(len(targets), generator=generator)
@@ -596,12 +630,14 @@ class TorchModelWrapper(BaseModelWrapper):
                     raise NotImplementedError(
                         f"Callback {callback} does not implement a step() method."
                     )
+
                 monitor = callback.monitor
                 monitor_parts = monitor.split("_")
                 monitor_value = None
                 if len(monitor_parts) > 1 and monitor_parts[0] in history:
                     monitor = "_".join(monitor_parts[1:])
                     monitor_value = history[monitor_parts[0]].get(monitor, None)
+
                 if monitor_value is None:
                     raise ValueError(
                         f"Monitored value {callback.monitor} not found in fit history."
@@ -618,22 +654,26 @@ class TorchModelWrapper(BaseModelWrapper):
         inputs, targets = val
         self.model.eval()
         total = 0.0
+
         with torch.no_grad():
             for rows in torch.arange(len(targets)).split(batch_size):
                 batch = {
                     key: value[rows].to(self.device) for key, value in inputs.items()
                 }
                 batch_targets = targets[rows].to(self.device)
+
                 outputs = self.model(batch)
                 total += loss_function(outputs, batch_targets).item() * len(rows)
                 for m in metric_functions:
                     m.update(batch_targets, outputs, self.output_labels)
+
         return total / len(targets)
 
     def _enable_mc_dropout(self):
         """
         Enable MC Dropout by setting all dropout layers to train mode.
         """
+
         if self.model is None:
             raise RuntimeError(
                 "A model needs to be set or loaded before enabling MC Dropout."
@@ -681,6 +721,7 @@ class KerasModelWrapper(BaseModelWrapper):
 
     def _fit(self, train, val, train_settings, seed, callbacks, verbose):
         self._set_mc_dropout(False)  # left on by mc_predict, validation must not drop
+
         self.optimizer = train_settings.optimizer
         if isinstance(self.optimizer, str):
             self.optimizer = get_optimizer_from_str(
@@ -705,11 +746,13 @@ class KerasModelWrapper(BaseModelWrapper):
             .shuffle(len(train[1]), seed=seed)
             .batch(batch_size)
         )
+
         val_data = (
             None
             if val is None
             else tf.data.Dataset.from_tensor_slices(val).batch(batch_size)
         )
+
         return self.model.fit(
             train_data,
             epochs=train_settings.num_epochs,
@@ -728,6 +771,7 @@ class KerasModelWrapper(BaseModelWrapper):
             for layer in self.model._flatten_layers(include_self=False)
             if isinstance(layer, architectures.KerasMCDropout)
         ]
+
         if any(layer.enable_mc != enabled for layer in dropouts):
             for layer in dropouts:
                 layer.enable_mc = enabled
@@ -767,12 +811,14 @@ class MultiModelWrapper:
             os.path.join(base_path, "CYCLES"),
             os.path.join(base_path, "INTERVAL"),
         ]
+
         for path in default_paths:
             if not os.path.exists(path + ".config.json"):
                 continue
 
             with open(f"{path}.config.json") as f:
                 config = json.load(f)
+
             class_name = config.get("model_class", None)
             if class_name == "KerasMLP":
                 if os.path.exists(f"{path}.weights.h5"):
@@ -812,6 +858,7 @@ class MultiModelWrapper:
         snake_case. Versions are a string or a list. None takes each estimator's
         training values, with default precisions and reuse factors for configs.
         """
+
         if not self._models:
             raise RuntimeError("No models have been added to the MultiModelWrapper.")
 
@@ -883,9 +930,11 @@ class MultiModelWrapper:
                     hls4ml_version,
                     vivado_version,
                 )
+
                 config_key = json.dumps(config, sort_keys=True, default=str)
                 # names and shown settings can repeat across models and configs
                 row_key = (index, config_key, hls4ml_version, vivado_version)
+
                 if row_key not in output_rows:
                     output_rows[row_key] = dict(zip(columns, metadata))
                 rows.append(output_rows[row_key])
@@ -899,6 +948,7 @@ class MultiModelWrapper:
 
             predictions = estimator.predict_features(features, verbose=verbose)
             targets = target_key.split("-")
+
             for row, prediction in zip(rows, predictions.astype(float), strict=True):
                 board = boards_data[row["Board"]]
                 for target, value in zip(targets, prediction, strict=True):
@@ -909,6 +959,7 @@ class MultiModelWrapper:
                         ) * 100
 
         outputs_df = pd.DataFrame(list(output_rows.values())).round(round_digits)
+
         if not outputs_df.empty:
             for column, sort_key in [
                 ("Board", list(boards_data).index),
@@ -925,6 +976,7 @@ class MultiModelWrapper:
 
 def _check_finite(values, labels):
     finite = np.isfinite(values).all(axis=0)
+
     if not finite.all():
         bad = [label for label, ok in zip(labels, finite) if not ok]
         raise ValueError(f"Features with non-finite values: {bad}")

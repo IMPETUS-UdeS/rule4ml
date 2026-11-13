@@ -30,6 +30,7 @@ class BoardScaler(BaseScaler):
     def __init__(self, available_resources: dict, board_map: dict[str, int]):
         self.available_resources = {}
         self.board_map = board_map
+
         for board, resources in available_resources.items():
             board = self._get_board_name(board)
             self.available_resources[board] = {}
@@ -50,20 +51,24 @@ class BoardScaler(BaseScaler):
         out = {}
         board_name = input_row.get("board")
         board_name = self._get_board_name(board_name)
+
         if board_name in self.available_resources:
             available = self.available_resources[board_name]
             for k, v in target_row.items():
                 out[k] = v / available.get(k.lower(), 1.0)
+
         return out
 
     def inverse(self, target_row, input_row):
         out = {}
         board_name = input_row.get("board")
         board_name = self._get_board_name(board_name)
+
         if board_name in self.available_resources:
             available = self.available_resources[board_name]
             for k, z in target_row.items():
                 out[k] = z * available.get(k.lower(), 1.0)
+
         return out
 
     def to_config(self):
@@ -81,6 +86,7 @@ class BoardPercentScaler(BaseScaler):
     def __init__(self, available_resources: dict, board_map: dict[str, int]):
         self.available_resources = {}
         self.board_map = board_map
+
         for board, resources in available_resources.items():
             board = self._get_board_name(board)
             self.available_resources[board] = {}
@@ -102,17 +108,20 @@ class BoardPercentScaler(BaseScaler):
         out = {}
         board_name = input_row.get("board")
         board_name = self._get_board_name(board_name)
+
         if board_name in self.available_resources:
             available = self.available_resources[board_name]
             for k, v in target_row.items():
                 if k.lower() in available:
                     out[k] = v / available[k.lower()] * 100.0
+
         return out
 
     def inverse(self, target_row, input_row):
         out = {}
         board_name = input_row.get("board")
         board_name = self._get_board_name(board_name)
+
         if board_name in self.available_resources:
             available = self.available_resources[board_name]
             for k, z in target_row.items():
@@ -120,6 +129,7 @@ class BoardPercentScaler(BaseScaler):
                     out[k] = z * available[k.lower()] / 100.0
         else:
             print("Board not found in available resources:", board_name)
+
         return out
 
     def to_config(self):
@@ -163,6 +173,7 @@ class Log1pScaler(BaseScaler):
         for d in target_rows:
             for k, v in d.items():
                 by_key[k].append(self._fwd(v))
+
         for k, arr in by_key.items():
             arr = np.asarray(arr, dtype=float)
             arr = arr[~np.isnan(arr)]
@@ -183,6 +194,7 @@ class Log1pScaler(BaseScaler):
                 out[k] = (z - mu) / sig
             else:
                 out[k] = (z - mu) / sig
+
         return out
 
     def inverse(self, target_row, input_row):
@@ -194,6 +206,7 @@ class Log1pScaler(BaseScaler):
                 out[k] = np.nan
             else:
                 out[k] = self._inv(z, mu, sig)
+
         return out
 
     def to_config(self):

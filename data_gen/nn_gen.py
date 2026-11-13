@@ -267,6 +267,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
         )
         range_class_name = unit_range.__class__.__name__
         units = unit_range.random_in_range(rng)
+
         if settings.parameter_limit > 0:
             max_units = min(units, settings.parameter_limit // x.shape[1])
             if use_bias:
@@ -277,6 +278,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                     if range_class_name == Power2Range.__name__:
                         bias_limit = 2 ** int(np.log2(bias_limit))
                     max_units = min(max_units, bias_limit)
+
             if use_bn:  # batchnorm has 4 parameters per unit
                 bn_limit = (settings.parameter_limit // 4) // x.shape[1]
                 if bn_limit <= 0:
@@ -285,6 +287,7 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                     if range_class_name == Power2Range.__name__:
                         bn_limit = 2 ** int(np.log2(bn_limit))
                     max_units = min(max_units, bn_limit)
+
             if max_units != units:
                 units = type(unit_range)(
                     min(unit_range.min, max_units), max_units

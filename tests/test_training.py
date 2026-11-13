@@ -71,11 +71,13 @@ def test_fit_save_load(
 ):
     wrapper = _wrapper(wrapper_class)
     train, val = split(make_dataset([1, 2, 3, 1, 2, 3, 4, 5]), 0.25, seed=0)
+
     scaler = None
     if scaler_class == Log1pScaler:
         scaler = Log1pScaler()
     elif scaler_class is not None:
         scaler = scaler_class({"zcu102": {"lut": 1000}}, default_board_map)
+
     wrapper.set_model(
         build(linear_output=scaler_class is Log1pScaler),  # Log1p centers targets
         GLOBAL_LABELS,
@@ -96,12 +98,14 @@ def test_fit_save_load(
 def test_load_linear_output(make_dataset, tmp_path, wrapper_class, build, sequential):
     wrapper = _wrapper(wrapper_class)
     model = build(linear_output=True)
+
     if isinstance(wrapper, TorchModelWrapper):
         torch.nn.init.zeros_(model.output_layer.weight)
         torch.nn.init.constant_(model.output_layer.bias, -10.0)
     else:
         kernel, bias = model.layers[-1].get_weights()
         model.layers[-1].set_weights([np.zeros_like(kernel), np.full_like(bias, -10)])
+
     sequential_labels = SEQUENTIAL_LABELS if sequential else ()
     wrapper.set_model(
         model, GLOBAL_LABELS, ["lut"], sequential_labels, report="resource_report"
@@ -117,6 +121,7 @@ def _wrapper(wrapper_class):
         from rule4ml.models.wrappers import KerasModelWrapper
 
         wrapper_class = KerasModelWrapper
+
     return wrapper_class()
 
 
@@ -124,8 +129,10 @@ def _reload(wrapper, tmp_path):
     wrapper.save(tmp_path / "bundle")
     config = next((tmp_path / "bundle").glob("*.config.json"))
     weights = next(p for p in (tmp_path / "bundle").iterdir() if p != config)
+
     loaded = type(wrapper)()
     loaded.load(str(config), str(weights))
+
     return loaded
 
 
@@ -187,6 +194,7 @@ def test_training_partial_targets(make_dataset):
         resources={**dataset.resources, "resource_report": resources},
         latencies=latencies,
     )
+
     maps = {
         "strategy": {"resource": 1, "latency": 2},
         "board": {"unused": 1, "zcu102": 2},
@@ -198,6 +206,7 @@ def test_training_partial_targets(make_dataset):
         maps,
         device="cpu",
     )
+
     wrapper = TorchModelWrapper()
     wrapper.set_model(
         model,

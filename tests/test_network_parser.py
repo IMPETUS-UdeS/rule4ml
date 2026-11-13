@@ -22,6 +22,7 @@ def test_parse_pooling_cnn(keras_cnn):
         for layer in config_from_keras_model(keras_cnn, HLS_CONFIG)
         if layer["class_name"] not in ["InputLayer", "Activation"]
     ]
+
     assert shapes == CNN_SHAPES
 
 
@@ -32,6 +33,7 @@ def test_parse_subclassed_dense(build_shape):
 
     layers_config = config_from_keras_model(model, HLS_CONFIG)
     dense = next(layer for layer in layers_config if layer["class_name"] == "Dense")
+
     assert (dense["input_shape"][1:], dense["output_shape"][1:]) == ((16,), (4,))
 
 
@@ -52,6 +54,7 @@ def keras_cnn(request):
         layers.Flatten(),
         layers.Dense(10, activation="softmax"),
     ]
+
     if request.param == "sequential":
         model = keras.Sequential(cnn_layers)
         model.build((None, 32, 32, 3))

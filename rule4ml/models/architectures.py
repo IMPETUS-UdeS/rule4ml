@@ -178,6 +178,7 @@ if keras is not None:
             Expose an additional attribute to better control the call method's
             'training' argument for MC Dropout at inference time.
             """
+
             self.enable_mc = kwargs.pop("enable_mc", False)
             super().__init__(rate, **kwargs)
 
@@ -254,6 +255,7 @@ class TorchMLP(torch.nn.Module):
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
+
         self.device = device
         self.to(self.device)
 
@@ -275,6 +277,7 @@ class TorchMLP(torch.nn.Module):
         outputs = self.output_layer(x)
         if not self.settings.linear_output:
             outputs = torch.nn.functional.softplus(outputs)
+
         return outputs
 
     def to_config(self):
@@ -353,6 +356,7 @@ class TorchGNN(torch.nn.Module):
             self.gconvs.append(torch_geometric.nn.GINConv(nn=mlp))
             self.norms.append(torch_geometric.nn.GraphNorm(in_channels=units))
             gnn_dim = units
+
         self.jumping_knowledge = torch_geometric.nn.JumpingKnowledge(mode="cat")
 
         self.attention_pool = torch_geometric.nn.AttentionalAggregation(
@@ -419,6 +423,7 @@ class TorchGNN(torch.nn.Module):
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
+
         self.device = device
         self.to(self.device)
 
@@ -462,6 +467,7 @@ class TorchGNN(torch.nn.Module):
                 [*valid_seq_embeddings, valid_seq_numerical], dim=-1
             )
             node_features.append(valid_features.to(self.device))
+
             num_nodes = valid_features.size(0)
             if num_nodes > 1:
                 row = torch.arange(num_nodes - 1, dtype=torch.long)
@@ -498,6 +504,7 @@ class TorchGNN(torch.nn.Module):
             x_seq = norm(x_seq, batch)
             x_seq = torch.nn.functional.relu(x_seq)
             xs.append(x_seq)
+
         x_seq = self.jumping_knowledge(xs)
 
         pooled_seq = self.attention_pool(x_seq, index=batch)
@@ -514,8 +521,10 @@ class TorchGNN(torch.nn.Module):
         outputs = self.output_layer(x)
         if hasattr(self.output_layer, "kl_divergence"):
             self.kl_loss += self.output_layer.kl_divergence()
+
         if not self.settings.linear_output:
             outputs = torch.nn.functional.softplus(outputs)
+
         return outputs
 
     def to_config(self):
@@ -549,6 +558,7 @@ class TorchBayesianLinear(torch.nn.Module):
         # Prior N(0, prior_std^2)
         self.prior_std = prior_std
         self.prior_logvar = 2 * torch.log(torch.tensor(prior_std))
+
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -573,6 +583,7 @@ class TorchBayesianLinear(torch.nn.Module):
 
     def kl_divergence(self):
         """KL(q(w|θ) || p(w)) for both weights and biases, assuming Gaussian prior."""
+
         # posterior and prior variances
         w_var = torch.exp(self.weight_logvar)
         b_var = torch.exp(self.bias_logvar)

@@ -12,6 +12,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
 def test_predict_defaults(estimator, model):
     prediction_df = estimator.predict(model)
+
     assert not prediction_df.empty
     assert not prediction_df.isna().any().any()
 
@@ -22,6 +23,7 @@ def test_predict_pooling_cnn(estimator):
     x = layers.MaxPooling2D()(x)
     x = layers.Flatten()(x)
     outputs = layers.Dense(10, activation="softmax")(x)
+
     hls_config = {
         "board": "alveo-u250",
         "model": {
@@ -30,12 +32,14 @@ def test_predict_pooling_cnn(estimator):
             "reuse_factor": 1,
         },
     }
+
     prediction_df = estimator.predict(
         keras.Model(inputs=inputs, outputs=outputs),
         hls_configs=[hls_config],
         hls4ml_versions=["0.8.1"],
         vivado_versions=["2023.2"],
     )
+
     assert len(prediction_df) == 1
     assert not prediction_df.isna().any().any()
 
@@ -54,9 +58,11 @@ def test_predict_mixed_models(estimator, top_quarks):
             ["pynq-z2", "zcu102"], ["Latency", "Resource"]
         )
     ]
+
     prediction_df = estimator.predict(
         [top_quarks, _keras_sequential()], hls_configs=hls_configs
     )
+
     assert set(prediction_df["Model"]) == {"TopQuarks", "Jet Classifier"}
     assert set(prediction_df["Board"]) == {"pynq-z2", "zcu102"}
 
@@ -109,6 +115,7 @@ def _keras_functional():
     x = layers.Dense(32, activation="relu")(x)
     x = layers.Dense(32, activation="relu")(x)
     outputs = layers.Dense(5, activation="softmax")(x)
+
     return keras.Model(inputs=inputs, outputs=outputs, name="Jet Classifier")
 
 

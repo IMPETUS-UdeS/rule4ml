@@ -47,6 +47,7 @@ def check_mc_dropout(hls_config, top_quarks):
 
         before = wrapper.predict(*args)
         mean, std, samples = wrapper.mc_predict(*args, num_samples=20, return_all=True)
+
         assert mean.shape == std.shape == (1, 1)
         assert len(np.unique(samples)) > 1
         assert np.array_equal(wrapper.predict(*args), before)
@@ -57,6 +58,7 @@ def check_mc_dropout(hls_config, top_quarks):
 @pytest.fixture
 def record():
     """Builder of synthetic synthesis records: a dense/relu chain of `blocks`."""
+
     return _record
 
 
@@ -69,9 +71,11 @@ def make_dataset(tmp_path):
             _record(blocks, lut=100.0 * blocks + idx, record_id=f"r{idx}")
             for idx, blocks in enumerate(block_counts)
         ]
+
         source = tmp_path / "records.json"
         source.write_text(json.dumps(records))
         prepare([source], tmp_path / "data.npz")
+
         return load(tmp_path / "data.npz")
 
     return make
@@ -101,6 +105,7 @@ def _record(blocks, hls=True, lut=500.0, record_id=None):
         }
 
     report = {"bram": "2.0", "dsp": "10.0", "ff": "300.0", "lut": str(lut)}
+
     return {
         "meta_data": {"model_id": record_id or f"blocks{blocks}"},
         "model_config": [

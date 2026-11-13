@@ -18,6 +18,7 @@ else:
 
 def evaluate(y_true, y_pred, labels):
     """wa-hls4ml metrics per target, each over the records where it is known."""
+
     y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = np.asarray(y_pred, dtype=np.float64)
     if (
@@ -40,11 +41,13 @@ def evaluate(y_true, y_pred, labels):
             "rmse": rmse(true, pred) if known.any() else np.nan,
             "r2": r2(true, pred),
         }
+
     return scores
 
 
 def smape(y_true, y_pred):
     """SMAPE in percent, with +1 in the denominator as in wa-hls4ml."""
+
     y_true = np.asarray(y_true, dtype=np.float64).squeeze()
     y_pred = np.asarray(y_pred, dtype=np.float64).squeeze()
     return float(
@@ -60,11 +63,14 @@ def rmse(y_true, y_pred):
 
 def r2(y_true, y_pred):
     """Coefficient of determination, NaN when the targets have no variance."""
+
     y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = np.asarray(y_pred, dtype=np.float64)
+
     total = np.sum((y_true - y_true.mean()) ** 2) if len(y_true) else 0.0
     if total == 0:
         return np.nan
+
     return float(1 - np.sum((y_true - y_pred) ** 2) / total)
 
 
@@ -78,6 +84,7 @@ if keras is not None:
             super().__init__(name=name, **kwargs)
             self.y_index = y_index
             self.eps = eps
+
             self.total = self.add_weight(name="total", initializer="zeros")
             self.count = self.add_weight(name="count", initializer="zeros")
 
@@ -111,6 +118,7 @@ if keras is not None:
             super().__init__(name=name, **kwargs)
             self.y_index = y_index
             self.eps = eps
+
             self.total = self.add_weight(name="total", initializer="zeros")
             self.count = self.add_weight(name="count", initializer="zeros")
 

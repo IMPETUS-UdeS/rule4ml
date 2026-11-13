@@ -484,6 +484,7 @@ def parallel_synthesis(args):
 
                                 if os.path.isfile(json_path):
                                     os.remove(json_path)
+
                                 save_to_json(
                                     synth_result,
                                     os.path.join(

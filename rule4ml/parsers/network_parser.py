@@ -13,12 +13,14 @@ except ImportError:
 
 def config_from_keras_model(model, hls_config):
     """Parse a Keras model into per-layer configs with hls4ml reuse factors."""
+
     import tensorflow as tf
 
     if getattr(model, "_build_input_shape", None) is not None:  # Keras 2
         model_input_shape = model._build_input_shape
     else:  # Keras 3
         model_input_shape = _input_shape(model)
+
     if model_input_shape is None:
         raise AttributeError(
             "Could not get model input shape. Make sure model.build() was called previously."
@@ -147,6 +149,7 @@ def config_from_keras_model(model, hls_config):
             )
 
         layer_dict["reuse_factor"] = reuse_factor
+
         if class_name in ["Dense", "QDense"]:
             n_in = np.prod([x for x in input_shape if x is not None])
             n_out = np.prod([x for x in output_shape if x is not None])
@@ -245,6 +248,7 @@ def keras_model_from_config(model_config):
             x = keras_layer(x)
 
     model = keras.Model(inputs=inputs, outputs=x)
+
     return model
 
 
@@ -354,6 +358,7 @@ def config_from_torch_model(model, hls_config):
                 )
 
             layer_dict["reuse_factor"] = reuse_factor
+
             if mapped_class_name in ["Dense"]:
                 n_in = np.prod([x for x in layer_dict["input_shape"] if x is not None])
                 n_out = np.prod(

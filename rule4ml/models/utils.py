@@ -22,6 +22,7 @@ def get_optimizer_from_str(optimizer_name, backend, **kwargs):
     """
 
     optimizer_name = optimizer_name.lower()
+
     if backend == "keras":
         import keras
 

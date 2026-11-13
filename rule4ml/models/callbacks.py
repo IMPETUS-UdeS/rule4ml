@@ -55,6 +55,7 @@ class ReduceLROnPlateau:
                             f"[{self.__class__.__name__}] Reducing learning rate "
                             + f"from {old_lr:.6f} to {new_lr:.6f}."
                         )
+
             self._num_bad = 0
 
 
@@ -85,14 +86,17 @@ class EarlyStopping:
 
     def step(self, value, wrapper, verbose=0) -> bool:
         """Returns True if training should stop."""
+
         if self._has_improved(value):
             self._best = float(value)
             self._num_bad = 0
+
             if self.restore_best:
                 self._best_state = {
                     k: v.detach().cpu().clone()
                     for k, v in wrapper.model.state_dict().items()
                 }
+
             return False
 
         self._num_bad += 1
@@ -102,11 +106,14 @@ class EarlyStopping:
                     f"[{self.__class__.__name__}] Early stopping triggered. "
                     + f"Best {self.monitor}: {self._best:.6f}"
                 )
+
             if self.restore_best and self._best_state is not None:
                 wrapper.model.load_state_dict(self._best_state)
                 if verbose > 0:
                     print(f"[{self.__class__.__name__}] Restored best model state.")
+
             return True
+
         return False
 
 

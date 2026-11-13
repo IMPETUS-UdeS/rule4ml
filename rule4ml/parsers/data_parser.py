@@ -1,8 +1,5 @@
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from glob import glob
 
 import numpy as np
 
@@ -58,223 +55,6 @@ default_vivado_map = {
 }
 
 
-@dataclass
-class ParsedDataFilter:
-    """Helper data class for filtering parsed data."""
-
-    # The min/max settings are ignored if <= 0
-    min_layers: int = 0
-    max_layers: int = 0
-    min_reuse_factor: int = 0
-    max_reuse_factor: int = 0
-
-    min_input_size: int = 0
-    max_input_size: int = 0
-
-    min_output_size: int = 0
-    max_output_size: int = 0
-
-    min_softmax_count: int = 0
-    max_softmax_count: int = 0
-    output_softmax_only: bool = False
-
-    # Only include models that contain specific layers
-    include_layers: list = field(default_factory=list)
-    # Exclude models that contain specific layers
-    exclude_layers: list = field(default_factory=list)
-
-    strategies: list = field(default_factory=lambda: ["Resource", "Latency"])
-
-    precisions: list = field(
-        default_factory=lambda: [
-            "ap_fixed<2, 1>",
-            "ap_fixed<8, 3>",
-            "ap_fixed<8, 4>",
-            "ap_fixed<16, 6>",
-        ]
-    )
-
-    boards: list = field(default_factory=lambda: ["pynq-z2", "zcu102", "alveo-u200"])
-
-    resource_keys: list = field(default_factory=lambda: ["CSynthesisReport"])
-
-
-def filter_match(parsed_data, data_filter: ParsedDataFilter):
-    """Return whether a parsed record passes the data filter."""
-
-    n_layers = len(parsed_data["model_config"])
-    if (data_filter.min_layers > 0 and n_layers < data_filter.min_layers) or (
-        data_filter.max_layers > 0 and n_layers > data_filter.max_layers
-    ):
-        return False
-
-    input_shape = np.asarray(parsed_data["model_config"][0]["input_shape"]).flatten()
-    input_size = np.prod([x for x in input_shape if x is not None])
-    if (data_filter.min_input_size > 0 and input_size < data_filter.min_input_size) or (
-        data_filter.max_input_size > 0 and input_size > data_filter.max_input_size
-    ):
-        return False
-
-    output_shape = np.asarray(parsed_data["model_config"][-1]["output_shape"]).flatten()
-    output_size = np.prod([x for x in output_shape if x is not None])
-    if (
-        data_filter.min_output_size > 0 and output_size < data_filter.min_output_size
-    ) or (
-        data_filter.max_output_size > 0 and output_size > data_filter.max_output_size
-    ):
-        return False
-
-    include_layers = data_filter.include_layers.copy()
-
-    softmax_count = 0
-    for idx, layer_data in enumerate(parsed_data["model_config"]):
-        reuse_factor = layer_data["reuse_factor"]
-        if (
-            data_filter.min_reuse_factor > 0
-            and reuse_factor < data_filter.min_reuse_factor
-        ) or (
-            data_filter.max_reuse_factor > 0
-            and reuse_factor > data_filter.max_reuse_factor
-        ):
-            return False
-
-        layer_class = layer_data["class_name"]
-        if layer_class in data_filter.exclude_layers:
-            return False
-
-        if include_layers and layer_class in include_layers:
-            include_layers.remove(layer_class)
-
-        if layer_class == "Activation":
-            activation = layer_data["activation"]
-            if activation.lower() == "softmax":
-                if data_filter.output_softmax_only and idx != (n_layers - 1):
-                    return False
-                softmax_count += 1
-                if data_filter.output_softmax_only and idx < n_layers - 1:
-                    return False
-            if activation in data_filter.exclude_layers:
-                return False
-
-            if include_layers and activation in include_layers:
-                include_layers.remove(activation)
-
-    if len(include_layers) > 0:
-        return False
-
-    if (
-        data_filter.min_softmax_count > 0
-        and softmax_count < data_filter.min_softmax_count
-    ) or (
-        data_filter.max_softmax_count > 0
-        and softmax_count > data_filter.max_softmax_count
-    ):
-        return False
-
-    hls_config = parsed_data["hls_config"]
-
-    if data_filter.strategies:
-        strategy = hls_config["Model"]["Strategy"]
-        if strategy not in data_filter.strategies:
-            return False
-
-    if data_filter.precisions:
-        precision = hls_config["Model"]["Precision"]
-        if precision not in data_filter.precisions:
-            return False
-
-    if data_filter.boards:
-        board = hls_config["board"]
-        if board not in data_filter.boards:
-            return False
-
-    if data_filter.resource_keys:
-        resource_keys = list(parsed_data["resource_report"].keys())
-        for resource_key in data_filter.resource_keys:
-            if resource_key not in resource_keys:
-                return False
-
-    return True
-
-
-def batch_iterable(iterable, batch_size):
-    """
-    Splits an iterable into batches of a specified size.
-
-    Args:
-        iterable (iterable): The input iterable to be batched.
-        batch_size (int): The size of each batch.
-
-    Yields:
-        list: A batch of items from the iterable.
-    """
-    batch = []
-    for item in iterable:
-        batch.append(item)
-        if len(batch) == batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
-
-
-def read_json_files(filenames):
-    """
-    Reads multiple JSON files and returns their content as a list of dictionaries.
-
-    Args:
-        filenames (list): A list of paths to the JSON files.
-
-    Returns:
-        list: A list of dictionaries containing the JSON data.
-    """
-
-    json_data = []
-    for filename in filenames:
-        try:
-            with open(filename) as json_file:
-                data = json.load(json_file)
-                if not isinstance(data, list):
-                    data = [data]
-                json_data.extend(data)
-        except (OSError, ValueError) as e:
-            raise ValueError(f'Error reading JSON file "{filename}": {e}') from e
-
-    return json_data
-
-
-def read_from_json(
-    file_patterns, data_filter: ParsedDataFilter = None, max_workers=1, batch_size=128
-):
-    """Load records from JSON files matching the glob patterns, optionally filtered."""
-
-    if isinstance(file_patterns, (list, tuple)):
-        file_patterns = list(file_patterns)
-
-        json_files = glob(file_patterns[0])
-        json_files = np.asarray(json_files)
-        if len(file_patterns) > 1:
-            for name in file_patterns[1:]:
-                json_files = np.append(json_files, glob(name))
-    else:
-        json_files = glob(file_patterns)
-
-    batches = list(batch_iterable(json_files, batch_size))
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = executor.map(read_json_files, batches)
-    json_data = [entry for result in results for entry in result if entry]
-
-    if data_filter is not None:
-        json_data = [
-            model_data
-            for model_data in json_data
-            if filter_match(model_data, data_filter)
-        ]
-
-    return json_data
-
-
 def get_layers_data(model_config):
     """
     Processes the layers data of a model.
@@ -309,6 +89,7 @@ def get_layers_data(model_config):
 
         output_shape = np.asarray(layer_config["output_shape"]).flatten()
         output_size = np.prod([x for x in output_shape if x is not None])
+
         layer_parameters = layer_config["parameters"]
         layer_trainable_parameters = layer_config["trainable_parameters"]
 
@@ -696,6 +477,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         features_to_extract, keys=["inputs", "outputs", "parameters", "reuse"]
     )
     extracted_features = unwrap_nested_dicts(adjusted_features)
+
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
 
     hls_config = camel_keys_to_snake(hls_config)
@@ -723,6 +505,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         "hls4ml_version": kwargs.get("hls4ml_version", None),
         "vivado_version": kwargs.get("vivado_version", None),
     }
+
     inputs.update(extracted_features)
 
     fixed_ops = get_network_fixed_ops(model_config)
@@ -795,6 +578,7 @@ def get_network_fixed_ops(model_json):
         "total_lookup": 0,
         "layers": [],
     }
+
     for layer_json in model_json:
         layer_add = 0
         layer_mult = 0
@@ -865,6 +649,7 @@ def get_network_fixed_ops(model_json):
                 "lookup": layer_lookup,
             }
         )
+
         fops_dict["total_add"] += layer_add
         fops_dict["total_mult"] += layer_mult
         fops_dict["total_logical"] += layer_logical

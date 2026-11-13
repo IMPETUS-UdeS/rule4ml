@@ -14,6 +14,7 @@ TARGETS = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
 
 def test_predict_defaults(estimator, model):
     prediction_df = estimator.predict(model)
+
     assert not prediction_df.empty
     assert not prediction_df.isna().any().any()
 
@@ -25,6 +26,7 @@ def test_predict_config(estimator, hls_config):
         hls4ml_versions=["0.8.1"],
         vivado_versions=["2023.2"],
     )
+
     assert len(predictions) == 1
     assert np.isfinite(predictions[TARGETS]).all().all()
 
@@ -36,6 +38,7 @@ def test_predict_same_names(estimator, hls_config):
         hls4ml_versions=["0.8.1"],
         vivado_versions=["2023.2"],
     )
+
     assert list(predictions["Model"]) == ["Sequential", "Sequential"]
 
 
@@ -46,9 +49,11 @@ def test_predict_batch_context(estimator, hls_config):
         "vivado_versions": ["2023.2"],
         "round_digits": 10,
     }
+
     model = _sequential(16)
     alone = estimator.predict(model, **settings)
     together = estimator.predict([model, _sequential(64)], **settings)
+
     np.testing.assert_allclose(
         together[TARGETS][:1], alone[TARGETS], rtol=1e-5, atol=1e-6
     )

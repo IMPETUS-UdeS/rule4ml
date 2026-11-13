@@ -14,6 +14,7 @@ def test_evaluate_partial_targets():
     assert scores["lut"]["smape"] == pytest.approx(80 / 3)  # 200 * 2 / 5, over 3
     assert scores["lut"]["rmse"] == pytest.approx(np.sqrt(4 / 3))
     assert scores["lut"]["r2"] == pytest.approx(1 - 4 / 2)
+
     assert scores["cycles"]["n"] == 2
     assert scores["cycles"]["n_missing"] == 1
     assert scores["cycles"]["smape"] == pytest.approx(100 * 1 / 10)

@@ -13,11 +13,13 @@ def test_prepare_roundtrip(tmp_path, record):
     dataset = load(tmp_path / "data.npz")
 
     assert dataset.offsets.tolist() == [0, 4, 10]  # linear activations skipped
+
     codes, vocab = dataset.layer_types
     assert vocab[codes].tolist() == (
         ["inputlayer", "dense", "relu", "dense"]
         + ["inputlayer", "dense", "relu", "dense", "relu", "dense"]
     )
+
     layer = {
         name: dataset.layer_values[:, i] for i, name in enumerate(dataset.layer_names)
     }
@@ -36,8 +38,10 @@ def test_prepare_roundtrip(tmp_path, record):
 
     codes, vocab = dataset.categoricals["board"]
     assert vocab[codes].tolist() == ["zcu102", "zcu102"]
+
     codes, vocab = dataset.categoricals["hls4ml_version"]
     assert vocab[codes].tolist() == ["", ""]
+
     assert dataset.latencies.tolist() == [[48.0, 2.0], [48.0, 2.0]]
     assert dataset.resources["resource_report"][:, 3].tolist() == [500.0, 500.0]
     assert np.isnan(dataset.resources["hls_resource_report"][1]).all()
@@ -56,6 +60,7 @@ def test_load_invalid_arrays(tmp_path, record, array, replacement, message):
     source = tmp_path / "records.json"
     source.write_text(json.dumps([record(blocks=1)]))
     prepare([source], tmp_path / "data.npz")
+
     with np.load(tmp_path / "data.npz") as data:
         arrays = dict(data)
     arrays[array] = replacement
@@ -72,6 +77,7 @@ def test_prepare_nested_reports(tmp_path, record):
         "CSynthesisReport": {"LUT": "900"},
     }
     del raw["hls_resource_report"]
+
     source = tmp_path / "records.json"
     source.write_text(json.dumps([raw]))
     prepare([source], tmp_path / "data.npz")
@@ -87,9 +93,11 @@ def test_split_layers(make_dataset):
 
     ids = sorted([*train.record_ids.tolist(), *val.record_ids.tolist()])
     assert ids == sorted(dataset.record_ids.tolist())
+
     original = dict(
         zip(dataset.record_ids, np.split(dataset.layer_values, dataset.offsets[1:-1]))
     )
+
     for part in (train, val):
         for record_id, layers in zip(
             part.record_ids, np.split(part.layer_values, part.offsets[1:-1])

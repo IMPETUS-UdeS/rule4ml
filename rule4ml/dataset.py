@@ -32,6 +32,7 @@ class Dataset:
 
     def targets(self, labels, report=None):
         """Raw targets (N, len(labels)), resources read from the given report."""
+
         columns = []
         for label in labels:
             if label in LATENCIES:
@@ -44,22 +45,27 @@ class Dataset:
                 columns.append(self.resources[report][:, RESOURCES.index(label)])
             else:
                 raise ValueError(f"Unknown target: {label}")
+
         return np.stack(columns, axis=1)
 
     def columns(self, labels, *, per_layer=False):
         """Numerical features (N, k), or (L, k) per layer, in the order of labels."""
+
         names, values = (
             (self.layer_names, self.layer_values)
             if per_layer
             else (self.global_names, self.global_values)
         )
+
         missing = [label for label in labels if label not in names]
         if missing:
             raise ValueError(f"Features missing from the dataset: {missing}")
+
         return values[:, [names.index(label) for label in labels]]
 
     def encode(self, label, mapping, *, per_layer=False):
         """Category codes (N,), or (L,) per layer, as values of a model's map."""
+
         if per_layer:
             if label != "layer_type":
                 raise ValueError(f"Datasets have no layer category {label}")
@@ -68,21 +74,26 @@ class Dataset:
             if label not in self.categoricals:
                 raise ValueError(f"Datasets have no category {label}")
             codes, vocab = self.categoricals[label]
+
         table = np.array(
             [mapping.get(str(value), -1) for value in vocab], dtype=np.int64
         )
         mapped = table[codes]
+
         if (mapped < 0).any():
             missing = sorted(
                 str(value) for value in vocab[np.unique(codes[mapped < 0])]
             )
             raise ValueError(f"{label} values missing from the model map: {missing}")
+
         return mapped
 
     def pad_layers(self, layer_rows):
         """Per-layer rows (L, ...) as zero-padded per-record rows (N, depth, ...)."""
+
         if np.ndim(layer_rows) == 0 or len(layer_rows) != self.offsets[-1]:
             raise ValueError(f"Expected {self.offsets[-1]} layer rows")
+
         counts = np.diff(self.offsets)
         record = np.repeat(np.arange(len(self)), counts)
         position = np.arange(len(record)) - self.offsets[record]
@@ -91,16 +102,19 @@ class Dataset:
             dtype=layer_rows.dtype,
         )
         padded[record, position] = layer_rows
+
         return padded
 
     def subset(self, rows):
         """Records at the given indices, in that order."""
+
         rows = np.asarray(rows, dtype=np.int64)
         counts = np.diff(self.offsets)[rows]
         starts = np.cumsum(counts) - counts
         layers = np.repeat(self.offsets[:-1][rows] - starts, counts) + np.arange(
             counts.sum()
         )
+
         return dataclasses.replace(
             self,
             global_values=self.global_values[rows],
@@ -121,17 +135,21 @@ class Dataset:
 
 def split(dataset, val_ratio, seed=0):
     """Seeded random (train, validation) split of a Dataset."""
+
     if not 0 < val_ratio < 1:
         raise ValueError(f"val_ratio must be in (0, 1), got {val_ratio}")
+
     rows = np.random.default_rng(seed).permutation(len(dataset))
     n_val = round(len(dataset) * val_ratio)
     if not 0 < n_val < len(dataset):
         raise ValueError(f"val_ratio {val_ratio} leaves an empty split")
+
     return dataset.subset(np.sort(rows[n_val:])), dataset.subset(np.sort(rows[:n_val]))
 
 
 def prepare(json_paths, out_path):
     """Extract features and raw targets from synthesis JSON files into one .npz."""
+
     from rule4ml.features import record_features  # imports Keras and Torch
 
     global_names, layer_names = None, None
@@ -147,6 +165,7 @@ def prepare(json_paths, out_path):
         sources.append(
             f"{os.path.basename(path)}:{hashlib.sha256(content).hexdigest()}"
         )
+
         records = json.loads(content)
         del content
 
@@ -154,6 +173,7 @@ def prepare(json_paths, out_path):
             global_inputs, layers = record_features(record)
             if not layers:
                 raise ValueError(f"Record without layers in {path}")
+
             if global_names is None:
                 global_names = [k for k in global_inputs if k not in CATEGORICALS]
                 layer_names = [k for k in layers[0] if k != "layer_type"]
@@ -171,12 +191,14 @@ def prepare(json_paths, out_path):
             for report in REPORTS:
                 resources[report].append([targets[report][k] for k in RESOURCES])
             latencies.append([targets[REPORTS[0]][k] for k in LATENCIES])
+
             meta_data = record.get("meta_data", {})
             record_ids.append(meta_data.get("model_id") or meta_data.get("uuid", ""))
         del records
 
     if not global_rows:
         raise ValueError("No records found.")
+
     arrays = {
         "sources": np.array(sources),
         "global_values": np.array(global_rows, dtype=np.float32),
@@ -187,6 +209,7 @@ def prepare(json_paths, out_path):
         "latencies": np.array(latencies, dtype=np.float64),
         "record_ids": np.array(record_ids),
     }
+
     for name, values in [*categoricals.items(), ("layer_type", layer_types)]:
         vocab, codes = np.unique(np.array(values), return_inverse=True)
         arrays[f"vocab_{name}"] = vocab
@@ -201,12 +224,14 @@ def prepare(json_paths, out_path):
 
 def load(path):
     """Load and validate a prepared .npz dataset."""
+
     with np.load(path, allow_pickle=False) as data:
         arrays = dict(data)
 
     for name in ["global_names", "layer_names", "sources"]:
         if arrays[name].ndim != 1:
             raise ValueError(f"{name} must be one-dimensional")
+
     n_records = len(arrays["global_values"])
     n_layers = len(arrays["layer_values"])
     shapes = {
@@ -216,9 +241,11 @@ def load(path):
         "record_ids": (n_records,),
         **{f"resources_{report}": (n_records, len(RESOURCES)) for report in REPORTS},
     }
+
     for name, shape in shapes.items():
         if arrays[name].shape != shape:
             raise ValueError(f"{name} has shape {arrays[name].shape}, expected {shape}")
+
     offsets = arrays["offsets"]
     if (
         offsets.dtype.kind != "i"
@@ -228,6 +255,7 @@ def load(path):
         or np.any(np.diff(offsets) < 0)
     ):
         raise ValueError(f"Inconsistent layer offsets in {path}")
+
     for name in [*CATEGORICALS, "layer_type"]:
         codes, vocab = arrays[f"codes_{name}"], arrays[f"vocab_{name}"]
         length = n_layers if name == "layer_type" else n_records
@@ -264,11 +292,13 @@ def _targets(record, report):
         "resource_report": "VivadoSynthReport",
         "hls_resource_report": "CSynthesisReport",
     }
+
     resources = record.get("resource_report") or {}
     if set(nested_reports.values()) & resources.keys():  # raw data_gen layout
         resources = resources.get(nested_reports[report]) or {}
     else:
         resources = record.get(report) or {}
+
     return get_prediction_targets(
         {
             "resource_report": resources,

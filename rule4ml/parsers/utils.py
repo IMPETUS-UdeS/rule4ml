@@ -86,16 +86,19 @@ def get_activation_name(activation):
     match = re.match(r"quantized_(\w+)(?:\(?[^)]*\)?)", activation)
     if match:
         return match.group(1)
+
     return activation
 
 
 def fixed_precision_to_bit_width(precision: str):
     """Return (total_bits, integer_bits) of an hls4ml ap_fixed precision string."""
+
     match = _FIXED_PRECISION.fullmatch(re.sub(r"\s", "", precision))
     if not match:
         raise ValueError(
             f'Invalid precision: {precision}, expecting "ap_fixed<W,I[,Q[,O[,N]]]>"'
         )
+
     return int(match[1]), int(match[2])
 
 
@@ -151,6 +154,7 @@ def get_closest_reuse_factor(n_in, n_out, chosen_rf):
         _assert = _validate_reuse_factor(n_in, n_out, rf)
         if _assert:
             valid_reuse_factors.append(rf)
+
     valid_rf = sorted(valid_reuse_factors)
 
     pos = bisect_left(valid_rf, chosen_rf)
@@ -158,6 +162,7 @@ def get_closest_reuse_factor(n_in, n_out, chosen_rf):
         return valid_rf[0]
     if pos == len(valid_rf):
         return valid_rf[-1]
+
     before = valid_rf[pos - 1]
     after = valid_rf[pos]
     if after - chosen_rf < chosen_rf - before:
