@@ -203,6 +203,64 @@ def test_predict_unmapped_board(make_dataset):
         wrapper.predict_dataset(make_dataset([1, 2]))
 
 
+@pytest.mark.parametrize(
+    ("build", "sequential"),
+    [
+        (lambda: TorchMLP(MLPSettings(), *_shapes()[::2], GLOBAL_MAPS), False),
+        (
+            lambda: TorchMLP(
+                MLPSettings([1, 1], [4], [8], [0.0]), *_shapes()[::2], GLOBAL_MAPS
+            ),
+            False,
+        ),
+        (
+            lambda: TorchGNN(GNNSettings(), *_shapes(), GLOBAL_MAPS, SEQUENTIAL_MAPS),
+            True,
+        ),
+        (
+            lambda: TorchGNN(
+                GNNSettings([4], [8], [1, 1], [1], [8], [False], [0.0]),
+                *_shapes(),
+                GLOBAL_MAPS,
+                SEQUENTIAL_MAPS,
+            ),
+            True,
+        ),
+    ],
+    ids=["mlp_default", "mlp_size_one", "gnn_default", "gnn_size_one"],
+)
+def test_predict_embedding_sizes(make_dataset, build, sequential):
+    wrapper = TorchModelWrapper()
+    sequential_labels = SEQUENTIAL_LABELS if sequential else ()
+    wrapper.set_model(
+        build(), GLOBAL_LABELS, ["lut"], sequential_labels, report="resource_report"
+    )
+    assert wrapper.predict_dataset(make_dataset([1, 2])).shape == (2, 1)
+
+
+def test_predict_empty_graph(make_dataset):
+    dataset = make_dataset([1, 1])
+    end = dataset.offsets[1]
+    dataset = replace(
+        dataset,
+        layer_values=dataset.layer_values[:end],
+        layer_types=(dataset.layer_types[0][:end], dataset.layer_types[1]),
+        offsets=np.array([0, end, end]),
+    )
+
+    wrapper = TorchModelWrapper()
+    wrapper.set_model(
+        _torch_gnn(),
+        GLOBAL_LABELS,
+        ["lut"],
+        SEQUENTIAL_LABELS,
+        report="resource_report",
+    )
+
+    with pytest.raises(ValueError, match="Record 1 .* no layers"):
+        wrapper.predict_dataset(dataset)
+
+
 def test_fit_zero_features(make_dataset):
     wrapper = TorchModelWrapper()
     settings = GNNSettings([4], [8], [2, 2], [2], [8], [False], [0.0])

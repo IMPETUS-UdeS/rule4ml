@@ -221,7 +221,7 @@ class TorchMLP(torch.nn.Module):
                 ] = torch.nn.Linear(in_dim, units, bias=False)
                 in_dim = units
 
-        concat_dim = sum(settings.embedding_layers) + in_dim
+        concat_dim = sum(settings.embedding_layers[: len(categorical_maps)]) + in_dim
         self.dense_layers = torch.nn.ModuleList()
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
@@ -262,7 +262,7 @@ class TorchMLP(torch.nn.Module):
     def forward(self, inputs):
         x_categorical = []
         for idx, key in enumerate(self.embeddings.keys()):
-            x_categorical.append(self.embeddings[key](inputs[key]).squeeze(1))
+            x_categorical.append(self.embeddings[key](inputs[key]).flatten(1))
 
         x_numerical = inputs[self.global_input_keys["numerical"]]
         for idx, key in enumerate(self.numerical_layers.keys()):
@@ -336,10 +336,16 @@ class TorchGNN(torch.nn.Module):
         seq_numerical_dim = sequential_input_shape[-1] - len(
             sequential_categorical_maps
         )
-        gnn_dim = sum(settings.seq_embedding_layers) + seq_numerical_dim
+        seq_embedding_dim = sum(
+            settings.seq_embedding_layers[: len(sequential_categorical_maps)]
+        )
+        gnn_dim = seq_embedding_dim + seq_numerical_dim
 
+        global_embedding_dim = sum(
+            settings.global_embedding_layers[: len(global_categorical_maps)]
+        )
         # unused, kept so v2 state dicts load
-        g_token_dim = sum(settings.global_embedding_layers) + g_in_dim
+        g_token_dim = global_embedding_dim + g_in_dim
         self.g_projection = torch.nn.Sequential(
             torch.nn.Linear(g_token_dim, gnn_dim),
             torch.nn.ReLU(),
@@ -363,11 +369,7 @@ class TorchGNN(torch.nn.Module):
             gate_nn=torch.nn.Sequential(torch.nn.Linear(sum(settings.gconv_layers), 1))
         )
 
-        concat_dim = (
-            sum(settings.global_embedding_layers)
-            + g_in_dim
-            + sum(settings.gconv_layers)
-        )
+        concat_dim = global_embedding_dim + g_in_dim + sum(settings.gconv_layers)
         self.dense_layers = torch.nn.ModuleList()
         self.dropouts = torch.nn.ModuleList()
         for idx, units in enumerate(settings.dense_layers):
@@ -431,7 +433,7 @@ class TorchGNN(torch.nn.Module):
         x_global_categorical = []
         for idx, key in enumerate(self.global_embeddings.keys()):
             x_global_categorical.append(
-                self.global_embeddings[key](inputs[key]).squeeze(1)
+                self.global_embeddings[key](inputs[key]).flatten(1)
             )
 
         x_global_numerical = inputs[self.global_input_keys["numerical"]]
@@ -448,7 +450,7 @@ class TorchGNN(torch.nn.Module):
         x_sequential_categorical = []
         for idx, key in enumerate(self.sequential_embeddings.keys()):
             x_sequential_categorical.append(
-                self.sequential_embeddings[key](inputs[key]).squeeze(2)
+                self.sequential_embeddings[key](inputs[key]).flatten(2)
             )
 
         node_features = []
@@ -458,7 +460,7 @@ class TorchGNN(torch.nn.Module):
         for i in range(seq_numerical_inputs.shape[0]):
             valid_seq_numerical = seq_numerical_inputs[i][mask[i]]
             if valid_seq_numerical.size(0) == 0:
-                continue
+                raise ValueError(f"Record {i} of the batch has no layers")
 
             valid_seq_embeddings = [
                 embedding[i][mask[i]] for embedding in x_sequential_categorical
@@ -478,9 +480,6 @@ class TorchGNN(torch.nn.Module):
                 torch.full((num_nodes,), i, dtype=torch.long).to(self.device)
             )
             ptr += num_nodes
-
-        if len(node_features) == 0:
-            raise ValueError("All sequential samples are empty after masking.")
 
         x_seq = torch.cat(node_features, dim=0)
         edge_indices = (
