@@ -24,10 +24,8 @@ dependencies = [
     "pandas",
     "tensorflow>=2.15.1,<2.20",
     "keras",
-    "keras_tuner",
     "torch",
     "torch-geometric",
-    "optuna",
     "tqdm",
 ]
 
