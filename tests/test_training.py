@@ -7,13 +7,12 @@ import pytest
 from rule4ml.dataset import split
 from rule4ml.models.architectures import (
     GNNSettings,
-    KerasMLP,
     MLPSettings,
     TorchGNN,
     TorchMLP,
 )
 from rule4ml.models.scaling import BoardPercentScaler, BoardScaler, Log1pScaler
-from rule4ml.models.wrappers import KerasModelWrapper, TorchModelWrapper, TrainSettings
+from rule4ml.models.wrappers import TorchModelWrapper, TrainSettings
 from rule4ml.parsers.data_parser import (
     default_board_map,
     default_layer_type_map,
@@ -39,6 +38,8 @@ def _torch_mlp():
 
 
 def _keras_mlp():
+    from rule4ml.models.architectures import KerasMLP
+
     settings = MLPSettings([2, 2], [4], [8], [0.0])
     return KerasMLP(settings, _shapes()[0], (None, 1), GLOBAL_MAPS)
 
@@ -56,7 +57,7 @@ def _shapes():
     [
         (TorchModelWrapper, _torch_gnn, True),
         (TorchModelWrapper, _torch_mlp, False),
-        (KerasModelWrapper, _keras_mlp, False),
+        ("keras", _keras_mlp, False),
     ],
 )
 @pytest.mark.parametrize(
@@ -65,6 +66,11 @@ def _shapes():
 def test_fit_save_load(
     make_dataset, tmp_path, wrapper_class, build, sequential, scaler_class
 ):
+    if wrapper_class == "keras":
+        pytest.importorskip("tensorflow")
+        from rule4ml.models.wrappers import KerasModelWrapper
+
+        wrapper_class = KerasModelWrapper
     train, val = split(make_dataset([1, 2, 3, 1, 2, 3, 4, 5]), 0.25, seed=0)
     wrapper = wrapper_class()
     scaler = None

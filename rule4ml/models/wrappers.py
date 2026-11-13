@@ -5,15 +5,19 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 import torch
 from tqdm.auto import tqdm
 
+try:
+    import tensorflow as tf
+except ModuleNotFoundError as error:
+    if error.name != "tensorflow":
+        raise
+    tf = None
+
 from rule4ml.features import model_features
-from rule4ml.models import metrics, scaling
+from rule4ml.models import architectures, metrics, scaling
 from rule4ml.models.architectures import (
-    KerasMCDropout,
-    KerasMLP,
     TorchGNN,
     TorchMLP,
 )
@@ -416,7 +420,9 @@ class BaseModelWrapper:
         }
 
     def from_config(self, config):
-        model = globals()[config["model_class"]].from_config(config["model_config"])
+        model = getattr(architectures, config["model_class"]).from_config(
+            config["model_config"]
+        )
         scaler = None
         if config.get("scaler_class") and config.get("scaler_config"):
             scaler = getattr(scaling, config["scaler_class"]).from_config(
@@ -672,6 +678,8 @@ class TorchModelWrapper(BaseModelWrapper):
 
 class KerasModelWrapper(BaseModelWrapper):
     def __init__(self):
+        if tf is None:
+            raise ImportError('Keras support needs: pip install "rule4ml[keras]"')
         super().__init__()
 
     def _fit(self, train, val, train_settings, seed, callbacks, verbose):
@@ -716,7 +724,7 @@ class KerasModelWrapper(BaseModelWrapper):
         dropouts = [
             layer
             for layer in self.model._flatten_layers(include_self=False)
-            if isinstance(layer, KerasMCDropout)
+            if isinstance(layer, architectures.KerasMCDropout)
         ]
         if any(layer.enable_mc != mc_dropout for layer in dropouts):
             for layer in dropouts:
@@ -765,7 +773,7 @@ class MultiModelWrapper:
             with open(f"{path}.config.json") as f:
                 config = json.load(f)
             class_name = config.get("model_class", None)
-            if class_name == KerasMLP.__name__:
+            if class_name == "KerasMLP":
                 if os.path.exists(f"{path}.weights.h5"):
                     model_wrapper = KerasModelWrapper()
                     model_wrapper.load(f"{path}.config.json", f"{path}.weights.h5")

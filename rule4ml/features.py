@@ -1,4 +1,5 @@
-import keras
+import sys
+
 import torch
 
 from rule4ml.parsers.data_parser import get_global_inputs, get_layers_data
@@ -11,10 +12,10 @@ from rule4ml.parsers.utils import get_board_from_part
 
 def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
     """Return the global and per-layer features of a Keras or Torch model."""
-    if isinstance(model, keras.Model):
-        model_config = config_from_keras_model(model, hls_config)
-    elif isinstance(model, torch.nn.Module):
+    if isinstance(model, torch.nn.Module):
         model_config = config_from_torch_model(model, hls_config)
+    elif "keras" in sys.modules and isinstance(model, sys.modules["keras"].Model):
+        model_config = config_from_keras_model(model, hls_config)
     else:
         raise TypeError(
             f"Unsupported model type: {type(model)}. Expected a Keras or Torch model."

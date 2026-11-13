@@ -1,17 +1,7 @@
-import keras
-
-try:
-    import torch
-except ImportError:
-    torch = None
+import torch
 
 
 def torch_weights_init(m):
-    if torch is None:
-        raise ImportError(
-            "PyTorch is not installed. Please install PyTorch to use this functionality."
-        )
-
     if isinstance(m, torch.nn.Linear):
         torch.nn.init.xavier_uniform_(m.weight)
         if m.bias is not None:
@@ -33,6 +23,8 @@ def get_optimizer_from_str(optimizer_name, backend, **kwargs):
 
     optimizer_name = optimizer_name.lower()
     if backend == "keras":
+        import keras
+
         optimizers = {
             "adam": keras.optimizers.Adam,
             "sgd": keras.optimizers.SGD,
@@ -43,11 +35,6 @@ def get_optimizer_from_str(optimizer_name, backend, **kwargs):
             "nadam": keras.optimizers.Nadam,
         }
     elif backend == "torch":
-        if torch is None:
-            raise ImportError(
-                "PyTorch is not installed. Please install PyTorch to use this backend."
-            )
-
         optimizers = {
             "adam": torch.optim.Adam,
             "sgd": torch.optim.SGD,
@@ -84,6 +71,8 @@ def get_loss_from_str(loss_name, backend, **kwargs):
 
     loss_name = loss_name.lower()
     if backend == "keras":
+        import keras
+
         losses = {
             "mse": keras.losses.MeanSquaredError,
             "msle": keras.losses.MeanSquaredLogarithmicError,
@@ -93,11 +82,6 @@ def get_loss_from_str(loss_name, backend, **kwargs):
             "sparse_categorical_crossentropy": keras.losses.SparseCategoricalCrossentropy,
         }
     elif backend == "torch":
-        if torch is None:
-            raise ImportError(
-                "PyTorch is not installed. Please install PyTorch to use this backend."
-            )
-
         losses = {
             "mse": torch.nn.MSELoss,
             "msle": MSLELoss,

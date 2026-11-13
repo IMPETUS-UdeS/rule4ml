@@ -1,10 +1,7 @@
 import math
 import os
 
-try:
-    import torch
-except ImportError:
-    torch = None
+import torch
 
 
 class ReduceLROnPlateau:
@@ -115,10 +112,6 @@ class EarlyStopping:
 
 class ModelCheckpoint:
     def __init__(self, dirpath, monitor="val_loss", mode="min"):
-        if torch is None:
-            raise ImportError(
-                "torch is not installed. Please install torch to use ModelCheckpoint."
-            )
         assert os.path.isdir(dirpath), f"{dirpath} is not a valid directory"
         assert mode in ["min", "max"], "mode should be 'min' or 'max'"
 

@@ -1,8 +1,57 @@
 import json
+from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 
+import rule4ml
 from rule4ml.dataset import load, prepare
+from rule4ml.models.wrappers import MultiModelWrapper
+
+WEIGHTS = Path(rule4ml.__file__).parent / "models" / "weights"
+
+
+@pytest.fixture(scope="session")
+def estimator():
+    estimator = MultiModelWrapper()
+    estimator.load_default_models()
+    return estimator
+
+
+@pytest.fixture
+def hls_config():
+    return {
+        "board": "zcu102",
+        "model": {
+            "strategy": "Resource",
+            "precision": "ap_fixed<8,3>",
+            "reuse_factor": 4,
+        },
+    }
+
+
+@pytest.fixture
+def top_quarks():
+    return TopQuarks()
+
+
+@pytest.fixture
+def check_mc_dropout(hls_config, top_quarks):
+    """Load a shipped bundle, then check MC sampling varies and leaves predict as is."""
+
+    def check(wrapper, bundle, versions):
+        config = bundle.split(".weights")[0] + ".config.json"
+        wrapper.load(str(WEIGHTS / config), str(WEIGHTS / bundle))
+        args = ([top_quarks], [hls_config], *versions)
+
+        before = wrapper.predict(*args)
+        mean, std, samples = wrapper.mc_predict(*args, num_samples=20, return_all=True)
+        assert mean.shape == std.shape == (1, 1)
+        assert len(np.unique(samples)) > 1
+        assert np.array_equal(wrapper.predict(*args), before)
+
+    return check
 
 
 @pytest.fixture
@@ -84,3 +133,15 @@ def _record(blocks, hls=True, lut=500.0, record_id=None):
         },
         "target_part": "xczu9eg-ffvb1156-2-e",
     }
+
+
+class TopQuarks(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dense1 = torch.nn.Linear(10, 32)
+        self.relu = torch.nn.ReLU()
+        self.dense2 = torch.nn.Linear(32, 1)
+        self.sigmoid = torch.nn.Sigmoid()
+
+    def forward(self, inputs):
+        return self.sigmoid(self.dense2(self.relu(self.dense1(inputs))))

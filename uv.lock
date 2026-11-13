@@ -1936,15 +1936,20 @@ wheels = [
 name = "rule4ml"
 source = { editable = "." }
 dependencies = [
-    { name = "keras", version = "3.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "keras", version = "3.15.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "tensorflow" },
     { name = "torch", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "torch", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "torch-geometric" },
     { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+keras = [
+    { name = "keras", version = "3.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "keras", version = "3.15.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "tensorflow" },
 ]
 
 [package.dev-dependencies]
@@ -1956,13 +1961,15 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "keras" },
+    { name = "keras", marker = "extra == 'keras'" },
+    { name = "numpy" },
     { name = "pandas" },
-    { name = "tensorflow", specifier = ">=2.15.1,<2.20" },
+    { name = "tensorflow", marker = "extra == 'keras'", specifier = ">=2.15.1,<2.20" },
     { name = "torch" },
     { name = "torch-geometric" },
     { name = "tqdm" },
 ]
+provides-extras = ["keras"]
 
 [package.metadata.requires-dev]
 dev = [

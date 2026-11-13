@@ -36,12 +36,12 @@ jobs:
       run: |
         uv lock --check
         uv venv .venv
-        uv pip install --python .venv/bin/python --torch-backend cpu -e . --group dev "tensorflow==${{ matrix.tf-version }}"
+        uv pip install --python .venv/bin/python --torch-backend cpu -e ".[keras]" --group dev "tensorflow==${{ matrix.tf-version }}"
         uv pip check --python .venv/bin/python
 
     - name: Run tests
       run: |
-        uv run --no-sync pytest > tests/test_results-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.tf-version }}.log
+        uv run --no-sync pytest tests > tests/test_results-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.tf-version }}.log
 
     - name: Upload test results
       if: always()
@@ -54,3 +54,20 @@ jobs:
       if: failure()
       run: |
         echo "Some tests failed. Check the test log for more details."
+
+  torch-only:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: astral-sh/setup-uv@v10.3.3
+      with:
+        python-version: '3.12'
+        enable-cache: true
+    - name: Install base dependencies
+      run: |
+        uv venv .venv
+        uv pip install --python .venv/bin/python --torch-backend cpu -e . --group dev
+    - name: Run tests without Keras
+      run: uv run --no-sync pytest tests

@@ -1,23 +1,20 @@
 import os
 from dataclasses import dataclass, field
 
-import keras
 import numpy as np
-import tensorflow as tf
+import torch
+import torch_geometric
 from packaging import version
 
 try:
-    import torch
-except ImportError:
-    torch = None
+    import keras
+    import tensorflow as tf
+except ModuleNotFoundError as error:
+    if error.name not in ("keras", "tensorflow"):
+        raise
+    keras = None
 
-try:
-    import torch_geometric
-except ImportError:
-    torch_geometric = None
-
-# Check Keras version
-if version.parse(keras.__version__).major >= 3:
+if keras is not None and version.parse(keras.__version__).major >= 3:
     from keras import ops as kops
 else:
     kops = None
@@ -87,87 +84,89 @@ class GNNSettings:
         return cls(**config)
 
 
-class KerasMLP(keras.Model):
-    def __init__(
-        self,
-        settings: MLPSettings,
-        input_shape,
-        output_shape,
-        categorical_maps,
-        name="KerasMLP",
-    ):
-        squeeze_op = tf.squeeze if kops is None else kops.squeeze
+if keras is not None:
 
-        categorical_inputs = []
-        embeddings = []
+    class KerasMLP(keras.Model):
+        def __init__(
+            self,
+            settings: MLPSettings,
+            input_shape,
+            output_shape,
+            categorical_maps,
+            name="KerasMLP",
+        ):
+            squeeze_op = tf.squeeze if kops is None else kops.squeeze
 
-        for idx, key in enumerate(categorical_maps):
-            # Keras 3 reorders the Input Tensors by name (tree.flatten), causing shape mismatches in fit() call
-            # [g(lobal)|s(equential)]{idx} prefix helps keep the order deterministic
-            input_layer = keras.layers.Input(shape=(1,), name=f"g{idx}_{key}_input")
+            categorical_inputs = []
+            embeddings = []
 
-            embedding_layer = squeeze_op(
-                keras.layers.Embedding(
-                    input_dim=len(categorical_maps[key]) + 1,
-                    output_dim=settings.embedding_layers[idx],
-                    name=f"{key}_embedding",
-                )(input_layer),
-                axis=-2,
+            for idx, key in enumerate(categorical_maps):
+                # Keras 3 reorders the Input Tensors by name (tree.flatten), causing shape mismatches in fit() call
+                # [g(lobal)|s(equential)]{idx} prefix helps keep the order deterministic
+                input_layer = keras.layers.Input(shape=(1,), name=f"g{idx}_{key}_input")
+
+                embedding_layer = squeeze_op(
+                    keras.layers.Embedding(
+                        input_dim=len(categorical_maps[key]) + 1,
+                        output_dim=settings.embedding_layers[idx],
+                        name=f"{key}_embedding",
+                    )(input_layer),
+                    axis=-2,
+                )
+
+                categorical_inputs.append(input_layer)
+                embeddings.append(embedding_layer)
+
+            numerical_inputs = keras.layers.Input(
+                shape=(input_shape[-1] - len(categorical_inputs),),
+                name=f"g{len(categorical_maps)}_numerical_inputs",
             )
 
-            categorical_inputs.append(input_layer)
-            embeddings.append(embedding_layer)
+            numerical_outputs = numerical_inputs
+            for idx, units in enumerate(settings.numerical_dense_layers):
+                numerical_outputs = keras.layers.Dense(
+                    units, use_bias=False, name=f"numerical_dense_{idx}"
+                )(numerical_outputs)
 
-        numerical_inputs = keras.layers.Input(
-            shape=(input_shape[-1] - len(categorical_inputs),),
-            name=f"g{len(categorical_maps)}_numerical_inputs",
-        )
+            concat_op = tf.concat if kops is None else kops.concatenate
+            x = concat_op([*embeddings, numerical_outputs], axis=-1)
 
-        numerical_outputs = numerical_inputs
-        for idx, units in enumerate(settings.numerical_dense_layers):
-            numerical_outputs = keras.layers.Dense(
-                units, use_bias=False, name=f"numerical_dense_{idx}"
-            )(numerical_outputs)
+            for idx, units in enumerate(settings.dense_layers):
+                x = keras.layers.Dense(units, activation="relu")(x)
+                if (
+                    idx < len(settings.dense_dropouts)
+                    and settings.dense_dropouts[idx] > 0.0
+                ):
+                    x = KerasMCDropout(settings.dense_dropouts[idx])(x)
 
-        concat_op = tf.concat if kops is None else kops.concatenate
-        x = concat_op([*embeddings, numerical_outputs], axis=-1)
+            model_inputs = categorical_inputs + [numerical_inputs]
+            model_outputs = keras.layers.Dense(output_shape[-1], activation="relu")(x)
 
-        for idx, units in enumerate(settings.dense_layers):
-            x = keras.layers.Dense(units, activation="relu")(x)
-            if (
-                idx < len(settings.dense_dropouts)
-                and settings.dense_dropouts[idx] > 0.0
-            ):
-                x = KerasMCDropout(settings.dense_dropouts[idx])(x)
+            super().__init__(inputs=model_inputs, outputs=model_outputs, name=name)
+            super().build([None] + list(input_shape))
 
-        model_inputs = categorical_inputs + [numerical_inputs]
-        model_outputs = keras.layers.Dense(output_shape[-1], activation="relu")(x)
+            self.settings = settings
 
-        super().__init__(inputs=model_inputs, outputs=model_outputs, name=name)
-        super().build([None] + list(input_shape))
+            self.global_input_keys = {
+                "categorical": [layer.name for layer in categorical_inputs],
+                "numerical": numerical_inputs.name,
+            }
+            self.global_input_shape = input_shape
+            self.global_categorical_maps = categorical_maps
 
-        self.settings = settings
+        def to_config(self):
+            return {
+                "name": self.name,
+                "settings": self.settings.to_config(),
+                "input_shape": self.global_input_shape,
+                "output_shape": self.output_shape,
+                "categorical_maps": self.global_categorical_maps,
+            }
 
-        self.global_input_keys = {
-            "categorical": [layer.name for layer in categorical_inputs],
-            "numerical": numerical_inputs.name,
-        }
-        self.global_input_shape = input_shape
-        self.global_categorical_maps = categorical_maps
-
-    def to_config(self):
-        return {
-            "name": self.name,
-            "settings": self.settings.to_config(),
-            "input_shape": self.global_input_shape,
-            "output_shape": self.output_shape,
-            "categorical_maps": self.global_categorical_maps,
-        }
-
-    @classmethod
-    def from_config(cls, config):
-        config["settings"] = MLPSettings.from_config(config["settings"])
-        return cls(**config)
+        @classmethod
+        def from_config(cls, config):
+            config["settings"] = MLPSettings.from_config(config["settings"])
+            return cls(**config)
 
 
 class TorchMLP(torch.nn.Module):
@@ -282,10 +281,6 @@ class TorchGNN(torch.nn.Module):
         name="TorchGNN",
         device=None,
     ):
-        if torch_geometric is None:
-            raise ImportError(
-                'Failed to import "torch_geometric". Please install "torch_geometric" to use this class.'
-            )
 
         super().__init__()
 
@@ -526,24 +521,26 @@ class TorchGNN(torch.nn.Module):
         return cls(**config)
 
 
-class KerasMCDropout(keras.layers.Dropout):
-    def __init__(self, rate, **kwargs):
-        """
-        Expose an additional attribute to better control the call method's
-        'training' argument for MC Dropout at inference time.
-        """
-        self.enable_mc = kwargs.pop("enable_mc", False)
-        super().__init__(rate, **kwargs)
+if keras is not None:
 
-    def call(self, inputs, training=None):
-        # Normal behavior during training:
-        #   - when training=True (from model.fit), keep it.
-        #   - when training=False, dropout would normally be off (assuming enable_mc=False).
-        # During inference, if enable_mc is True, we force training=True to enable MC dropout.
+    class KerasMCDropout(keras.layers.Dropout):
+        def __init__(self, rate, **kwargs):
+            """
+            Expose an additional attribute to better control the call method's
+            'training' argument for MC Dropout at inference time.
+            """
+            self.enable_mc = kwargs.pop("enable_mc", False)
+            super().__init__(rate, **kwargs)
 
-        if not training and self.enable_mc:
-            training = True
-        return super().call(inputs, training=training)
+        def call(self, inputs, training=None):
+            # Normal behavior during training:
+            #   - when training=True (from model.fit), keep it.
+            #   - when training=False, dropout would normally be off (assuming enable_mc=False).
+            # During inference, if enable_mc is True, we force training=True to enable MC dropout.
+
+            if not training and self.enable_mc:
+                training = True
+            return super().call(inputs, training=training)
 
 
 class TorchBayesianLinear(torch.nn.Module):

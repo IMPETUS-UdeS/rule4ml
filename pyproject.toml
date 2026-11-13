@@ -21,13 +21,15 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "numpy",
     "pandas",
-    "tensorflow>=2.15.1,<2.20",
-    "keras",
     "torch",
     "torch-geometric",
     "tqdm",
 ]
+
+[project.optional-dependencies]
+keras = ["tensorflow>=2.15.1,<2.20", "keras"]
 
 [dependency-groups]
 dev = ["pre-commit", "pytest"]

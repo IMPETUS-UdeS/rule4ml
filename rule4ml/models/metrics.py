@@ -1,15 +1,16 @@
-import keras
 import numpy as np
-import tensorflow as tf
+import torch
 from packaging import version
 
 try:
-    import torch
-except ImportError:
-    torch = None
+    import keras
+    import tensorflow as tf
+except ModuleNotFoundError as error:
+    if error.name not in ("keras", "tensorflow"):
+        raise
+    keras = None
 
-# Check Keras version
-if version.parse(keras.__version__).major >= 3:
+if keras is not None and version.parse(keras.__version__).major >= 3:
     from keras import ops as kops
 else:
     kops = None
@@ -67,114 +68,112 @@ def r2(y_true, y_pred):
     return float(1 - np.sum((y_true - y_pred) ** 2) / total)
 
 
-class KerasParametricMAPE(tf.keras.metrics.Metric):
-    def __init__(self, y_index, name=None, eps=1e-6, **kwargs):
-        if name is None:
-            name = f"mape_{y_index}"
+if keras is not None:
 
-        super().__init__(name=name, **kwargs)
-        self.y_index = y_index
-        self.eps = eps
-        self.total = self.add_weight(name="total", initializer="zeros")
-        self.count = self.add_weight(name="count", initializer="zeros")
+    class KerasParametricMAPE(tf.keras.metrics.Metric):
+        def __init__(self, y_index, name=None, eps=1e-6, **kwargs):
+            if name is None:
+                name = f"mape_{y_index}"
 
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_true_i = y_true[..., self.y_index]
-        y_pred_i = y_pred[..., self.y_index]
+            super().__init__(name=name, **kwargs)
+            self.y_index = y_index
+            self.eps = eps
+            self.total = self.add_weight(name="total", initializer="zeros")
+            self.count = self.add_weight(name="count", initializer="zeros")
 
-        if kops is None:
-            diff = tf.abs(y_true_i - y_pred_i) / tf.maximum(tf.abs(y_true_i), self.eps)
-            mape = 100.0 * diff
-            self.total.assign_add(tf.reduce_sum(mape))
-            self.count.assign_add(tf.cast(tf.size(mape), tf.float32))
-        else:
-            diff = kops.absolute(y_true_i - y_pred_i) / kops.maximum(
-                kops.absolute(y_true_i), self.eps
-            )
-            mape = 100.0 * diff
-            self.total.assign_add(kops.sum(mape))
-            self.count.assign_add(kops.cast(kops.size(mape), tf.float32))
+        def update_state(self, y_true, y_pred, sample_weight=None):
+            y_true_i = y_true[..., self.y_index]
+            y_pred_i = y_pred[..., self.y_index]
 
-    def result(self):
-        return self.total / self.count
+            if kops is None:
+                diff = tf.abs(y_true_i - y_pred_i) / tf.maximum(
+                    tf.abs(y_true_i), self.eps
+                )
+                mape = 100.0 * diff
+                self.total.assign_add(tf.reduce_sum(mape))
+                self.count.assign_add(tf.cast(tf.size(mape), tf.float32))
+            else:
+                diff = kops.absolute(y_true_i - y_pred_i) / kops.maximum(
+                    kops.absolute(y_true_i), self.eps
+                )
+                mape = 100.0 * diff
+                self.total.assign_add(kops.sum(mape))
+                self.count.assign_add(kops.cast(kops.size(mape), tf.float32))
 
+        def result(self):
+            return self.total / self.count
 
-class KerasParametricSMAPE(tf.keras.metrics.Metric):
-    def __init__(self, y_index, name=None, eps=1e-6, **kwargs):
-        if name is None:
-            name = f"smape_{y_index}"
+    class KerasParametricSMAPE(tf.keras.metrics.Metric):
+        def __init__(self, y_index, name=None, eps=1e-6, **kwargs):
+            if name is None:
+                name = f"smape_{y_index}"
 
-        super().__init__(name=name, **kwargs)
-        self.y_index = y_index
-        self.eps = eps
-        self.total = self.add_weight(name="total", initializer="zeros")
-        self.count = self.add_weight(name="count", initializer="zeros")
+            super().__init__(name=name, **kwargs)
+            self.y_index = y_index
+            self.eps = eps
+            self.total = self.add_weight(name="total", initializer="zeros")
+            self.count = self.add_weight(name="count", initializer="zeros")
 
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_true_i = y_true[..., self.y_index]
-        y_pred_i = y_pred[..., self.y_index]
+        def update_state(self, y_true, y_pred, sample_weight=None):
+            y_true_i = y_true[..., self.y_index]
+            y_pred_i = y_pred[..., self.y_index]
 
-        if kops is None:
-            numerator = tf.abs(y_true_i - y_pred_i)
-            denominator = tf.maximum(tf.abs(y_true_i) + tf.abs(y_pred_i), self.eps)
-            smape = 100.0 * numerator / denominator
-            self.total.assign_add(tf.reduce_sum(smape))
-            self.count.assign_add(tf.cast(tf.size(smape), tf.float32))
-        else:
-            numerator = kops.absolute(y_true_i - y_pred_i)
-            denominator = kops.maximum(
-                kops.absolute(y_true_i) + kops.absolute(y_pred_i), self.eps
-            )
-            smape = 100.0 * numerator / denominator
-            self.total.assign_add(kops.sum(smape))
-            self.count.assign_add(kops.cast(kops.size(smape), tf.float32))
+            if kops is None:
+                numerator = tf.abs(y_true_i - y_pred_i)
+                denominator = tf.maximum(tf.abs(y_true_i) + tf.abs(y_pred_i), self.eps)
+                smape = 100.0 * numerator / denominator
+                self.total.assign_add(tf.reduce_sum(smape))
+                self.count.assign_add(tf.cast(tf.size(smape), tf.float32))
+            else:
+                numerator = kops.absolute(y_true_i - y_pred_i)
+                denominator = kops.maximum(
+                    kops.absolute(y_true_i) + kops.absolute(y_pred_i), self.eps
+                )
+                smape = 100.0 * numerator / denominator
+                self.total.assign_add(kops.sum(smape))
+                self.count.assign_add(kops.cast(kops.size(smape), tf.float32))
 
-    def result(self):
-        return self.total / self.count
+        def result(self):
+            return self.total / self.count
 
+    class KerasParametricR2(tf.keras.metrics.Metric):
+        def __init__(self, y_index, name=None, eps=1e-6, **kwargs):
+            if name is None:
+                name = f"r2_{y_index}"
 
-class KerasParametricR2(tf.keras.metrics.Metric):
-    def __init__(self, y_index, name=None, eps=1e-6, **kwargs):
-        if name is None:
-            name = f"r2_{y_index}"
+            super().__init__(name=name, **kwargs)
+            self.y_index = y_index
+            self.eps = eps
+            self.total = self.add_weight(name="total", initializer="zeros")
+            self.count = self.add_weight(name="count", initializer="zeros")
 
-        super().__init__(name=name, **kwargs)
-        self.y_index = y_index
-        self.eps = eps
-        self.total = self.add_weight(name="total", initializer="zeros")
-        self.count = self.add_weight(name="count", initializer="zeros")
+        def update_state(self, y_true, y_pred, sample_weight=None):
+            y_true_i = y_true[..., self.y_index]
+            y_pred_i = y_pred[..., self.y_index]
 
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_true_i = y_true[..., self.y_index]
-        y_pred_i = y_pred[..., self.y_index]
+            if kops is None:
+                mean_true = tf.reduce_mean(y_true_i, axis=-1, keepdims=True)
+                ss_res = tf.reduce_sum(tf.square(y_true_i - y_pred_i), axis=-1)
+                ss_tot = tf.reduce_sum(tf.square(y_true_i - mean_true), axis=-1)
+                ss_tot = tf.maximum(ss_tot, self.eps)
+                r2_score = 1.0 - ss_res / ss_tot
+                self.total.assign_add(tf.reduce_sum(r2_score))
+                self.count.assign_add(tf.cast(tf.size(r2_score), tf.float32))
+            else:
+                mean_true = kops.mean(y_true_i, axis=-1, keepdims=True)
+                ss_res = kops.sum(kops.square(y_true_i - y_pred_i), axis=-1)
+                ss_tot = kops.sum(kops.square(y_true_i - mean_true), axis=-1)
+                ss_tot = kops.maximum(ss_tot, self.eps)
+                r2_score = 1.0 - ss_res / ss_tot
+                self.total.assign_add(kops.sum(r2_score))
+                self.count.assign_add(kops.cast(kops.size(r2_score), tf.float32))
 
-        if kops is None:
-            mean_true = tf.reduce_mean(y_true_i, axis=-1, keepdims=True)
-            ss_res = tf.reduce_sum(tf.square(y_true_i - y_pred_i), axis=-1)
-            ss_tot = tf.reduce_sum(tf.square(y_true_i - mean_true), axis=-1)
-            ss_tot = tf.maximum(ss_tot, self.eps)
-            r2_score = 1.0 - ss_res / ss_tot
-            self.total.assign_add(tf.reduce_sum(r2_score))
-            self.count.assign_add(tf.cast(tf.size(r2_score), tf.float32))
-        else:
-            mean_true = kops.mean(y_true_i, axis=-1, keepdims=True)
-            ss_res = kops.sum(kops.square(y_true_i - y_pred_i), axis=-1)
-            ss_tot = kops.sum(kops.square(y_true_i - mean_true), axis=-1)
-            ss_tot = kops.maximum(ss_tot, self.eps)
-            r2_score = 1.0 - ss_res / ss_tot
-            self.total.assign_add(kops.sum(r2_score))
-            self.count.assign_add(kops.cast(kops.size(r2_score), tf.float32))
-
-    def result(self):
-        return self.total / self.count
+        def result(self):
+            return self.total / self.count
 
 
 class TorchParametricMAPE(torch.nn.Module):
     def __init__(self, y_index, name="", eps=1e-6, scaler=None, device=None):
-        if torch is None:
-            raise ImportError(
-                "PyTorch is not installed. Please install PyTorch to use this backend."
-            )
 
         super().__init__()
         self.y_index = y_index
@@ -227,10 +226,6 @@ class TorchParametricMAPE(torch.nn.Module):
 
 class TorchParametricSMAPE(torch.nn.Module):
     def __init__(self, y_index, name="", eps=1e-6, scaler=None, device=None):
-        if torch is None:
-            raise ImportError(
-                "PyTorch is not installed. Please install PyTorch to use this backend."
-            )
 
         super().__init__()
         self.y_index = y_index
@@ -284,10 +279,6 @@ class TorchParametricSMAPE(torch.nn.Module):
 
 class TorchParametricR2(torch.nn.Module):
     def __init__(self, y_index, name="", eps=1e-6, scaler=None, device=None):
-        if torch is None:
-            raise ImportError(
-                "PyTorch is not installed. Please install PyTorch to use this backend."
-            )
 
         super().__init__()
         self.y_index = y_index

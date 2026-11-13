@@ -1,15 +1,9 @@
 from collections import OrderedDict
 
-import keras
 import numpy as np
-import tensorflow as tf
+import torch
 
 from rule4ml.parsers.utils import camel_keys_to_snake, get_closest_reuse_factor
-
-try:
-    import torch
-except ImportError:
-    torch = None
 
 try:
     import onnx
@@ -19,6 +13,7 @@ except ImportError:
 
 def config_from_keras_model(model, hls_config):
     """Parse a Keras model into per-layer configs with hls4ml reuse factors."""
+    import tensorflow as tf
 
     if getattr(model, "_build_input_shape", None) is not None:  # Keras 2
         model_input_shape = model._build_input_shape
@@ -188,6 +183,8 @@ def config_from_keras_model(model, hls_config):
 
 
 def _input_shape(layer):
+    import tensorflow as tf
+
     try:  # Symbolic graph
         inputs = tf.nest.flatten(layer.input)
     except (AttributeError, ValueError):  # No graph, shapes recorded at build
@@ -199,6 +196,8 @@ def _input_shape(layer):
 
 
 def keras_model_from_config(model_config):
+    import keras
+
     layer_dict = {}
 
     x = inputs = None
@@ -251,9 +250,6 @@ def keras_model_from_config(model_config):
 
 def config_from_torch_model(model, hls_config):
     """Parse a Torch model into per-layer configs with hls4ml reuse factors."""
-
-    if torch is None:
-        raise ImportError("Failed to import module torch.")
 
     torch_layer_mapping = {
         "Linear": "Dense",

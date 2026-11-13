@@ -1,8 +1,9 @@
-import keras
 import pytest
-from keras import layers
 
 from rule4ml.parsers.network_parser import config_from_keras_model
+
+keras = pytest.importorskip("keras")
+layers = keras.layers
 
 HLS_CONFIG = {
     "model": {"precision": "ap_fixed<16,6>", "reuse_factor": 1, "strategy": "Resource"}

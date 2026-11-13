@@ -15,6 +15,12 @@ pip install rule4ml
 
 This will only install the [base package](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/rule4ml) and its dependencies for resources and latency prediction. The [data_gen](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/) scripts and the [Jupyter notebooks](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks) are to be cloned from the repo if needed.
 
+The base package uses PyTorch for the default predictors. Keras models and predictors need an extra:
+
+```bash
+pip install "rule4ml[keras]"
+```
+
 The data generation dependencies are listed separately in [data_gen/requirements.txt](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/requirements.txt):
 
 ```bash
@@ -31,7 +37,7 @@ To get started with `rule4ml`, please refer to the detailed Jupyter Notebook [tu
 - Training and testing your own predictors.
 
 ### Usage
-Here's a quick example of how to use `rule4ml` to estimate resources and latency for a given model:
+The following example uses a Keras input model and requires `rule4ml[keras]`:
 
 ```python
 import keras
