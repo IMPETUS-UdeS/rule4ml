@@ -4,6 +4,14 @@ import os
 import re
 from bisect import bisect_left
 
+# hls4ml fixed-point grammar: width, integer bits, rounding, saturation, sat bits
+_ROUNDING = r"(?:ap_)?(?:trn|trn_zero|rnd|rnd_zero|rnd_inf|rnd_min_inf|rnd_conv)"
+_SATURATION = r"(?:ap_)?(?:wrap|sat|sat_zero|sat_sym)"
+_FIXED_PRECISION = re.compile(
+    rf"(?:ap_)?fixed<(\d+),(-?\d+)(?:,{_ROUNDING}(?:,{_SATURATION}(?:,\d+)?)?)?>",
+    re.IGNORECASE,
+)
+
 
 def camel_keys_to_snake(d: dict, recursive=True):
     """
@@ -91,29 +99,13 @@ def get_activation_name(activation):
 
 
 def fixed_precision_to_bit_width(precision: str):
-    """
-    _summary_
-
-    Args:
-        precision (str): _description_
-
-    Raises:
-        ValueError: _description_
-
-    Returns:
-        _type_: _description_
-    """
-
-    match = re.match(r"(ap_)?fixed<(\d+),\s*(\d+)>", precision.lower())
+    """Return (total_bits, integer_bits) of an hls4ml ap_fixed precision string."""
+    match = _FIXED_PRECISION.fullmatch(re.sub(r"\s", "", precision))
     if not match:
-        raise ValueError(f'Invalid format: {precision}, expecting "ap_fixed<a, b>"')
-
-    groups = match.groups()
-    if len(groups) == 3:
-        groups = groups[1:]
-
-    total_bits, integer_bits = map(str, groups)
-    return int(total_bits), int(integer_bits)
+        raise ValueError(
+            f'Invalid precision: {precision}, expecting "ap_fixed<W,I[,Q[,O[,N]]]>"'
+        )
+    return int(match[1]), int(match[2])
 
 
 def get_supported_boards():

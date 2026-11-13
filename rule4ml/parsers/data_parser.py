@@ -866,7 +866,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
     precision = hls_config["model"]["precision"]
     if isinstance(precision, dict):
         precision = precision["default"]
-    total_bits, fractional_bits = fixed_precision_to_bit_width(precision)
+    total_bits, integer_bits = fixed_precision_to_bit_width(precision)
 
     strategy = hls_config["model"]["strategy"]
     board = hls_config["board"]
@@ -876,8 +876,8 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         "board": board.lower(),
         "precision": precision.lower(),
         "bit_width": total_bits,
-        "integer_bits": total_bits - fractional_bits,
-        "fractional_bits": fractional_bits,
+        "integer_bits": integer_bits,
+        "fractional_bits": total_bits - integer_bits,
         "global_reuse": hls_config["model"]["reuse_factor"],
         "reuse_mean": reuse_factor_mean,
         "clock_period": kwargs.get("clock_period", None),
