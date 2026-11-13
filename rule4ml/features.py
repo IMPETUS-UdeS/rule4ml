@@ -24,6 +24,7 @@ def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
     global_inputs = get_global_inputs(
         model_config,
         hls_config,
+        clock_period=10.0,  # when the config sets none
         hls4ml_version=hls4ml_version,
         vivado_version=vivado_version,
     )
@@ -36,13 +37,10 @@ def record_features(record):
     if (target_part := record.get("target_part")) is not None:
         hls_config["board"] = get_board_from_part(target_part)
 
-    clock_period = hls_config.get("clock_period") or (
-        record.get("latency_report") or {}
-    ).get("target_clock")
     global_inputs = get_global_inputs(
         record["model_config"],
         hls_config,
-        clock_period=None if clock_period is None else float(clock_period),
+        clock_period=(record.get("latency_report") or {}).get("target_clock"),
         hls4ml_version=record.get("hls4ml_version"),
         vivado_version=record.get("vivado_version") or record.get("backend_version"),
     )

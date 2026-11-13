@@ -3,6 +3,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+import torch
 
 from rule4ml.dataset import split
 from rule4ml.models.architectures import (
@@ -27,20 +28,22 @@ GLOBAL_MAPS = {"strategy": default_strategy_map, "board": default_board_map}
 SEQUENTIAL_MAPS = {"layer_type": default_layer_type_map}
 
 
-def _torch_gnn():
-    settings = GNNSettings([4], [8], [2, 2], [2], [8], [False], [0.0])
+def _torch_gnn(linear_output=False):
+    settings = GNNSettings(
+        [4], [8], [2, 2], [2], [8], [False], [0.0], linear_output=linear_output
+    )
     return TorchGNN(settings, *_shapes(), GLOBAL_MAPS, SEQUENTIAL_MAPS, device="cpu")
 
 
-def _torch_mlp():
-    settings = MLPSettings([2, 2], [4], [8], [0.0])
+def _torch_mlp(linear_output=False):
+    settings = MLPSettings([2, 2], [4], [8], [0.0], linear_output=linear_output)
     return TorchMLP(settings, _shapes()[0], (None, 1), GLOBAL_MAPS, device="cpu")
 
 
-def _keras_mlp():
+def _keras_mlp(linear_output=False):
     from rule4ml.models.architectures import KerasMLP
 
-    settings = MLPSettings([2, 2], [4], [8], [0.0])
+    settings = MLPSettings([2, 2], [4], [8], [0.0], linear_output=linear_output)
     return KerasMLP(settings, _shapes()[0], (None, 1), GLOBAL_MAPS)
 
 
@@ -52,34 +55,29 @@ def _shapes():
     )
 
 
-@pytest.mark.parametrize(
-    ("wrapper_class", "build", "sequential"),
-    [
-        (TorchModelWrapper, _torch_gnn, True),
-        (TorchModelWrapper, _torch_mlp, False),
-        ("keras", _keras_mlp, False),
-    ],
-)
+BUILDS = [
+    (TorchModelWrapper, _torch_gnn, True),
+    (TorchModelWrapper, _torch_mlp, False),
+    ("keras", _keras_mlp, False),
+]
+
+
+@pytest.mark.parametrize(("wrapper_class", "build", "sequential"), BUILDS)
 @pytest.mark.parametrize(
     "scaler_class", [None, BoardScaler, BoardPercentScaler, Log1pScaler]
 )
 def test_fit_save_load(
     make_dataset, tmp_path, wrapper_class, build, sequential, scaler_class
 ):
-    if wrapper_class == "keras":
-        pytest.importorskip("tensorflow")
-        from rule4ml.models.wrappers import KerasModelWrapper
-
-        wrapper_class = KerasModelWrapper
+    wrapper = _wrapper(wrapper_class)
     train, val = split(make_dataset([1, 2, 3, 1, 2, 3, 4, 5]), 0.25, seed=0)
-    wrapper = wrapper_class()
     scaler = None
     if scaler_class == Log1pScaler:
         scaler = Log1pScaler()
     elif scaler_class is not None:
         scaler = scaler_class({"zcu102": {"lut": 1000}}, default_board_map)
     wrapper.set_model(
-        build(),
+        build(linear_output=scaler_class is Log1pScaler),  # Log1p centers targets
         GLOBAL_LABELS,
         ["lut"],
         SEQUENTIAL_LABELS if sequential else (),
@@ -90,12 +88,45 @@ def test_fit_save_load(
     wrapper.fit(train, TrainSettings(num_epochs=1, batch_size=4), val_dataset=val)
     assert wrapper.evaluate(val)["lut"]["n"] == len(val)
 
+    loaded = _reload(wrapper, tmp_path)
+    assert np.array_equal(loaded.predict_dataset(val), wrapper.predict_dataset(val))
+
+
+@pytest.mark.parametrize(("wrapper_class", "build", "sequential"), BUILDS)
+def test_load_linear_output(make_dataset, tmp_path, wrapper_class, build, sequential):
+    wrapper = _wrapper(wrapper_class)
+    model = build(linear_output=True)
+    if isinstance(wrapper, TorchModelWrapper):
+        torch.nn.init.zeros_(model.output_layer.weight)
+        torch.nn.init.constant_(model.output_layer.bias, -10.0)
+    else:
+        kernel, bias = model.layers[-1].get_weights()
+        model.layers[-1].set_weights([np.zeros_like(kernel), np.full_like(bias, -10)])
+    sequential_labels = SEQUENTIAL_LABELS if sequential else ()
+    wrapper.set_model(
+        model, GLOBAL_LABELS, ["lut"], sequential_labels, report="resource_report"
+    )
+
+    loaded = _reload(wrapper, tmp_path)
+    assert np.allclose(loaded.predict_dataset(make_dataset([1, 2, 3])), -10.0)
+
+
+def _wrapper(wrapper_class):
+    if wrapper_class == "keras":
+        pytest.importorskip("tensorflow")
+        from rule4ml.models.wrappers import KerasModelWrapper
+
+        wrapper_class = KerasModelWrapper
+    return wrapper_class()
+
+
+def _reload(wrapper, tmp_path):
     wrapper.save(tmp_path / "bundle")
     config = next((tmp_path / "bundle").glob("*.config.json"))
     weights = next(p for p in (tmp_path / "bundle").iterdir() if p != config)
-    loaded = wrapper_class()
+    loaded = type(wrapper)()
     loaded.load(str(config), str(weights))
-    assert np.array_equal(loaded.predict_dataset(val), wrapper.predict_dataset(val))
+    return loaded
 
 
 def test_scaler_train_only(make_dataset):
@@ -103,7 +134,11 @@ def test_scaler_train_only(make_dataset):
     wrapper = TorchModelWrapper()
     scaler = Log1pScaler()
     wrapper.set_model(
-        _torch_mlp(), GLOBAL_LABELS, ["lut"], report="resource_report", scaler=scaler
+        _torch_mlp(linear_output=True),
+        GLOBAL_LABELS,
+        ["lut"],
+        report="resource_report",
+        scaler=scaler,
     )
 
     wrapper.fit(train, TrainSettings(num_epochs=1, batch_size=4), val_dataset=val)

@@ -683,6 +683,7 @@ class KerasModelWrapper(BaseModelWrapper):
         super().__init__()
 
     def _fit(self, train, val, train_settings, seed, callbacks, verbose):
+        self._set_mc_dropout(False)  # left on by mc_predict, validation must not drop
         self.optimizer = train_settings.optimizer
         if isinstance(self.optimizer, str):
             self.optimizer = get_optimizer_from_str(
@@ -721,16 +722,19 @@ class KerasModelWrapper(BaseModelWrapper):
         )
 
     def _model_predict(self, inputs, batch_size, mc_dropout, verbose=0):
+        self._set_mc_dropout(mc_dropout)
+        return self.model.predict(inputs, batch_size, verbose=verbose)
+
+    def _set_mc_dropout(self, enabled):
         dropouts = [
             layer
             for layer in self.model._flatten_layers(include_self=False)
             if isinstance(layer, architectures.KerasMCDropout)
         ]
-        if any(layer.enable_mc != mc_dropout for layer in dropouts):
+        if any(layer.enable_mc != enabled for layer in dropouts):
             for layer in dropouts:
-                layer.enable_mc = mc_dropout
+                layer.enable_mc = enabled
             self.model.predict_function = None  # the flag is traced into the graph
-        return self.model.predict(inputs, batch_size, verbose=verbose)
 
     def _save_weights(self, save_dir):
         weights_path = os.path.join(save_dir, f"{self.model.name}.weights.h5")

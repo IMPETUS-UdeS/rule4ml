@@ -293,13 +293,10 @@ def generate_fc_network(settings: GeneratorSettings, rng=None, verbose=0):
                     if range_class_name == Power2Range.__name__:
                         bn_limit = 2 ** int(np.log2(bn_limit))
                     max_units = min(max_units, bn_limit)
-            if max_units != units:
-                range_class = globals()[unit_range.__class__.__name__]
-                units = range_class(
-                    settings.neuron_range.min, max_units
-                ).random_in_range(
-                    rng
-                )  # Forcing down units to a range within parameter_limit
+            if max_units != units:  # Force units into a range within parameter_limit
+                units = type(unit_range)(
+                    min(unit_range.min, max_units), max_units
+                ).random_in_range(rng)
 
         activation_choices = settings.activations
         if (

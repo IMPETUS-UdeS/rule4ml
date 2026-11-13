@@ -711,6 +711,9 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
     strategy = hls_config["model"]["strategy"]
     board = hls_config["board"]
+    clock_period = hls_config.get("clock_period")
+    if clock_period is None:
+        clock_period = kwargs.get("clock_period")
 
     inputs = {
         "strategy": strategy.lower(),
@@ -721,7 +724,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         "fractional_bits": total_bits - integer_bits,
         "global_reuse": hls_config["model"]["reuse_factor"],
         "reuse_mean": reuse_factor_mean,
-        "clock_period": kwargs.get("clock_period", None),
+        "clock_period": None if clock_period is None else float(clock_period),
         "hls4ml_version": kwargs.get("hls4ml_version", None),
         "vivado_version": kwargs.get("vivado_version", None),
     }

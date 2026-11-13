@@ -34,6 +34,7 @@ class MLPSettings:
             0.0,
         ]
     )
+    linear_output: bool = False  # for centered targets (Log1pScaler)
 
     def to_config(self):
         return {
@@ -41,6 +42,7 @@ class MLPSettings:
             "numerical_dense_layers": self.numerical_dense_layers,
             "dense_layers": self.dense_layers,
             "dense_dropouts": self.dense_dropouts,
+            "linear_output": self.linear_output,
         }
 
     @classmethod
@@ -66,6 +68,7 @@ class GNNSettings:
         ]
     )
     bayesian_output: bool = False
+    linear_output: bool = False  # for centered targets (Log1pScaler)
 
     def to_config(self):
         return {
@@ -77,6 +80,7 @@ class GNNSettings:
             "bayesian_dense": self.bayesian_dense,
             "dense_dropouts": self.dense_dropouts,
             "bayesian_output": self.bayesian_output,
+            "linear_output": self.linear_output,
         }
 
     @classmethod
@@ -140,7 +144,9 @@ if keras is not None:
                     x = KerasMCDropout(settings.dense_dropouts[idx])(x)
 
             model_inputs = categorical_inputs + [numerical_inputs]
-            model_outputs = keras.layers.Dense(output_shape[-1], activation="relu")(x)
+            model_outputs = keras.layers.Dense(
+                output_shape[-1], activation=None if settings.linear_output else "relu"
+            )(x)
 
             super().__init__(inputs=model_inputs, outputs=model_outputs, name=name)
             super().build([None] + list(input_shape))
@@ -167,6 +173,25 @@ if keras is not None:
         def from_config(cls, config):
             config["settings"] = MLPSettings.from_config(config["settings"])
             return cls(**config)
+
+    class KerasMCDropout(keras.layers.Dropout):
+        def __init__(self, rate, **kwargs):
+            """
+            Expose an additional attribute to better control the call method's
+            'training' argument for MC Dropout at inference time.
+            """
+            self.enable_mc = kwargs.pop("enable_mc", False)
+            super().__init__(rate, **kwargs)
+
+        def call(self, inputs, training=None):
+            # Normal behavior during training:
+            #   - when training=True (from model.fit)
+            #   - when training=False, dropout would normally be off (assuming enable_mc=False).
+            # During inference, if enable_mc is True, we force training=True to enable MC dropout.
+
+            if not training and self.enable_mc:
+                training = True
+            return super().call(inputs, training=training)
 
 
 class TorchMLP(torch.nn.Module):
@@ -250,8 +275,8 @@ class TorchMLP(torch.nn.Module):
                 x = dropout(x)
 
         outputs = self.output_layer(x)
-        outputs = torch.nn.functional.softplus(outputs)
-        # outputs = torch.nn.functional.relu(outputs)
+        if not self.settings.linear_output:
+            outputs = torch.nn.functional.softplus(outputs)
         return outputs
 
     def to_config(self):
@@ -500,8 +525,8 @@ class TorchGNN(torch.nn.Module):
         outputs = self.output_layer(x)
         if hasattr(self.output_layer, "kl_divergence"):
             self.kl_loss += self.output_layer.kl_divergence()
-        outputs = torch.nn.functional.softplus(outputs)
-        # outputs = torch.nn.functional.relu(outputs)
+        if not self.settings.linear_output:
+            outputs = torch.nn.functional.softplus(outputs)
         return outputs
 
     def to_config(self):
@@ -519,28 +544,6 @@ class TorchGNN(torch.nn.Module):
     def from_config(cls, config):
         config["settings"] = GNNSettings.from_config(config["settings"])
         return cls(**config)
-
-
-if keras is not None:
-
-    class KerasMCDropout(keras.layers.Dropout):
-        def __init__(self, rate, **kwargs):
-            """
-            Expose an additional attribute to better control the call method's
-            'training' argument for MC Dropout at inference time.
-            """
-            self.enable_mc = kwargs.pop("enable_mc", False)
-            super().__init__(rate, **kwargs)
-
-        def call(self, inputs, training=None):
-            # Normal behavior during training:
-            #   - when training=True (from model.fit), keep it.
-            #   - when training=False, dropout would normally be off (assuming enable_mc=False).
-            # During inference, if enable_mc is True, we force training=True to enable MC dropout.
-
-            if not training and self.enable_mc:
-                training = True
-            return super().call(inputs, training=training)
 
 
 class TorchBayesianLinear(torch.nn.Module):
