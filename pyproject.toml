@@ -44,8 +44,5 @@ version_file = "rule4ml/_version.py"
 target-version = "py310"
 extend-exclude = ["hls4ml"]
 
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["utils.FloatRange", "utils.IntRange", "utils.Power2Range"]
-
 [tool.ruff.lint.isort]
 known-third-party = ["hls4ml"]

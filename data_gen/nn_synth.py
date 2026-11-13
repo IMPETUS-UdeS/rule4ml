@@ -12,10 +12,8 @@ import hls4ml
 import numpy as np
 import tensorflow as tf
 from hls4ml.backends.backend import get_available_backends, get_backend
-from nn_gen import GeneratorSettings, generate_fc_network
+from nn_gen import GeneratorSettings, IntRange, Power2Range, generate_fc_network
 from utils import (
-    IntRange,
-    Power2Range,
     data_from_synthesis,
     get_cpu_info,
     md5_hash_dict,
@@ -72,7 +70,7 @@ class SynthSettings:
 
     # Default settings, used for original dataset
 
-    reuse_range: Power2Range = Power2Range(1, 64)
+    reuse_range: Power2Range = field(default_factory=lambda: Power2Range(1, 64))
     precisions: list = field(
         default_factory=lambda: [
             "ap_fixed<2, 1>",
@@ -84,7 +82,7 @@ class SynthSettings:
     strategies: list = field(default_factory=lambda: ["Latency", "Resource"])
     boards: list = field(default_factory=lambda: ["pynq-z2", "zcu102", "alveo-u200"])
 
-    clock_period_range: IntRange = IntRange(10, 10)
+    clock_period_range: IntRange = field(default_factory=lambda: IntRange(10, 10))
     io_types: list = field(default_factory=lambda: ["io_parallel"])
 
     backends: list = field(default_factory=lambda: ["VivadoAccelerator"])

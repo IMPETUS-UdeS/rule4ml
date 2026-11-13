@@ -12,7 +12,81 @@ from keras.layers import (
     Input,
 )
 from keras.models import Model
-from utils import FloatRange, IntRange, Power2Range
+
+
+@dataclass(frozen=True)
+class IntRange:
+    """Integer range with a step."""
+
+    min: int
+    max: int
+    step: int = 1
+
+    def __post_init__(self):
+        if self.min > self.max or self.step < 1:
+            raise ValueError(f"Invalid range: {self}")
+
+    def random_in_range(self, rng=None, size=None, endpoint=True):
+        if rng is None:
+            rng = np.random.default_rng()
+
+        return rng.choice(self.to_list(endpoint), size=size)
+
+    def to_list(self, endpoint=True):
+        return list(range(self.min, self.max + int(endpoint), self.step))
+
+
+@dataclass(frozen=True)
+class Power2Range:
+    """Range of powers of two."""
+
+    min: int
+    max: int
+
+    def __post_init__(self):
+        if not 1 <= self.min <= self.max:
+            raise ValueError(f"Invalid range: {self}")
+
+    @property
+    def min_exp(self):
+        return int(np.log2(self.min))
+
+    @property
+    def max_exp(self):
+        return int(np.log2(self.max))
+
+    def random_in_range(self, rng=None, size=None, endpoint=True):
+        if rng is None:
+            rng = np.random.default_rng()
+
+        rnd_exp = rng.integers(
+            self.min_exp, high=self.max_exp, size=size, endpoint=endpoint
+        )
+        return 2**rnd_exp
+
+    def to_list(self, endpoint=True):
+        return [2**x for x in range(self.min_exp, self.max_exp + int(endpoint))]
+
+
+@dataclass(frozen=True)
+class FloatRange:
+    """Continuous float range."""
+
+    min: float
+    max: float
+
+    def __post_init__(self):
+        if self.min > self.max:
+            raise ValueError(f"Invalid range: {self}")
+
+    def random_in_range(self, rng=None, size=None):
+        if rng is None:
+            rng = np.random.default_rng()
+
+        return rng.uniform(self.min, self.max, size=size)
+
+    def to_list(self, n_samples=50, endpoint=True):
+        return np.linspace(self.min, self.max, num=n_samples, endpoint=endpoint)
 
 
 @dataclass
@@ -288,9 +362,8 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
 
         use_bias = model_bias and rng.random() < settings.bias_probability_func(i + 1)
 
-        unit_range = Power2Range(
-            settings.min_neurons, min(dense_units[-1], settings.max_neurons)
-        )
+        max_units = min(dense_units[-1], settings.max_neurons)
+        unit_range = Power2Range(min(settings.min_neurons, max_units), max_units)
         units = unit_range.random_in_range(rng)
 
         if settings.parameter_limit > 0:
@@ -304,9 +377,9 @@ def generate_ae_network(settings: GeneratorSettings, rng=None, verbose=0):
                     max_units = min(max_units, bias_limit)
 
             if max_units != units:
-                units = Power2Range(settings.min_neurons, max_units).random_in_range(
-                    rng
-                )
+                units = Power2Range(
+                    min(settings.min_neurons, max_units), max_units
+                ).random_in_range(rng)
 
         if i < n_enc_layers - 1:
             dense_units.append(units)

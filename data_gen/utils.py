@@ -8,64 +8,6 @@ import numpy as np
 import psutil
 
 
-class IntRange:
-    """Integer range with a step."""
-
-    def __init__(self, min_int: int, max_int: int, step: int = 1):
-        self.min = min(min_int, max_int)
-        self.max = max_int
-        self.step = step
-
-    def random_in_range(self, rng=None, size=None, endpoint=True):
-        if rng is None:
-            rng = np.random.default_rng()
-
-        return rng.choice(self.to_list(endpoint), size=size)
-
-    def to_list(self, endpoint=True):
-        return list(range(self.min, self.max + int(endpoint), self.step))
-
-
-class Power2Range:
-    """Range of powers of two."""
-
-    def __init__(self, min_int: int, max_int: int):
-        self.min = min(min_int, max_int)
-        self.max = max_int
-
-        self.min_exp = max(0, int(np.log2(self.min)))
-        self.max_exp = int(np.log2(self.max))
-
-    def random_in_range(self, rng=None, size=None, endpoint=True):
-        if rng is None:
-            rng = np.random.default_rng()
-
-        rnd_exp = rng.integers(
-            self.min_exp, high=self.max_exp, size=size, endpoint=endpoint
-        )
-        return 2**rnd_exp
-
-    def to_list(self, endpoint=True):
-        return [2**x for x in range(self.min_exp, self.max_exp + int(endpoint))]
-
-
-class FloatRange:
-    """Continuous float range."""
-
-    def __init__(self, min_float: float, max_float: float):
-        self.min = min(min_float, max_float)
-        self.max = max_float
-
-    def random_in_range(self, rng=None, size=None):
-        if rng is None:
-            rng = np.random.default_rng()
-
-        return rng.uniform(self.min, self.max, size=size)
-
-    def to_list(self, n_samples=50, endpoint=True):
-        return np.linspace(self.min, self.max, num=n_samples, endpoint=endpoint)
-
-
 def data_from_report(path):
     """
     Grabs resource usage and latency info from the synthesis report file (.rpt)
