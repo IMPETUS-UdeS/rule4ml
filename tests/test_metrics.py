@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
+import torch
 
-from rule4ml.models.metrics import evaluate
+from rule4ml.models.metrics import TorchParametricMAPE, evaluate
 
 
 def test_evaluate_partial_targets():
@@ -30,3 +31,25 @@ def test_evaluate_nonfinite():
 def test_evaluate_shape_mismatch(prediction):
     with pytest.raises(ValueError, match="shape"):
         evaluate(np.ones((2, 1)), prediction, ["lut"])
+
+
+def test_torch_mape_batches():
+    mape = TorchParametricMAPE(0, device=torch.device("cpu"))
+    mape.update(torch.ones(2, 1), torch.ones(2, 1))
+    mape.update(torch.ones(1, 1), torch.full((1, 1), 2.0))
+
+    assert mape.result().item() == pytest.approx(100 / 3)  # 0%, 0%, 100%
+
+
+def test_keras_r2_batches():
+    pytest.importorskip("tensorflow")
+    from rule4ml.models.metrics import KerasParametricR2
+
+    y_true = np.array([[0.0], [1.0], [2.0], [3.0]], dtype=np.float32)
+    y_pred = np.array([[1.0], [1.0], [2.0], [2.0]], dtype=np.float32)
+
+    metric = KerasParametricR2(0)
+    metric.update_state(y_true[:2], y_pred[:2])
+    metric.update_state(y_true[2:], y_pred[2:])
+
+    assert float(metric.result()) == pytest.approx(0.6)

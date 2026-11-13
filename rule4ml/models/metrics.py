@@ -152,32 +152,31 @@ if keras is not None:
             super().__init__(name=name, **kwargs)
             self.y_index = y_index
             self.eps = eps
-            self.total = self.add_weight(name="total", initializer="zeros")
-            self.count = self.add_weight(name="count", initializer="zeros")
+
+            # float64, ss_tot subtracts two large sums
+            self.sums = [
+                self.add_weight(name=name, initializer="zeros", dtype="float64")
+                for name in ("ss_res", "sum_true", "sum_squares", "count")
+            ]
 
         def update_state(self, y_true, y_pred, sample_weight=None):
-            y_true_i = y_true[..., self.y_index]
-            y_pred_i = y_pred[..., self.y_index]
+            y_true_i = tf.cast(y_true[..., self.y_index], tf.float64)
+            y_pred_i = tf.cast(y_pred[..., self.y_index], tf.float64)
 
-            if kops is None:
-                mean_true = tf.reduce_mean(y_true_i, axis=-1, keepdims=True)
-                ss_res = tf.reduce_sum(tf.square(y_true_i - y_pred_i), axis=-1)
-                ss_tot = tf.reduce_sum(tf.square(y_true_i - mean_true), axis=-1)
-                ss_tot = tf.maximum(ss_tot, self.eps)
-                r2_score = 1.0 - ss_res / ss_tot
-                self.total.assign_add(tf.reduce_sum(r2_score))
-                self.count.assign_add(tf.cast(tf.size(r2_score), tf.float32))
-            else:
-                mean_true = kops.mean(y_true_i, axis=-1, keepdims=True)
-                ss_res = kops.sum(kops.square(y_true_i - y_pred_i), axis=-1)
-                ss_tot = kops.sum(kops.square(y_true_i - mean_true), axis=-1)
-                ss_tot = kops.maximum(ss_tot, self.eps)
-                r2_score = 1.0 - ss_res / ss_tot
-                self.total.assign_add(kops.sum(r2_score))
-                self.count.assign_add(kops.cast(kops.size(r2_score), tf.float32))
+            batch = (
+                tf.square(y_true_i - y_pred_i),
+                y_true_i,
+                tf.square(y_true_i),
+                tf.ones_like(y_true_i),
+            )
+
+            for total, values in zip(self.sums, batch):
+                total.assign_add(tf.reduce_sum(values))
 
         def result(self):
-            return self.total / self.count
+            ss_res, sum_true, sum_squares, count = self.sums
+            ss_tot = tf.maximum(sum_squares - sum_true**2 / count, self.eps)
+            return tf.cast(1.0 - ss_res / ss_tot, tf.float32)
 
 
 class TorchParametricMAPE(torch.nn.Module):
@@ -199,14 +198,14 @@ class TorchParametricMAPE(torch.nn.Module):
         self.total = torch.zeros(1, dtype=torch.float32, device=self.device)
         self.count = torch.zeros(1, dtype=torch.float32, device=self.device)
 
-    def update(self, y_true, y_pred, keys=None):
+    def update(self, y_true, y_pred, keys=None, input_rows=None):
         y_true_i = y_true[..., self.y_index]
         y_pred_i = y_pred[..., self.y_index]
 
         if self.scaler and keys:
             key = keys[self.y_index]
-            y_true_i = self.scaler.inverse({key: y_true_i})[key]
-            y_pred_i = self.scaler.inverse({key: y_pred_i})[key]
+            y_true_i = self.scaler.inverse_rows(y_true_i, key, input_rows)
+            y_pred_i = self.scaler.inverse_rows(y_pred_i, key, input_rows)
 
         y_true_i = y_true_i.reshape(-1)
         y_pred_i = y_pred_i.reshape(-1)
@@ -214,7 +213,7 @@ class TorchParametricMAPE(torch.nn.Module):
         diff = torch.abs(y_true_i - y_pred_i) / torch.clamp(
             torch.abs(y_true_i), min=self.eps
         )
-        mape = 100.0 * torch.mean(diff, dim=-1)
+        mape = 100.0 * diff
 
         self.total += torch.sum(mape)
         self.count += torch.tensor(
@@ -251,14 +250,14 @@ class TorchParametricSMAPE(torch.nn.Module):
         self.total = torch.zeros(1, dtype=torch.float32, device=self.device)
         self.count = torch.zeros(1, dtype=torch.float32, device=self.device)
 
-    def update(self, y_true, y_pred, keys=None):
+    def update(self, y_true, y_pred, keys=None, input_rows=None):
         y_true_i = y_true[..., self.y_index]
         y_pred_i = y_pred[..., self.y_index]
 
         if self.scaler and keys:
             key = keys[self.y_index]
-            y_true_i = self.scaler.inverse({key: y_true_i})[key]
-            y_pred_i = self.scaler.inverse({key: y_pred_i})[key]
+            y_true_i = self.scaler.inverse_rows(y_true_i, key, input_rows)
+            y_pred_i = self.scaler.inverse_rows(y_pred_i, key, input_rows)
 
         y_true_i = y_true_i.reshape(-1)
         y_pred_i = y_pred_i.reshape(-1)
@@ -303,14 +302,14 @@ class TorchParametricR2(torch.nn.Module):
 
         self.reset()
 
-    def update(self, y_true, y_pred, keys=None):
+    def update(self, y_true, y_pred, keys=None, input_rows=None):
         y_true_i = y_true[..., self.y_index]
         y_pred_i = y_pred[..., self.y_index]
 
         if self.scaler and keys:
             key = keys[self.y_index]
-            y_true_i = self.scaler.inverse({key: y_true_i})[key]
-            y_pred_i = self.scaler.inverse({key: y_pred_i})[key]
+            y_true_i = self.scaler.inverse_rows(y_true_i, key, input_rows)
+            y_pred_i = self.scaler.inverse_rows(y_pred_i, key, input_rows)
 
         y_true_i = y_true_i.reshape(-1)
         y_pred_i = y_pred_i.reshape(-1)

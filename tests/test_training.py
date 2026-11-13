@@ -12,6 +12,7 @@ from rule4ml.models.architectures import (
     TorchGNN,
     TorchMLP,
 )
+from rule4ml.models.metrics import TorchParametricR2, r2
 from rule4ml.models.scaling import BoardPercentScaler, BoardScaler, Log1pScaler
 from rule4ml.models.wrappers import TorchModelWrapper, TrainSettings
 from rule4ml.parsers.data_parser import (
@@ -154,6 +155,42 @@ def test_scaler_train_only(make_dataset):
     assert scaler.mu["lut"] == pytest.approx(np.log1p(lut).mean())
 
 
+@pytest.mark.parametrize("scaler_class", [BoardScaler, Log1pScaler])
+def test_fit_scaled_metrics(make_dataset, scaler_class):
+    dataset = make_dataset([1, 2, 3, 4, 5, 6, 7, 8])
+    codes, vocab = dataset.categoricals["board"]
+    vocab = np.append(vocab, "pynq-z2")
+    codes = np.where(np.arange(len(codes)) % 2, len(vocab) - 1, codes)
+    dataset = replace(
+        dataset, categoricals={**dataset.categoricals, "board": (codes, vocab)}
+    )
+
+    train, val = split(dataset, 0.5, seed=0)
+
+    if scaler_class == Log1pScaler:
+        scaler = Log1pScaler()
+    else:
+        resources = {"zcu102": {"lut": 1000}, "pynq-z2": {"lut": 50}}
+        scaler = scaler_class(resources, default_board_map)
+
+    wrapper = TorchModelWrapper()
+    wrapper.set_model(
+        _torch_mlp(linear_output=scaler_class is Log1pScaler),
+        GLOBAL_LABELS,
+        ["lut"],
+        report="resource_report",
+        scaler=scaler,
+    )
+    metric = TorchParametricR2(0, scaler=scaler, device=torch.device("cpu"))
+
+    settings = TrainSettings(num_epochs=1, batch_size=2, metrics=[metric])
+    history = wrapper.fit(train, settings, val_dataset=val)
+
+    true = val.targets(["lut"], "resource_report")[:, 0]
+    predicted = wrapper.predict_dataset(val)[:, 0]
+    assert history["val"]["r2_0"][-1] == pytest.approx(r2(true, predicted), rel=1e-4)
+
+
 def test_predict_unmapped_board(make_dataset):
     wrapper = TorchModelWrapper()
     maps = {"strategy": default_strategy_map, "board": {"pynq-z2": 1}}
@@ -216,7 +253,7 @@ def test_training_partial_targets(make_dataset):
         scaler=BoardScaler({"zcu102": {"cycles": 10, "lut": 100}}, maps["board"]),
     )
 
-    inputs, targets = wrapper.training_data(dataset)
+    inputs, targets, _ = wrapper.training_data(dataset)
 
     np.testing.assert_allclose(targets, [[4.8, 1.0]])
     for key in model.global_input_keys["categorical"]:

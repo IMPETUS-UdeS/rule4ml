@@ -22,7 +22,8 @@ from rule4ml.models.architectures import (
     TorchMLP,
 )
 from rule4ml.models.callbacks import EarlyStopping
-from rule4ml.models.utils import get_loss_from_str, get_optimizer_from_str
+from rule4ml.models.losses import get_loss_from_str
+from rule4ml.models.utils import get_optimizer_from_str
 from rule4ml.parsers.data_parser import (
     boards_data,
 )
@@ -139,7 +140,7 @@ class BaseModelWrapper:
         return self._fit(train, val, train_settings, seed, callbacks, verbose)
 
     def training_data(self, dataset, fit_scaler=False):
-        """Model inputs and scaled float32 targets of records with every target."""
+        """Inputs, scaled targets and scaler rows of records with every target."""
 
         targets = dataset.targets(self.output_labels, self.report)
         dataset = dataset.subset(np.flatnonzero(np.isfinite(targets).all(axis=1)))
@@ -148,25 +149,23 @@ class BaseModelWrapper:
 
         targets = dataset.targets(self.output_labels, self.report)
         inputs, numerical, codes = self._dataset_inputs(dataset)
+
+        input_rows = None
         if self.scaler:
+            input_rows = self._scaler_rows(numerical, codes)
             target_rows = [
                 dict(zip(self.output_labels, row)) for row in targets.tolist()
             ]
 
             if fit_scaler:
                 self.scaler.fit(target_rows)
+
+            scaled_rows = map(self.scaler.transform, target_rows, input_rows)
             targets = np.array(
-                [
-                    [
-                        self.scaler.transform(target_row, input_row)[label]
-                        for label in self.output_labels
-                    ]
-                    for target_row, input_row in zip(
-                        target_rows, self._scaler_rows(numerical, codes)
-                    )
-                ]
+                [[row[label] for label in self.output_labels] for row in scaled_rows]
             )
-        return inputs, targets.astype(np.float32)
+
+        return inputs, targets.astype(np.float32), input_rows
 
     def predict_dataset(self, dataset, mc_dropout=False, verbose=0):
         """Raw-unit predictions for every record of a Dataset, in order.
@@ -553,9 +552,10 @@ class TorchModelWrapper(BaseModelWrapper):
         history = {"train": {"loss": [], **{m.name: [] for m in metric_functions}}}
         if val is not None:
             history["val"] = {"loss": [], **{m.name: [] for m in metric_functions}}
-            val = (self._tensors(val[0]), torch.from_numpy(val[1]))
+            val = (self._tensors(val[0]), torch.from_numpy(val[1]), val[2])
 
         inputs, targets = self._tensors(train[0]), torch.from_numpy(train[1])
+        input_rows = train[2]
         batch_size = train_settings.batch_size
         num_batches = -(-len(targets) // batch_size)
         generator = torch.Generator().manual_seed(seed)
@@ -589,9 +589,14 @@ class TorchModelWrapper(BaseModelWrapper):
 
                     train_loss += loss.item() * len(rows)
                     seen += len(rows)
+
+                    batch_rows = _select(input_rows, rows)
                     for m in metric_functions:
                         m.update(
-                            batch_targets.detach(), outputs.detach(), self.output_labels
+                            batch_targets.detach(),
+                            outputs.detach(),
+                            self.output_labels,
+                            batch_rows,
                         )
 
                     postfix = {"loss": f"{train_loss / seen:.6f}"}
@@ -651,7 +656,8 @@ class TorchModelWrapper(BaseModelWrapper):
 
     def _validation_loss(self, val, loss_function, metric_functions, batch_size):
         """Record-weighted validation loss, updating the metrics."""
-        inputs, targets = val
+
+        inputs, targets, input_rows = val
         self.model.eval()
         total = 0.0
 
@@ -664,8 +670,10 @@ class TorchModelWrapper(BaseModelWrapper):
 
                 outputs = self.model(batch)
                 total += loss_function(outputs, batch_targets).item() * len(rows)
+
+                batch_rows = _select(input_rows, rows)
                 for m in metric_functions:
-                    m.update(batch_targets, outputs, self.output_labels)
+                    m.update(batch_targets, outputs, self.output_labels, batch_rows)
 
         return total / len(targets)
 
@@ -742,7 +750,7 @@ class KerasModelWrapper(BaseModelWrapper):
 
         batch_size = train_settings.batch_size
         train_data = (
-            tf.data.Dataset.from_tensor_slices(train)
+            tf.data.Dataset.from_tensor_slices(train[:2])
             .shuffle(len(train[1]), seed=seed)
             .batch(batch_size)
         )
@@ -750,7 +758,7 @@ class KerasModelWrapper(BaseModelWrapper):
         val_data = (
             None
             if val is None
-            else tf.data.Dataset.from_tensor_slices(val).batch(batch_size)
+            else tf.data.Dataset.from_tensor_slices(val[:2]).batch(batch_size)
         )
 
         return self.model.fit(
@@ -972,6 +980,10 @@ class MultiModelWrapper:
                 )
 
         return outputs_df
+
+
+def _select(input_rows, rows):
+    return None if input_rows is None else [input_rows[i] for i in rows.tolist()]
 
 
 def _check_finite(values, labels):

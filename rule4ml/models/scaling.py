@@ -18,6 +18,14 @@ class BaseScaler:
     def inverse(self, target_row, input_row):
         raise NotImplementedError()
 
+    def inverse_rows(self, values, key, input_rows):
+        return torch.stack(
+            [
+                self.inverse({key: value}, input_row)[key]
+                for value, input_row in zip(values, input_rows, strict=True)
+            ]
+        )
+
     def to_config(self):
         raise NotImplementedError()
 
