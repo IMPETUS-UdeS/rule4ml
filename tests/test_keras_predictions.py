@@ -5,7 +5,7 @@ import pytest
 
 keras = pytest.importorskip("keras")
 layers = keras.layers
-from rule4ml.models.wrappers import KerasModelWrapper
+from rule4ml.surrogates import KerasSurrogate
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
@@ -68,7 +68,7 @@ def test_predict_mixed_models(estimator, top_quarks):
 
 
 def test_mc_predict(check_mc_dropout):
-    check_mc_dropout(KerasModelWrapper(), "v2/mlp/LUT.weights.h5", ([], []))
+    check_mc_dropout(KerasSurrogate(), "v2/mlp/LUT.weights.h5", ([], []))
 
 
 @pytest.fixture(params=["sequential", "functional", "subclassed"])

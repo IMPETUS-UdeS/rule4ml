@@ -43,7 +43,7 @@ The following example uses a Keras input model and requires `rule4ml[keras]`:
 import keras
 from keras.layers import Input, Dense, Activation
 
-from rule4ml.models.wrappers import MultiModelWrapper
+from rule4ml.surrogates import MultiSurrogate
 
 # Example of a simple keras Model
 input_size = 16
@@ -57,10 +57,10 @@ model_to_predict = keras.Model(inputs=inputs, outputs=outputs, name="Jet Classif
 model_to_predict.build((None, input_size))  # building keras models is required
 
 # Loading default predictors
-estimator = MultiModelWrapper()
-estimator.load_default_models()
+estimator = MultiSurrogate()
+estimator.load_default_surrogates()
 
-# MultiModelWrapper predictions are formatted as a pandas DataFrame
+# MultiSurrogate predictions are formatted as a pandas DataFrame
 prediction_df = estimator.predict(model_to_predict)
 
 # Further formatting can be applied to organize the DataFrame

@@ -7,15 +7,15 @@ import torch
 
 import rule4ml
 from rule4ml.dataset import load, prepare
-from rule4ml.models.wrappers import MultiModelWrapper
+from rule4ml.surrogates import MultiSurrogate
 
 WEIGHTS = Path(rule4ml.__file__).parent / "models" / "weights"
 
 
 @pytest.fixture(scope="session")
 def estimator():
-    estimator = MultiModelWrapper()
-    estimator.load_default_models()
+    estimator = MultiSurrogate()
+    estimator.load_default_surrogates()
     return estimator
 
 
@@ -40,17 +40,19 @@ def top_quarks():
 def check_mc_dropout(hls_config, top_quarks):
     """Load a shipped bundle, then check MC sampling varies and leaves predict as is."""
 
-    def check(wrapper, bundle, versions):
+    def check(surrogate, bundle, versions):
         config = bundle.split(".weights")[0] + ".config.json"
-        wrapper.load(str(WEIGHTS / config), str(WEIGHTS / bundle))
+        surrogate.load(str(WEIGHTS / config), str(WEIGHTS / bundle))
         args = ([top_quarks], [hls_config], *versions)
 
-        before = wrapper.predict(*args)
-        mean, std, samples = wrapper.mc_predict(*args, num_samples=20, return_all=True)
+        before = surrogate.predict(*args)
+        mean, std, samples = surrogate.mc_predict(
+            *args, num_samples=20, return_all=True
+        )
 
         assert mean.shape == std.shape == (1, 1)
         assert len(np.unique(samples)) > 1
-        assert np.array_equal(wrapper.predict(*args), before)
+        assert np.array_equal(surrogate.predict(*args), before)
 
     return check
 

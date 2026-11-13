@@ -44,7 +44,7 @@ class TrainSettings:
     metrics: list = field(default_factory=list)
 
 
-class BaseModelWrapper:
+class BaseSurrogate:
     def __init__(self):
         self.reset()
 
@@ -513,7 +513,7 @@ class BaseModelWrapper:
         raise NotImplementedError("This method should be implemented in subclasses.")
 
 
-class TorchModelWrapper(BaseModelWrapper):
+class TorchSurrogate(BaseSurrogate):
     def __init__(self):
         super().__init__()
 
@@ -721,7 +721,7 @@ class TorchModelWrapper(BaseModelWrapper):
         )
 
 
-class KerasModelWrapper(BaseModelWrapper):
+class KerasSurrogate(BaseSurrogate):
     def __init__(self):
         if tf is None:
             raise ImportError('Keras support needs: pip install "rule4ml[keras]"')
@@ -796,21 +796,23 @@ class KerasModelWrapper(BaseModelWrapper):
         self.model.load_weights(weights_path)
 
 
-class MultiModelWrapper:
+class MultiSurrogate:
     """One predictor per target group, with predictions merged per model and config."""
 
     _default_precisions = ("ap_fixed<2, 1>", "ap_fixed<8, 3>", "ap_fixed<16, 6>")
     _default_reuse_factors = (1, 2, 4, 8, 16, 32, 64)
 
     def __init__(self):
-        self._models: dict[str, BaseModelWrapper] = {}
+        self._surrogates: dict[str, BaseSurrogate] = {}
 
-    def add_model_wrapper(self, model_wrapper: BaseModelWrapper):
-        key = "-".join([x.upper() for x in model_wrapper.output_labels])
-        self._models[key] = model_wrapper
+    def add_surrogate(self, surrogate: BaseSurrogate):
+        key = "-".join([x.upper() for x in surrogate.output_labels])
+        self._surrogates[key] = surrogate
 
-    def load_default_models(self):
-        base_path = os.path.join(os.path.dirname(__file__), "weights", "v2", "gnn")
+    def load_default_surrogates(self):
+        base_path = os.path.join(
+            os.path.dirname(__file__), "models", "weights", "v2", "gnn"
+        )
         default_paths = [
             os.path.join(base_path, "BRAM"),
             os.path.join(base_path, "DSP"),
@@ -830,18 +832,18 @@ class MultiModelWrapper:
             class_name = config.get("model_class", None)
             if class_name == "KerasMLP":
                 if os.path.exists(f"{path}.weights.h5"):
-                    model_wrapper = KerasModelWrapper()
-                    model_wrapper.load(f"{path}.config.json", f"{path}.weights.h5")
-                    self.add_model_wrapper(model_wrapper)
+                    surrogate = KerasSurrogate()
+                    surrogate.load(f"{path}.config.json", f"{path}.weights.h5")
+                    self.add_surrogate(surrogate)
                 else:
                     raise FileNotFoundError(
                         f"Weights file not found: {path}.weights.h5"
                     )
             elif class_name in [TorchMLP.__name__, TorchGNN.__name__]:
                 if os.path.exists(f"{path}.weights.pt"):
-                    model_wrapper = TorchModelWrapper()
-                    model_wrapper.load(f"{path}.config.json", f"{path}.weights.pt")
-                    self.add_model_wrapper(model_wrapper)
+                    surrogate = TorchSurrogate()
+                    surrogate.load(f"{path}.config.json", f"{path}.weights.pt")
+                    self.add_surrogate(surrogate)
                 else:
                     raise FileNotFoundError(
                         f"Weights file not found: {path}.weights.pt"
@@ -863,12 +865,12 @@ class MultiModelWrapper:
 
         `hls_configs` is a dict or a list of dicts like {"board": ..., "model":
         {"strategy": ..., "precision": ..., "reuse_factor": ...}}, camelCase or
-        snake_case. Versions are a string or a list. None takes each estimator's
+        snake_case. Versions are a string or a list. None takes each surrogate's
         training values, with default precisions and reuse factors for configs.
         """
 
-        if not self._models:
-            raise RuntimeError("No models have been added to the MultiModelWrapper.")
+        if not self._surrogates:
+            raise RuntimeError("No surrogates have been added to the MultiSurrogate.")
 
         if not isinstance(models_to_predict, (tuple, list)):
             models_to_predict = [models_to_predict]
@@ -892,7 +894,7 @@ class MultiModelWrapper:
             "Vivado Version",
         )
         output_rows, feature_cache = {}, {}
-        for target_key, estimator in self._models.items():
+        for target_key, surrogate in self._surrogates.items():
             configs = hls_configs
             if configs is None:
                 configs = [
@@ -905,10 +907,10 @@ class MultiModelWrapper:
                         "board": board,
                     }
                     for board, strategy, precision, reuse_factor in itertools.product(
-                        estimator.categorical_values("board"),
-                        estimator.categorical_values("strategy"),
-                        MultiModelWrapper._default_precisions,
-                        MultiModelWrapper._default_reuse_factors,
+                        surrogate.categorical_values("board"),
+                        surrogate.categorical_values("strategy"),
+                        MultiSurrogate._default_precisions,
+                        MultiSurrogate._default_reuse_factors,
                     )
                 ]
 
@@ -918,7 +920,7 @@ class MultiModelWrapper:
                 ("vivado_version", vivado_versions),
             ]:
                 if values is None:
-                    values = estimator.categorical_values(label)
+                    values = surrogate.categorical_values(label)
                 elif isinstance(values, str):
                     values = [values]
                 versions.append(list(values))
@@ -926,7 +928,7 @@ class MultiModelWrapper:
             rows, features = [], []
             for combo in itertools.product(
                 enumerate(models_to_predict),
-                *estimator.accepted_settings(configs, *versions),
+                *surrogate.accepted_settings(configs, *versions),
             ):
                 (index, model), config, hls4ml_version, vivado_version = combo
                 metadata = (
@@ -954,7 +956,7 @@ class MultiModelWrapper:
                     )
                 features.append(feature_cache[feature_key])
 
-            predictions = estimator.predict_features(features, verbose=verbose)
+            predictions = surrogate.predict_features(features, verbose=verbose)
             targets = target_key.split("-")
 
             for row, prediction in zip(rows, predictions.astype(float), strict=True):

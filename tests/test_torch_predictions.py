@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from rule4ml.models.wrappers import KerasModelWrapper, TorchModelWrapper
+from rule4ml.surrogates import KerasSurrogate, TorchSurrogate
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
@@ -60,15 +60,13 @@ def test_predict_batch_context(estimator, hls_config):
 
 
 def test_mc_predict(check_mc_dropout):
-    check_mc_dropout(
-        TorchModelWrapper(), "v2/gnn/LUT.weights.pt", (["0.8.1"], ["2023.2"])
-    )
+    check_mc_dropout(TorchSurrogate(), "v2/gnn/LUT.weights.pt", (["0.8.1"], ["2023.2"]))
 
 
 @pytest.mark.skipif(find_spec("tensorflow") is not None, reason="TensorFlow installed")
 def test_keras_without_tensorflow():
     with pytest.raises(ImportError, match=r"rule4ml\[keras\]"):
-        KerasModelWrapper()
+        KerasSurrogate()
 
 
 @pytest.fixture(params=["sequential", "subclassed"])
