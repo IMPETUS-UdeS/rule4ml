@@ -31,6 +31,29 @@ def test_parse_pooling_cnn(keras_cnn):
         assert inputs[f"conv2d_{statistic}_mean"] > 0
 
 
+def test_parse_reuse_overrides():
+    model = keras.Sequential(
+        [
+            keras.Input(shape=(16,), name="Features"),
+            layers.Dense(32, activation="relu", name="Hidden"),
+            layers.Dense(4),
+            layers.Activation("softmax"),
+        ]
+    )
+    hls_config = {
+        **HLS_CONFIG,
+        "LayerType": {"Dense": {"ReuseFactor": 8}, "Activation": {"ReuseFactor": 2}},
+        "LayerName": {
+            "FEATURES": {"ReuseFactor": 16},
+            "HIDDEN_RELU": {"ReuseFactor": 4},
+        },
+    }
+
+    layers_config = config_from_keras_model(model, hls_config)
+
+    assert [layer["reuse_factor"] for layer in layers_config] == [16, 8, 4, 8, 1]
+
+
 def test_parse_subclassed_dense():
     model = SubclassedDense()
     model.build([None, 16])

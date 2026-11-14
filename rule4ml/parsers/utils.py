@@ -14,16 +14,7 @@ _FIXED_PRECISION = re.compile(
 
 
 def camel_keys_to_snake(d: dict, recursive=True):
-    """
-    Transforms dictionary keys from CamelCase to snake_case format.
-
-    Args:
-        d (dict): Targeted dictionary for keys conversion.
-        recursive (bool, optional): Whether to apply to nested dictionaries. Defaults to True.
-
-    Returns:
-        dict: Transformed dictionary.
-    """
+    """Convert HLS config keys to snake_case and LayerType/LayerName identifiers to lowercase."""
 
     if not isinstance(d, dict):
         return d
@@ -31,10 +22,15 @@ def camel_keys_to_snake(d: dict, recursive=True):
     new_dict = {}
     for key, value in d.items():
         new_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
-        if recursive and isinstance(value, dict):
-            new_dict[new_key] = camel_keys_to_snake(value, recursive=True)
-        else:
+        if not (recursive and isinstance(value, dict)):
             new_dict[new_key] = value
+        elif new_key in ["layer_type", "layer_name"]:
+            new_dict[new_key] = {  # hls4ml matches layers case-insensitively
+                name.lower(): camel_keys_to_snake(config)
+                for name, config in value.items()
+            }
+        else:
+            new_dict[new_key] = camel_keys_to_snake(value)
 
     return new_dict
 
@@ -82,7 +78,39 @@ def unwrap_nested_dicts(d, prefix=None):
     return dict(items)
 
 
-def ensure_input_layer(model_config, hls_config):
+def get_reuse_factor(hls_config, layer, name=None):
+    """Reuse factor hls4ml gives a layer record: by name, then type, then model."""
+
+    layer_type = layer["class_name"].lower()
+    if layer.get("activation") == "softmax":
+        layer_type = "softmax"
+    hls_types = {
+        "qdense": "dense",
+        "qconv1d": "conv1d",
+        "qconv2d": "conv2d",
+        "qbatchnormalization": "batchnormalization",
+        "maxpooling1d": "pooling1d",
+        "averagepooling1d": "pooling1d",
+        "maxpooling2d": "pooling2d",
+        "averagepooling2d": "pooling2d",
+        "relu": "activation",
+        "flatten": "reshape",
+        "add": "merge",
+        "inputlayer": "input",
+    }
+    layer_type = hls_types.get(layer_type, layer_type)
+
+    reuse_factor = hls_config["model"]["reuse_factor"]
+    type_config = hls_config.get("layer_type", {}).get(layer_type, {})
+    reuse_factor = type_config.get("reuse_factor", reuse_factor)
+    if name is not None:
+        name_config = hls_config.get("layer_name", {}).get(name.lower(), {})
+        reuse_factor = name_config.get("reuse_factor", reuse_factor)
+
+    return reuse_factor
+
+
+def ensure_input_layer(model_config, hls_config, name="input1"):
     """Prepend the InputLayer that Keras model.layers omits for Sequential models."""
 
     if model_config[0]["class_name"] == "InputLayer":
@@ -95,8 +123,8 @@ def ensure_input_layer(model_config, hls_config):
         "parameters": 0,
         "trainable_parameters": 0,
         "dtype": model_config[0]["dtype"],
-        "reuse_factor": hls_config["model"]["reuse_factor"],
     }
+    input_layer["reuse_factor"] = get_reuse_factor(hls_config, input_layer, name)
 
     return [input_layer, *model_config]
 

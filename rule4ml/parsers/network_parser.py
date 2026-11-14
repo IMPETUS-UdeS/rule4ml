@@ -5,6 +5,7 @@ from rule4ml.parsers.utils import (
     camel_keys_to_snake,
     ensure_input_layer,
     get_closest_reuse_factor,
+    get_reuse_factor,
 )
 
 try:
@@ -139,16 +140,7 @@ def config_from_keras_model(model, hls_config):
             dtype = dtype["config"]["name"]
         layer_dict["dtype"] = dtype
 
-        reuse_factor = hls_config["model"]["reuse_factor"]
-        if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
-            reuse_factor = hls_config["layer_type"][class_name].get(
-                "reuse_factor", reuse_factor
-            )
-        if "layer_name" in hls_config and layer.name in hls_config["layer_name"]:
-            reuse_factor = hls_config["layer_name"][layer.name].get(
-                "reuse_factor", reuse_factor
-            )
-
+        reuse_factor = get_reuse_factor(hls_config, layer_dict, layer.name)
         layer_dict["reuse_factor"] = reuse_factor
 
         if class_name in ["Dense", "QDense"]:
@@ -166,9 +158,11 @@ def config_from_keras_model(model, hls_config):
 
         layers_data.append(layer_dict)
 
-        if nested_activation:  # activation function wrapped in a layer other than "(Q)Activation", example: Dense(units=32, activation="relu")
+        # Activation function wrapped in a layer other than (Q)Activation, example: Dense(units=32, activation="relu")
+        if nested_activation:
             activation_dict = {}
             activation_dict["class_name"] = "Activation"
+            activation_dict["name"] = f"{layer_name}_{layer_config['activation']}"
 
             activation_dict["input_shape"] = output_shape
             activation_dict["output_shape"] = output_shape
@@ -179,9 +173,16 @@ def config_from_keras_model(model, hls_config):
             activation_dict["trainable_parameters"] = 0
 
             activation_dict["dtype"] = layer_config["dtype"]
-            activation_dict["reuse_factor"] = reuse_factor
+            activation_dict["reuse_factor"] = get_reuse_factor(
+                hls_config, activation_dict, activation_dict["name"]
+            )
 
             layers_data.append(activation_dict)
+
+    # Only Sequential configs name the InputLayer missing from model.layers
+    if isinstance(model, tf.keras.Sequential):
+        input_name = model.get_config()["layers"][0]["config"]["name"]
+        return ensure_input_layer(layers_data, hls_config, input_name)
 
     return ensure_input_layer(layers_data, hls_config)
 
@@ -415,18 +416,8 @@ def config_from_torch_model(model, hls_config):
                     operation, operation
                 )
 
-        reuse_factor = hls_config["model"]["reuse_factor"]
-        class_name = layer_dict["class_name"]
-        if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
-            reuse_factor = hls_config["layer_type"][class_name].get(
-                "reuse_factor", reuse_factor
-            )
-        if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
-            reuse_factor = hls_config["layer_name"][node.name].get(
-                "reuse_factor", reuse_factor
-            )
-
-        if class_name == "Dense":
+        reuse_factor = get_reuse_factor(hls_config, layer_dict, node.name)
+        if layer_dict["class_name"] == "Dense":
             n_in, n_out = layer_dict["input_shape"][-1], layer_dict["output_shape"][-1]
             reuse_factor = get_closest_reuse_factor(n_in, n_out, reuse_factor)
 
