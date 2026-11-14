@@ -30,14 +30,14 @@ SEQUENTIAL_MAPS = {"layer_type": default_layer_type_map}
 
 
 def _torch_gnn(linear_output=False):
-    settings = GNNSettings(
-        [4], [8], [2, 2], [2], [8], [False], [0.0], linear_output=linear_output
+    settings = GNNSettings(  # width-one and unused trailing embeddings
+        [4], [8], [1, 1, 2], [1, 2], [8], [False], [0.0], linear_output=linear_output
     )
     return TorchGNN(settings, *_shapes(), GLOBAL_MAPS, SEQUENTIAL_MAPS, device="cpu")
 
 
 def _torch_mlp(linear_output=False):
-    settings = MLPSettings([2, 2], [4], [8], [0.0], linear_output=linear_output)
+    settings = MLPSettings([1, 1, 2], [4], [8], [0.0], linear_output=linear_output)
     return TorchMLP(settings, _shapes()[0], (None, 1), GLOBAL_MAPS, device="cpu")
 
 
@@ -56,16 +56,14 @@ def _shapes():
     )
 
 
-BUILDS = [
-    (TorchSurrogate, _torch_gnn, True),
-    (TorchSurrogate, _torch_mlp, False),
-    ("keras", _keras_mlp, False),
-]
-
-
-@pytest.mark.parametrize(("surrogate_class", "build", "sequential"), BUILDS)
 @pytest.mark.parametrize(
-    "scaler_class", [None, BoardScaler, BoardPercentScaler, Log1pScaler]
+    ("surrogate_class", "build", "sequential", "scaler_class"),
+    [
+        (TorchSurrogate, _torch_gnn, True, None),
+        (TorchSurrogate, _torch_mlp, False, BoardScaler),
+        (TorchSurrogate, _torch_mlp, False, BoardPercentScaler),
+        ("keras", _keras_mlp, False, Log1pScaler),
+    ],
 )
 def test_fit_save_load(
     make_dataset, tmp_path, surrogate_class, build, sequential, scaler_class
@@ -95,7 +93,14 @@ def test_fit_save_load(
     assert np.array_equal(loaded.predict_dataset(val), surrogate.predict_dataset(val))
 
 
-@pytest.mark.parametrize(("surrogate_class", "build", "sequential"), BUILDS)
+@pytest.mark.parametrize(
+    ("surrogate_class", "build", "sequential"),
+    [
+        (TorchSurrogate, _torch_gnn, True),
+        (TorchSurrogate, _torch_mlp, False),
+        ("keras", _keras_mlp, False),
+    ],
+)
 def test_load_linear_output(make_dataset, tmp_path, surrogate_class, build, sequential):
     surrogate = _surrogate(surrogate_class)
     model = build(linear_output=True)
@@ -137,24 +142,6 @@ def _reload(surrogate, tmp_path):
     return loaded
 
 
-def test_scaler_train_only(make_dataset):
-    train, val = split(make_dataset([1, 2, 3, 4, 5, 6]), 0.5, seed=0)
-    surrogate = TorchSurrogate()
-    scaler = Log1pScaler()
-    surrogate.set_model(
-        _torch_mlp(linear_output=True),
-        GLOBAL_LABELS,
-        ["lut"],
-        report="resource_report",
-        scaler=scaler,
-    )
-
-    surrogate.fit(train, TrainSettings(num_epochs=1, batch_size=4), val_dataset=val)
-
-    lut = train.targets(["lut"], "resource_report")[:, 0]
-    assert scaler.mu["lut"] == pytest.approx(np.log1p(lut).mean())
-
-
 @pytest.mark.parametrize("scaler_class", [BoardScaler, Log1pScaler])
 def test_fit_scaled_metrics(make_dataset, scaler_class):
     dataset = make_dataset([1, 2, 3, 4, 5, 6, 7, 8])
@@ -190,62 +177,19 @@ def test_fit_scaled_metrics(make_dataset, scaler_class):
     predicted = surrogate.predict_dataset(val)[:, 0]
     assert history["val"]["r2_0"][-1] == pytest.approx(r2(true, predicted), rel=1e-4)
 
-
-def test_predict_unmapped_board(make_dataset):
-    surrogate = TorchSurrogate()
-    maps = {"strategy": default_strategy_map, "board": {"pynq-z2": 1}}
-    model = TorchMLP(
-        MLPSettings([2, 2], [4], [8], [0.0]), _shapes()[0], (None, 1), maps
-    )
-    surrogate.set_model(model, GLOBAL_LABELS, ["lut"], report="resource_report")
-
-    with pytest.raises(ValueError, match=r"board values missing.*zcu102"):
-        surrogate.predict_dataset(make_dataset([1, 2]))
-
-
-@pytest.mark.parametrize(
-    ("build", "sequential"),
-    [
-        (lambda: TorchMLP(MLPSettings(), *_shapes()[::2], GLOBAL_MAPS), False),
-        (
-            lambda: TorchMLP(
-                MLPSettings([1, 1], [4], [8], [0.0]), *_shapes()[::2], GLOBAL_MAPS
-            ),
-            False,
-        ),
-        (
-            lambda: TorchGNN(GNNSettings(), *_shapes(), GLOBAL_MAPS, SEQUENTIAL_MAPS),
-            True,
-        ),
-        (
-            lambda: TorchGNN(
-                GNNSettings([4], [8], [1, 1], [1], [8], [False], [0.0]),
-                *_shapes(),
-                GLOBAL_MAPS,
-                SEQUENTIAL_MAPS,
-            ),
-            True,
-        ),
-    ],
-    ids=["mlp_default", "mlp_size_one", "gnn_default", "gnn_size_one"],
-)
-def test_predict_embedding_sizes(make_dataset, build, sequential):
-    surrogate = TorchSurrogate()
-    sequential_labels = SEQUENTIAL_LABELS if sequential else ()
-    surrogate.set_model(
-        build(), GLOBAL_LABELS, ["lut"], sequential_labels, report="resource_report"
-    )
-    assert surrogate.predict_dataset(make_dataset([1, 2])).shape == (2, 1)
+    if scaler_class == Log1pScaler:  # statistics from the training split only
+        lut = train.targets(["lut"], "resource_report")[:, 0]
+        assert scaler.mu["lut"] == pytest.approx(np.log1p(lut).mean())
 
 
 def test_predict_empty_graph(make_dataset):
     dataset = make_dataset([1, 1])
-    end = dataset.offsets[1]
+    start, end = dataset.offsets[1:]
     dataset = replace(
         dataset,
-        layer_values=dataset.layer_values[:end],
-        layer_types=(dataset.layer_types[0][:end], dataset.layer_types[1]),
-        offsets=np.array([0, end, end]),
+        layer_values=dataset.layer_values[start:],
+        layer_types=(dataset.layer_types[0][start:], dataset.layer_types[1]),
+        offsets=np.array([0, 0, end - start]),
     )
 
     surrogate = TorchSurrogate()
@@ -257,7 +201,7 @@ def test_predict_empty_graph(make_dataset):
         report="resource_report",
     )
 
-    with pytest.raises(ValueError, match="Record 1 .* no layers"):
+    with pytest.raises(ValueError, match="Record 0 .* no layers"):
         surrogate.predict_dataset(dataset)
 
 

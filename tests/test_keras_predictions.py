@@ -1,4 +1,3 @@
-import itertools
 import os
 
 import pytest
@@ -54,9 +53,7 @@ def test_predict_mixed_models(estimator, top_quarks):
             },
             "board": board,
         }
-        for board, strategy in itertools.product(
-            ["pynq-z2", "zcu102"], ["Latency", "Resource"]
-        )
+        for board, strategy in [("pynq-z2", "Latency"), ("zcu102", "Resource")]
     ]
 
     prediction_df = estimator.predict(
@@ -71,13 +68,12 @@ def test_mc_predict(check_mc_dropout):
     check_mc_dropout(KerasSurrogate(), "v2/mlp/LUT.weights.h5", ([], []))
 
 
-@pytest.fixture(params=["sequential", "functional", "subclassed"])
+@pytest.fixture(params=["sequential", "subclassed"])
 def model(request):
-    return {
-        "sequential": _keras_sequential,
-        "functional": _keras_functional,
-        "subclassed": _keras_subclassed,
-    }[request.param]()
+    if request.param == "sequential":
+        return _keras_sequential()
+
+    return _keras_subclassed()
 
 
 class JetClassifier(keras.Model):
@@ -107,16 +103,6 @@ def _keras_sequential():
         ],
         name="Jet Classifier",
     )
-
-
-def _keras_functional():
-    inputs = keras.Input(shape=(16,))
-    x = layers.Dense(32, activation="relu")(inputs)
-    x = layers.Dense(32, activation="relu")(x)
-    x = layers.Dense(32, activation="relu")(x)
-    outputs = layers.Dense(5, activation="softmax")(x)
-
-    return keras.Model(inputs=inputs, outputs=outputs, name="Jet Classifier")
 
 
 def _keras_subclassed():

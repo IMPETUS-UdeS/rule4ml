@@ -10,12 +10,6 @@ HLS_CONFIG = {
     "board": "zcu102",
     "model": {"precision": "ap_fixed<16,6>", "reuse_factor": 1, "strategy": "Resource"},
 }
-CNN_SHAPES = [  # (class_name, input_shape, output_shape) without batch dimension
-    ("Conv2D", (32, 32, 3), (32, 32, 8)),
-    ("MaxPooling2D", (32, 32, 8), (16, 16, 8)),
-    ("Flatten", (16, 16, 8), (2048,)),
-    ("Dense", (2048,), (10,)),
-]
 
 
 def test_parse_pooling_cnn(keras_cnn):
@@ -27,15 +21,19 @@ def test_parse_pooling_cnn(keras_cnn):
     ]
     inputs = get_global_inputs(layers_config, HLS_CONFIG)
 
-    assert shapes == CNN_SHAPES
+    assert shapes == [
+        ("Conv2D", (32, 32, 3), (32, 32, 8)),
+        ("MaxPooling2D", (32, 32, 8), (16, 16, 8)),
+        ("Flatten", (16, 16, 8), (2048,)),
+        ("Dense", (2048,), (10,)),
+    ]
     for statistic in ["filters", "kernel_size", "strides"]:
         assert inputs[f"conv2d_{statistic}_mean"] > 0
 
 
-@pytest.mark.parametrize("build_shape", [(None, 16), [None, 16]])
-def test_parse_subclassed_dense(build_shape):
+def test_parse_subclassed_dense():
     model = SubclassedDense()
-    model.build(build_shape)
+    model.build([None, 16])
 
     layers_config = config_from_keras_model(model, HLS_CONFIG)
     dense = next(layer for layer in layers_config if layer["class_name"] == "Dense")

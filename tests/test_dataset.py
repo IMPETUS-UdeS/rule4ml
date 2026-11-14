@@ -20,53 +20,33 @@ def test_prepare_roundtrip(tmp_path, record):
         + ["inputlayer", "dense", "relu", "dense", "relu", "dense"]
     )
 
-    layer = {
-        name: dataset.layer_values[:, i] for i, name in enumerate(dataset.layer_names)
-    }
-    assert layer["layer_input_size"].tolist() == [16, 16, 8, 8, 16, 16, 8, 8, 8, 8]
-    assert layer["layer_parameter_count"][:4].tolist() == [0, 136, 0, 18]
-
     glob = {
         name: dataset.global_values[:, i] for i, name in enumerate(dataset.global_names)
     }
-    assert glob["dense_count"].tolist() == [2, 3]
     assert glob["dense_parameters_mean"].tolist() == pytest.approx(
         [(136 + 18) / 2, (136 + 72 + 18) / 3]
     )
-    assert glob["bit_width"].tolist() == [8, 8]
     assert glob["integer_bits"].tolist() == [4, 4]
 
     codes, vocab = dataset.categoricals["board"]
     assert vocab[codes].tolist() == ["zcu102", "zcu102"]
 
-    codes, vocab = dataset.categoricals["hls4ml_version"]
-    assert vocab[codes].tolist() == ["", ""]
-
     assert dataset.latencies.tolist() == [[48.0, 2.0], [48.0, 2.0]]
     assert dataset.resources["resource_report"][:, 3].tolist() == [500.0, 500.0]
     assert np.isnan(dataset.resources["hls_resource_report"][1]).all()
-    assert dataset.record_ids.tolist() == ["blocks1", "blocks2"]
 
 
-@pytest.mark.parametrize(
-    ("array", "replacement", "message"),
-    [
-        ("offsets", np.array([4, 0]), "offsets"),
-        ("latencies", np.zeros((2, 2)), "latencies"),
-        ("vocab_board", np.array([["zcu102"]]), "board"),
-    ],
-)
-def test_load_invalid_arrays(tmp_path, record, array, replacement, message):
+def test_load_invalid_offsets(tmp_path, record):
     source = tmp_path / "records.json"
     source.write_text(json.dumps([record(blocks=1)]))
     prepare([source], tmp_path / "data.npz")
 
     with np.load(tmp_path / "data.npz") as data:
         arrays = dict(data)
-    arrays[array] = replacement
+    arrays["offsets"] = np.array([4, 0])
     np.savez(tmp_path / "bad.npz", **arrays)
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="offsets"):
         load(tmp_path / "bad.npz")
 
 

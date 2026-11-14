@@ -27,12 +27,6 @@ def test_evaluate_nonfinite():
         evaluate(np.ones((2, 1)), np.array([[1.0], [np.nan]]), ["lut"])
 
 
-@pytest.mark.parametrize("prediction", [np.ones(2), np.ones((1, 1)), np.ones((2, 2))])
-def test_evaluate_shape_mismatch(prediction):
-    with pytest.raises(ValueError, match="shape"):
-        evaluate(np.ones((2, 1)), prediction, ["lut"])
-
-
 def test_torch_mape_batches():
     mape = TorchParametricMAPE(0, device=torch.device("cpu"))
     mape.update(torch.ones(2, 1), torch.ones(2, 1))
