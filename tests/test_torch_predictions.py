@@ -39,6 +39,20 @@ def test_predict_batch_context(estimator, hls_config):
     )
 
 
+def test_predict_forward_order(estimator, hls_config):
+    settings = {
+        "hls_configs": hls_config,
+        "hls4ml_versions": ["0.8.1"],
+        "vivado_versions": ["2023.2"],
+        "round_digits": 10,
+    }
+
+    reordered = estimator.predict(Reordered(), **settings)
+    functional = estimator.predict(Functional(), **settings)
+
+    np.testing.assert_allclose(reordered[TARGETS], functional[TARGETS], rtol=1e-6)
+
+
 def test_mc_predict(check_mc_dropout):
     check_mc_dropout(TorchSurrogate(), "v2/gnn/LUT.weights.pt", (["0.8.1"], ["2023.2"]))
 
@@ -56,3 +70,37 @@ def _sequential(inputs):
         torch.nn.Linear(32, 1),
         torch.nn.Sigmoid(),
     )
+
+
+class Reordered(torch.nn.Module):
+    """Modules registered out of forward order, one called twice."""
+
+    def __init__(self):
+        super().__init__()
+        self.head = torch.nn.Linear(12, 1)
+        self.act = torch.nn.ReLU()
+        self.flatten = torch.nn.Flatten()
+        self.b = torch.nn.Linear(16, 4)
+        self.a = torch.nn.Linear(16, 8)
+
+    def forward(self, x):
+        a = self.a(x)
+        b = self.b(x)
+        a = self.act(a)  # input is not the previous node
+
+        return self.head(self.flatten(self.act(torch.cat([a, b], dim=1))))
+
+
+class Functional(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.a = torch.nn.Linear(16, 8)
+        self.b = torch.nn.Linear(16, 4)
+        self.head = torch.nn.Linear(12, 1)
+
+    def forward(self, x):
+        a = self.a(x)
+        b = self.b(x)
+        a = torch.relu(a)
+
+        return self.head(torch.relu(torch.cat([a, b], dim=1)).flatten(1))

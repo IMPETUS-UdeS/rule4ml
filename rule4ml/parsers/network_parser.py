@@ -1,5 +1,3 @@
-from collections import OrderedDict
-
 import numpy as np
 import torch
 
@@ -255,154 +253,181 @@ def keras_model_from_config(model_config):
 def config_from_torch_model(model, hls_config):
     """Parse a Torch model into per-layer configs with hls4ml reuse factors."""
 
-    torch_layer_mapping = {
-        "Linear": "Dense",
-        "Conv2d": "Conv2D",
-        "add": "Add",
-        "cat": "Concatenate",
-        "BatchNorm1d": "BatchNormalization",
-        "BatchNorm2d": "BatchNormalization",
-    }
-
     hls_config = camel_keys_to_snake(hls_config)
-
-    layers_data = OrderedDict()
-    model_layers = get_torch_layers(model)
     traced_model = torch.fx.symbolic_trace(model)
-    module_count = 0
-    for idx, node in enumerate(traced_model.graph.nodes):
+
+    layers_data = {}
+    for node in traced_model.graph.nodes:
         if node.op == "output":
             continue
 
-        layer_dict = {}
+        module, operation = None, None
+        if node.op == "call_module":
+            module = traced_model.get_submodule(node.target)
+            operation = module.__class__.__name__
+        elif node.op == "call_function":
+            operation = getattr(node.target, "__name__", str(node.target))
+        elif node.op == "call_method":
+            operation = node.target
+            supported = ["relu", "sigmoid", "tanh", "softmax", "flatten", "view"]
+            if operation not in supported:
+                raise ValueError(f"Unsupported Torch method: {operation}")
+        elif node.op != "placeholder":
+            raise ValueError(f"Unsupported Torch operation: {node.op} {node.target}")
 
         if node.op == "placeholder":
-            class_name = "InputLayer"
-
-            reuse_factor = hls_config["model"]["reuse_factor"]
-            if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
-                reuse_factor = hls_config["layer_type"][class_name].get(
-                    "reuse_factor", reuse_factor
-                )
-            if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
-                reuse_factor = hls_config["layer_name"][node.name].get(
-                    "reuse_factor", reuse_factor
-                )
-
             layer_dict = {
-                "class_name": class_name,
+                "class_name": "InputLayer",
                 "input_shape": (None,),
                 "output_shape": (None,),
                 "parameters": 0,
                 "trainable_parameters": 0,
                 "dtype": "float32",
-                "reuse_factor": reuse_factor,
             }
 
-        elif node.op == "call_module":
-            layer = model_layers[module_count]
+        elif operation == "Linear":
+            use_bias = module.bias is not None
+            parameters = (module.in_features + int(use_bias)) * module.out_features
+            layer_dict = {
+                "class_name": "Dense",
+                "input_shape": (None, module.in_features),
+                "output_shape": (None, module.out_features),
+                "parameters": parameters,
+                "trainable_parameters": parameters,
+                "neurons": module.out_features,
+                "use_bias": use_bias,
+                "dtype": ".".join(str(module.weight.dtype).split(".")[1:]),
+            }
 
-            class_name = layer.__class__.__name__
-            mapped_class_name = torch_layer_mapping.get(class_name, class_name)
-            layer_dict["class_name"] = mapped_class_name
-
-            if mapped_class_name in ["Dense"]:
-                layer_dict["input_shape"] = (None, layer.in_features)
-                layer_dict["output_shape"] = (None, layer.out_features)
-
-                use_bias = layer.bias is not None
-                layer_dict["parameters"] = (
-                    layer.in_features + int(use_bias)
-                ) * layer.out_features
-                layer_dict["trainable_parameters"] = layer_dict["parameters"]
-
-                layer_dict["neurons"] = layer_dict["output_shape"][-1]
-                layer_dict["use_bias"] = use_bias
-
-                layer_dict["dtype"] = ".".join(str(layer.weight.dtype).split(".")[1:])
-
-            elif module_count > 0:
-                layers_data_values = list(layers_data.values())
-
-                layer_dict["input_shape"] = layers_data_values[idx - 1]["output_shape"]
-                layer_dict["output_shape"] = layer_dict["input_shape"]
-
-                if mapped_class_name in ["BatchNormalization"]:
-                    input_size = np.prod(
-                        [x for x in layer_dict["input_shape"] if x is not None]
-                    )
-                    layer_dict["parameters"] = 4 * input_size
-                    layer_dict["trainable_parameters"] = 2 * input_size
-                else:
-                    layer_dict["parameters"] = 0
-                    layer_dict["trainable_parameters"] = 0
-
-                layer_dict["dtype"] = layers_data_values[idx - 1]["dtype"]
-
+        else:
+            if operation in ["cat", "concat", "concatenate"]:
+                inputs = node.args[0] if node.args else node.kwargs["tensors"]
             else:
+                inputs = node.all_input_nodes
+
+            if any(input_node.op == "placeholder" for input_node in inputs):
                 raise TypeError(
-                    f"Model has unexpected first layer of type {class_name}."
+                    f"Model has unexpected first layer of type {operation}."
                 )
-
-            reuse_factor = hls_config["model"]["reuse_factor"]
-            if (
-                "layer_type" in hls_config
-                and mapped_class_name in hls_config["layer_type"]
-            ):
-                reuse_factor = hls_config["layer_type"][mapped_class_name].get(
-                    "reuse_factor", reuse_factor
-                )
-            if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
-                reuse_factor = hls_config["layer_name"][node.name].get(
-                    "reuse_factor", reuse_factor
-                )
-
-            layer_dict["reuse_factor"] = reuse_factor
-
-            if mapped_class_name in ["Dense"]:
-                n_in = np.prod([x for x in layer_dict["input_shape"] if x is not None])
-                n_out = np.prod(
-                    [x for x in layer_dict["output_shape"] if x is not None]
-                )
-
-                layer_dict["reuse_factor"] = get_closest_reuse_factor(
-                    n_in, n_out, reuse_factor
-                )
-
-            module_count += 1
-
-        elif node.op == "call_function":
-            class_name = node.name.split("_")
-            if class_name[-1].isdigit():
-                class_name = class_name[:-1]
-            class_name = "_".join(class_name)
-            layer_dict["class_name"] = class_name
-
-            layers_data_values = list(layers_data.values())
 
             input_shapes = [
-                layers_data[input_node.name]["output_shape"]
-                for input_node in node.all_input_nodes
+                layers_data[input_node.name]["output_shape"] for input_node in inputs
             ]
-            layer_dict["input_shape"] = input_shapes
+            layer_dict = {
+                "input_shape": input_shapes[0],
+                "output_shape": input_shapes[0],
+                "parameters": 0,
+                "trainable_parameters": 0,
+                "dtype": layers_data[inputs[0].name]["dtype"],
+            }
 
-            if node.name == "cat":
-                dim = node.kwargs["dim"]
+            if operation.lower() in ["relu", "sigmoid", "tanh", "softmax"]:
+                if operation.lower() == "softmax":
+                    if module is not None:
+                        dim = module.dim
+                    else:
+                        dim = node.kwargs.get(
+                            "dim", node.args[1] if len(node.args) > 1 else None
+                        )
+
+                    rank = len(input_shapes[0])
+                    if dim is None:  # Torch's implicit softmax dimension
+                        dim = 0 if rank == 3 else 1
+                    if dim % rank == 0:
+                        raise ValueError(
+                            "Softmax along the batch dimension is not supported."
+                        )
+
+                layer_dict["class_name"] = "Activation"
+                layer_dict["activation"] = operation.lower()
+
+            elif operation in ["cat", "concat", "concatenate"]:
+                dim = node.kwargs.get("dim", node.args[1] if len(node.args) > 1 else 0)
+                dim %= len(input_shapes[0])
+                if dim == 0:
+                    raise ValueError(
+                        "Concatenation along the batch dimension is not supported."
+                    )
+                if len(input_shapes) != 2:
+                    raise ValueError("hls4ml concatenates exactly two tensors.")
+
                 output_shape = list(input_shapes[0])
-                output_shape[dim] = sum([x[dim] for x in input_shapes])
+                output_shape[dim] = sum(shape[dim] for shape in input_shapes)
 
+                layer_dict["class_name"] = "Concatenate"
+                layer_dict["input_shape"] = input_shapes
                 layer_dict["output_shape"] = tuple(output_shape)
+
+            elif operation in ["Flatten", "flatten", "view"]:
+                input_shape = input_shapes[0]
+                if operation == "view":
+                    view_shape = node.args[1:]
+                    if isinstance(view_shape[0], (list, tuple)):
+                        view_shape = view_shape[0]
+
+                    size = int(np.prod(input_shape[1:]))
+                    if list(view_shape) != [-1, size]:
+                        raise ValueError(
+                            f"Unsupported view {tuple(view_shape)}, "
+                            f"only view(-1, {size}) is."
+                        )
+
+                    output_shape = (None, size)
+
+                else:
+                    if module is not None:
+                        start, end = module.start_dim, module.end_dim
+                    else:
+                        args = node.args[1:]
+                        start = node.kwargs.get("start_dim", args[0] if args else 0)
+                        end = node.kwargs.get(
+                            "end_dim", args[1] if len(args) > 1 else -1
+                        )
+
+                    start, end = start % len(input_shape), end % len(input_shape)
+                    if start == 0:
+                        raise ValueError(
+                            "Flattening the batch dimension is not supported."
+                        )
+
+                    size = int(np.prod(input_shape[start : end + 1]))
+                    output_shape = (*input_shape[:start], size, *input_shape[end + 1 :])
+
+                layer_dict["class_name"] = "Flatten"
+                layer_dict["output_shape"] = output_shape
+
+            elif operation == "add":
+                layer_dict["class_name"] = "Add"
+                layer_dict["input_shape"] = input_shapes
+
+            elif operation in ["BatchNorm1d", "BatchNorm2d"]:
+                input_size = np.prod([x for x in input_shapes[0] if x is not None])
+
+                layer_dict["class_name"] = "BatchNormalization"
+                layer_dict["parameters"] = 4 * input_size
+                layer_dict["trainable_parameters"] = 2 * input_size
+
             else:
-                layer_dict["output_shape"] = input_shapes[0]
+                layer_dict["class_name"] = {"Conv2d": "Conv2D"}.get(
+                    operation, operation
+                )
 
-            layer_dict["parameters"] = 0
-            layer_dict["trainable_parameters"] = 0
+        reuse_factor = hls_config["model"]["reuse_factor"]
+        class_name = layer_dict["class_name"]
+        if "layer_type" in hls_config and class_name in hls_config["layer_type"]:
+            reuse_factor = hls_config["layer_type"][class_name].get(
+                "reuse_factor", reuse_factor
+            )
+        if "layer_name" in hls_config and node.name in hls_config["layer_name"]:
+            reuse_factor = hls_config["layer_name"][node.name].get(
+                "reuse_factor", reuse_factor
+            )
 
-            layer_dict["dtype"] = layers_data_values[idx - 1]["dtype"]
-            layer_dict["reuse_factor"] = reuse_factor
+        if class_name == "Dense":
+            n_in, n_out = layer_dict["input_shape"][-1], layer_dict["output_shape"][-1]
+            reuse_factor = get_closest_reuse_factor(n_in, n_out, reuse_factor)
 
-            layer_dict["class_name"] = torch_layer_mapping.get(class_name, class_name)
-
+        layer_dict["reuse_factor"] = reuse_factor
         layers_data[node.name] = layer_dict
 
     layers_data = list(layers_data.values())
@@ -423,16 +448,3 @@ def config_from_onnx_model(model, hls_config):
 
     layers_data = []
     return layers_data
-
-
-def get_torch_layers(model):
-    layers = []
-
-    model_children = list(model.children())
-    if model_children == []:
-        return [model]
-
-    for child in model_children:
-        layers += get_torch_layers(child)
-
-    return layers

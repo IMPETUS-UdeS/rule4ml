@@ -1,6 +1,8 @@
 import os
 
+import numpy as np
 import pytest
+import torch
 
 keras = pytest.importorskip("keras")
 layers = keras.layers
@@ -64,6 +66,30 @@ def test_predict_mixed_models(estimator, top_quarks):
     assert set(prediction_df["Board"]) == {"pynq-z2", "zcu102"}
 
 
+def test_predict_torch_twin(estimator, hls_config):
+    settings = {
+        "hls_configs": {**hls_config, "layer_name": {"dense2": {"reuse_factor": 16}}},
+        "hls4ml_versions": ["0.8.1"],
+        "vivado_versions": ["2023.2"],
+        "round_digits": 10,
+    }
+    targets = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
+
+    x = inputs = keras.Input(shape=(16,))
+
+    for idx in [1, 2, 3]:
+        x = layers.Activation("relu")(layers.Dense(32, name=f"dense{idx}")(x))
+
+    x = layers.Activation("softmax")(layers.Flatten()(layers.Dense(5)(x)))
+
+    keras_predictions = estimator.predict(keras.Model(inputs, x), **settings)
+    torch_predictions = estimator.predict(TorchJetClassifier(), **settings)
+
+    np.testing.assert_allclose(
+        torch_predictions[targets], keras_predictions[targets], rtol=1e-6
+    )
+
+
 def test_mc_predict(check_mc_dropout):
     check_mc_dropout(KerasSurrogate(), "v2/mlp/LUT.weights.h5", ([], []))
 
@@ -86,6 +112,26 @@ class JetClassifier(keras.Model):
 
     def call(self, inputs):
         return self.dense4(self.dense3(self.dense2(self.dense1(inputs))))
+
+
+class TorchJetClassifier(torch.nn.Module):
+    """Jet Classifier in Torch, mixing activation forms."""
+
+    def __init__(self):
+        super().__init__()
+        self.dense1 = torch.nn.Linear(16, 32)
+        self.relu = torch.nn.ReLU()
+        self.dense2 = torch.nn.Linear(32, 32)
+        self.dense3 = torch.nn.Linear(32, 32)
+        self.dense4 = torch.nn.Linear(32, 5)
+        self.softmax = torch.nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = self.relu(self.dense1(x))
+        x = torch.relu(self.dense2(x))
+        x = self.dense3(x).relu()
+
+        return self.softmax(self.dense4(x).view(-1, 5))
 
 
 def _keras_sequential():
