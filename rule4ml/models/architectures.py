@@ -453,41 +453,19 @@ class TorchGNN(torch.nn.Module):
                 self.sequential_embeddings[key](inputs[key]).flatten(2)
             )
 
-        node_features = []
-        edge_indices = []
-        batch_vector = []
-        ptr = 0
-        for i in range(seq_numerical_inputs.shape[0]):
-            valid_seq_numerical = seq_numerical_inputs[i][mask[i]]
-            if valid_seq_numerical.size(0) == 0:
-                raise ValueError(f"Record {i} of the batch has no layers")
+        counts = mask.sum(dim=1)
+        if (counts == 0).any():
+            empty = torch.nonzero(counts == 0)[0].item()
+            raise ValueError(f"Record {empty} of the batch has no layers")
 
-            valid_seq_embeddings = [
-                embedding[i][mask[i]] for embedding in x_sequential_categorical
-            ]
-            valid_features = torch.cat(
-                [*valid_seq_embeddings, valid_seq_numerical], dim=-1
-            )
-            node_features.append(valid_features.to(self.device))
-
-            num_nodes = valid_features.size(0)
-            if num_nodes > 1:
-                row = torch.arange(num_nodes - 1, dtype=torch.long)
-                edge = torch.stack([row, row + 1], dim=0) + ptr
-                edge_indices.append(edge.to(self.device))
-
-            batch_vector.append(
-                torch.full((num_nodes,), i, dtype=torch.long).to(self.device)
-            )
-            ptr += num_nodes
-
-        x_seq = torch.cat(node_features, dim=0)
-        edge_indices = (
-            torch.cat(edge_indices, dim=1)
-            if edge_indices
-            else torch.empty((2, 0), dtype=torch.long)
+        layers = torch.cat([*x_sequential_categorical, seq_numerical_inputs], dim=-1)
+        x_seq = layers[mask]
+        batch = torch.repeat_interleave(
+            torch.arange(len(counts), device=counts.device), counts
         )
-        batch = torch.cat(batch_vector, dim=0)
+        ptr = len(batch)
+        source = torch.arange(ptr - 1, device=batch.device)[batch[1:] == batch[:-1]]
+        edge_indices = torch.stack([source, source + 1], dim=0)
 
         if edge_indices.numel() > 0:
             edge_indices = torch_geometric.utils.to_undirected(
