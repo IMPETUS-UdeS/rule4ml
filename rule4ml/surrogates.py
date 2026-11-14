@@ -179,7 +179,7 @@ class BaseSurrogate:
         )
 
     def evaluate(self, dataset, report=None, verbose=0):
-        """wa-hls4ml metrics per output label, over the records where it is known."""
+        """SMAPE, RMSE and R2 per output label, over the records where it is known."""
 
         targets = dataset.targets(self.output_labels, report or self.report)
         predictions = self.predict_dataset(dataset, verbose=verbose)

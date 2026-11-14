@@ -17,7 +17,7 @@ else:
 
 
 def evaluate(y_true, y_pred, labels):
-    """wa-hls4ml metrics per target, each over the records where it is known."""
+    """SMAPE, RMSE and R2 per target, each over the records where it is known."""
 
     y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = np.asarray(y_pred, dtype=np.float64)
@@ -46,13 +46,17 @@ def evaluate(y_true, y_pred, labels):
 
 
 def smape(y_true, y_pred):
-    """SMAPE in percent, with +1 in the denominator as in wa-hls4ml."""
+    """SMAPE in percent, from 0 to 200, with exact zeros counted as 0."""
 
     y_true = np.asarray(y_true, dtype=np.float64).squeeze()
     y_pred = np.asarray(y_pred, dtype=np.float64).squeeze()
-    return float(
-        200 * np.mean(np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1))
+
+    total = np.abs(y_true) + np.abs(y_pred)
+    ratio = np.divide(
+        np.abs(y_true - y_pred), total, out=np.zeros_like(total), where=total != 0
     )
+
+    return float(200 * np.mean(ratio))
 
 
 def rmse(y_true, y_pred):
@@ -129,7 +133,7 @@ if keras is not None:
             if kops is None:
                 numerator = tf.abs(y_true_i - y_pred_i)
                 denominator = tf.maximum(tf.abs(y_true_i) + tf.abs(y_pred_i), self.eps)
-                smape = 100.0 * numerator / denominator
+                smape = 200.0 * numerator / denominator
                 self.total.assign_add(tf.reduce_sum(smape))
                 self.count.assign_add(tf.cast(tf.size(smape), tf.float32))
             else:
@@ -137,7 +141,7 @@ if keras is not None:
                 denominator = kops.maximum(
                     kops.absolute(y_true_i) + kops.absolute(y_pred_i), self.eps
                 )
-                smape = 100.0 * numerator / denominator
+                smape = 200.0 * numerator / denominator
                 self.total.assign_add(kops.sum(smape))
                 self.count.assign_add(kops.cast(kops.size(smape), tf.float32))
 
@@ -266,7 +270,7 @@ class TorchParametricSMAPE(torch.nn.Module):
         denominator = torch.clamp(
             torch.abs(y_true_i) + torch.abs(y_pred_i), min=self.eps
         )
-        smape = 100.0 * numerator / denominator
+        smape = 200.0 * numerator / denominator
 
         self.total += torch.sum(smape)
         self.count += torch.tensor(

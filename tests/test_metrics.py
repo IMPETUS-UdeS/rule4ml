@@ -6,19 +6,19 @@ from rule4ml.models.metrics import TorchParametricMAPE, evaluate
 
 
 def test_evaluate_partial_targets():
-    y_true = np.array([[1.0, 4.0], [2.0, np.nan], [3.0, 4.0]])
-    y_pred = np.array([[3.0, 4.0], [2.0, 9.0], [3.0, 5.0]])
+    y_true = np.array([[1.0, 4.0], [0.0, np.nan], [3.0, 4.0]])
+    y_pred = np.array([[3.0, 4.0], [0.0, 9.0], [3.0, 5.0]])
 
     scores = evaluate(y_true, y_pred, ["lut", "cycles"])
 
     assert scores["lut"]["n"] == 3
-    assert scores["lut"]["smape"] == pytest.approx(80 / 3)  # 200 * 2 / 5, over 3
+    assert scores["lut"]["smape"] == pytest.approx(100 / 3)  # 200 * 2 / 4, over 3
     assert scores["lut"]["rmse"] == pytest.approx(np.sqrt(4 / 3))
-    assert scores["lut"]["r2"] == pytest.approx(1 - 4 / 2)
+    assert scores["lut"]["r2"] == pytest.approx(1 - 4 / (42 / 9))
 
     assert scores["cycles"]["n"] == 2
     assert scores["cycles"]["n_missing"] == 1
-    assert scores["cycles"]["smape"] == pytest.approx(100 * 1 / 10)
+    assert scores["cycles"]["smape"] == pytest.approx(100 / 9)  # 200 * 1 / 9, over 2
     assert np.isnan(scores["cycles"]["r2"])  # constant targets
 
 
