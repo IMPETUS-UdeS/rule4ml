@@ -84,6 +84,8 @@ def data_from_synthesis(synth_dict: dict):
             {
                 "cycles_min": str(float(synth_dict[report]["BestLatency"])),
                 "cycles_max": str(float(synth_dict[report]["WorstLatency"])),
+                "interval_min": str(float(synth_dict[report]["IntervalMin"])),
+                "interval_max": str(float(synth_dict[report]["IntervalMax"])),
                 "target_clock": str(float(synth_dict[report]["TargetClockPeriod"])),
                 "estimated_clock": str(
                     float(synth_dict[report]["EstimatedClockPeriod"])

@@ -8,7 +8,7 @@ import numpy as np
 CATEGORICALS = ("strategy", "board", "precision", "hls4ml_version", "vivado_version")
 REPORTS = ("resource_report", "hls_resource_report")
 RESOURCES = ("bram", "dsp", "ff", "lut")
-LATENCIES = ("cycles", "interval")
+LATENCIES = ("cycles_min", "cycles_max", "interval_min", "interval_max")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,7 +35,10 @@ class Dataset:
 
         columns = []
         for label in labels:
-            if label in LATENCIES:
+            if label in ("cycles", "interval"):  # min/max average, as v1 and v2 predict
+                bounds = [LATENCIES.index(f"{label}_{end}") for end in ("min", "max")]
+                columns.append(self.latencies[:, bounds].mean(axis=1))
+            elif label in LATENCIES:
                 columns.append(self.latencies[:, LATENCIES.index(label)])
             elif label in RESOURCES:
                 if report not in REPORTS:

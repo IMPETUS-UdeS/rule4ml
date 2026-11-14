@@ -33,7 +33,8 @@ def test_prepare_roundtrip(tmp_path, record):
     codes, vocab = dataset.categoricals["board"]
     assert vocab[codes].tolist() == ["zcu102", "zcu102"]
 
-    assert dataset.latencies.tolist() == [[48.0, 2.0], [48.0, 2.0]]
+    assert dataset.latencies.tolist() == [[40.0, 56.0, 1.0, 3.0]] * 2
+    assert dataset.targets(["cycles", "interval"]).tolist() == [[48.0, 2.0]] * 2
     assert dataset.resources["resource_report"][:, 3].tolist() == [500.0, 500.0]
     assert np.isnan(dataset.resources["hls_resource_report"][1]).all()
 

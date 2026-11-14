@@ -524,51 +524,17 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 def get_prediction_targets(model_data):
     """Extract raw resource and latency targets from synthesis reports."""
 
-    latency_report = model_data["latency_report"]
-    resource_report = model_data["resource_report"]
+    resource_report = to_lower_keys(model_data["resource_report"])
+    latency_report = to_lower_keys(model_data["latency_report"])
 
-    resource_report = to_lower_keys(resource_report)
-    latency_report = to_lower_keys(latency_report)
-
-    bram = resource_report.get("bram", None)
-    dsp = resource_report.get("dsp", None)
-    ff = resource_report.get("ff", None)
-    lut = resource_report.get("lut", None)
-
-    if isinstance(bram, str):
-        bram = float(bram.strip())
-    if isinstance(dsp, str):
-        dsp = float(dsp.strip())
-    if isinstance(ff, str):
-        ff = float(ff.strip())
-    if isinstance(lut, str):
-        lut = float(lut.strip())
-
-    targets = {"bram": bram, "dsp": dsp, "ff": ff, "lut": lut}
-
-    cycles_min = latency_report.get("cycles_min", None)
-    cycles_max = latency_report.get("cycles_max", None)
-    interval_min = latency_report.get("interval_min", None)
-    interval_max = latency_report.get("interval_max", None)
-
-    if isinstance(cycles_min, str):
-        cycles_min = float(cycles_min.strip())
-    if isinstance(cycles_max, str):
-        cycles_max = float(cycles_max.strip())
-    if isinstance(interval_min, str):
-        interval_min = float(interval_min.strip())
-    if isinstance(interval_max, str):
-        interval_max = float(interval_max.strip())
-
-    if cycles_min is not None and cycles_max is not None:
-        targets["cycles"] = (cycles_min + cycles_max) / 2.0
-    else:
-        targets["cycles"] = None
-
-    if interval_min is not None and interval_max is not None:
-        targets["interval"] = (interval_min + interval_max) / 2.0
-    else:
-        targets["interval"] = None
+    targets = {}
+    for report, keys in [
+        (resource_report, ["bram", "dsp", "ff", "lut"]),
+        (latency_report, ["cycles_min", "cycles_max", "interval_min", "interval_max"]),
+    ]:
+        for key in keys:
+            value = report.get(key, None)
+            targets[key] = float(value.strip()) if isinstance(value, str) else value
 
     return targets
 
