@@ -452,7 +452,42 @@ Training accurate predictors requires large datasets of synthesized neural netwo
 Newer predictors were trained on `wa-hls4ml`, a bigger dataset including more architectures and parameter ranges. This dataset, along with the HLS project files, can be found at [https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml](https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml) and [https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml-projects](https://huggingface.co/datasets/fastmachinelearning/wa-hls4ml-projects).
 
 ## Limitations
-In their current iteration, the predictors can process [Keras](https://keras.io/about/) or [PyTorch](https://pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html) models to generate FPGA resources (**BRAM**, **DSP**, **FF**, **LUT**) and latency (**Clock Cycles**) estimations for various synthesis configurations. However, the training models are limited to specific layers: **Dense/Linear**, **ReLU**, **Tanh**, **Sigmoid**, **Softmax**, **BatchNorm**, **Add**, **Concatenate**, and **Dropout**. They are also constrained by synthesis parameters, notably **clock_period** (10 ns) and **io_type** (io_parallel). Inputs outside these configurations may result in inaccurate predictions.
+The default predictors take Keras, QKeras or PyTorch models and estimate FPGA resources (**BRAM**, **DSP**, **FF**, **LUT**) and latency (**Clock Cycles**, **Interval**). Inputs outside their training data may give inaccurate predictions.
+
+- **Layers:** Dense/Linear, Conv1D and Conv2D, max and average pooling, Flatten, BatchNorm, Add, Concatenate, Dropout, and the ReLU, Sigmoid, Tanh and Softmax activations.
+- **Configurations:** the pynq-z2, zcu102, alveo-u200 and alveo-u250 boards, the Latency and Resource strategies, hls4ml 0.8.1 and 1.1.0, and Vivado 2019.1 to 2024.2.
+- **Synthesis settings:** clock period and io_type are not model inputs. Most training records use a 5 or a 10 ns clock with io_parallel.
+- **Latency:** v1 and v2 predict the average of the minimum and maximum. For convolutional models the minimum and maximum interval can differ by orders of magnitude, so their interval estimate is rough.
+
+## Citation
+If you use rule4ml in a publication, please cite:
+```bibtex
+@article{rahimifar2025rule4ml,
+  author    = {Rahimifar, Mohammad Mehdi and Ezzaoui Rahali, Hamza and Therrien, Audrey C.},
+  title     = {{rule4ml: an open-source tool for resource utilization and latency estimation for ML models on FPGA}},
+  journal   = {Machine Learning: Science and Technology},
+  publisher = {IOP Publishing},
+  volume    = {6},
+  number    = {1},
+  pages     = {015009},
+  year      = {2025},
+  doi       = {10.1088/2632-2153/ada71c}
+}
+```
+If you use the predictors trained on `wa-hls4ml`, please also cite:
+```bibtex
+@article{hawks2026wahls4ml,
+  author    = {Hawks, Benjamin and Weitz, Jason and Demler, Dmitri and Tame-Narvaez, Karla and Plotnikov, Dennis and Rahimifar, Mohammad Mehdi and Ezzaoui Rahali, Hamza and Therrien, Audrey C. and Sproule, Donovan and Khoda, Elham E and Smith, Keegan A. and Marroquin, Russell and Di Guglielmo, Giuseppe and Tran, Nhan and Duarte, Javier and Loncar, Vladimir},
+  title     = {{wa-hls4ml: A Benchmark and Surrogate Models for hls4ml Resource and Latency Estimation}},
+  journal   = {ACM Transactions on Reconfigurable Technology and Systems},
+  publisher = {Association for Computing Machinery},
+  volume    = {19},
+  number    = {2},
+  pages     = {20},
+  year      = {2026},
+  doi       = {10.1145/3787490}
+}
+```
 
 ## License
 This project is licensed under the GPL-3.0 License. See the [LICENSE](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/LICENSE) file for details.
