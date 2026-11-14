@@ -454,6 +454,16 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
         return features
 
+    layer_keys = {
+        "inputs": "input_shape",
+        "outputs": "output_shape",
+        "parameters": "parameters",
+        "reuse": "reuse_factor",
+        "filters": "filters",
+        "kernel_size": "kernel_size",
+        "strides": "strides",
+    }
+
     for idx, layer in enumerate(model_config):
         layer_class = layer["class_name"].lower()
         if layer_class[0] == "q" and layer_class[1:] in features_to_extract:
@@ -464,18 +474,13 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
         if layer_class in features_to_extract:
             features_to_extract[layer_class]["count"] += 1
-            for feature_key, layer_key in zip(
-                ["inputs", "outputs", "parameters", "reuse"],
-                ["input_shape", "output_shape", "parameters", "reuse_factor"],
-            ):
+            for feature_key, layer_key in layer_keys.items():
                 if feature_key in features_to_extract[layer_class]:
                     features_to_extract[layer_class][feature_key] = get_layer_features(
                         features_to_extract[layer_class][feature_key], layer[layer_key]
                     )
 
-    adjusted_features = adjust_feature_values(
-        features_to_extract, keys=["inputs", "outputs", "parameters", "reuse"]
-    )
+    adjusted_features = adjust_feature_values(features_to_extract, keys=layer_keys)
     extracted_features = unwrap_nested_dicts(adjusted_features)
 
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])

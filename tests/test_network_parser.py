@@ -1,12 +1,14 @@
 import pytest
 
+from rule4ml.parsers.data_parser import get_global_inputs
 from rule4ml.parsers.network_parser import config_from_keras_model
 
 keras = pytest.importorskip("keras")
 layers = keras.layers
 
 HLS_CONFIG = {
-    "model": {"precision": "ap_fixed<16,6>", "reuse_factor": 1, "strategy": "Resource"}
+    "board": "zcu102",
+    "model": {"precision": "ap_fixed<16,6>", "reuse_factor": 1, "strategy": "Resource"},
 }
 CNN_SHAPES = [  # (class_name, input_shape, output_shape) without batch dimension
     ("Conv2D", (32, 32, 3), (32, 32, 8)),
@@ -17,13 +19,17 @@ CNN_SHAPES = [  # (class_name, input_shape, output_shape) without batch dimensio
 
 
 def test_parse_pooling_cnn(keras_cnn):
+    layers_config = config_from_keras_model(keras_cnn, HLS_CONFIG)
     shapes = [
         (layer["class_name"], layer["input_shape"][1:], layer["output_shape"][1:])
-        for layer in config_from_keras_model(keras_cnn, HLS_CONFIG)
+        for layer in layers_config
         if layer["class_name"] not in ["InputLayer", "Activation"]
     ]
+    inputs = get_global_inputs(layers_config, HLS_CONFIG)
 
     assert shapes == CNN_SHAPES
+    for statistic in ["filters", "kernel_size", "strides"]:
+        assert inputs[f"conv2d_{statistic}_mean"] > 0
 
 
 @pytest.mark.parametrize("build_shape", [(None, 16), [None, 16]])
