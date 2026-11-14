@@ -181,6 +181,13 @@ class BaseSurrogate:
     def evaluate(self, dataset, report=None, verbose=0):
         """SMAPE, RMSE and R2 per output label, over the records where it is known."""
 
+        if (
+            "bram" in self.output_labels
+            and self.report
+            and report not in (None, self.report)
+        ):
+            raise ValueError(f"BRAM units differ between {self.report} and {report}")
+
         targets = dataset.targets(self.output_labels, report or self.report)
         predictions = self.predict_dataset(dataset, verbose=verbose)
         return metrics.evaluate(targets, predictions, self.output_labels)
@@ -962,11 +969,16 @@ class MultiSurrogate:
             for row, prediction in zip(rows, predictions.astype(float), strict=True):
                 board = boards_data[row["Board"]]
                 for target, value in zip(targets, prediction, strict=True):
+                    capacity = board.get(f"max_{target.lower()}")
+                    if target == "BRAM":  # boards count 18K blocks, Vivado 36K tiles
+                        target, capacity = {
+                            "resource_report": ("BRAM_36K", capacity / 2),
+                            "hls_resource_report": ("BRAM_18K", capacity),
+                        }.get(surrogate.report, ("BRAM", None))
+
                     row[target] = value
-                    if f"max_{target.lower()}" in board:
-                        row[f"{target} (%)"] = (
-                            value / board[f"max_{target.lower()}"]
-                        ) * 100
+                    if capacity:
+                        row[f"{target} (%)"] = value / capacity * 100
 
         outputs_df = pd.DataFrame(list(output_rows.values())).round(round_digits)
 

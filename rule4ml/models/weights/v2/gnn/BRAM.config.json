@@ -115,6 +115,7 @@
     null,
     1
   ],
+  "report": "resource_report",
   "model_class": "TorchGNN",
   "model_config": {
     "name": "BRAM_GNN_42",

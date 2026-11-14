@@ -92,8 +92,8 @@ prediction_df.to_html("keras_example.html")
       <th></th>
       <th></th>
       <th></th>
-      <th>BRAM</th>
-      <th>BRAM (%)</th>
+      <th>BRAM_36K</th>
+      <th>BRAM_36K (%)</th>
       <th>DSP</th>
       <th>DSP (%)</th>
       <th>FF</th>
@@ -133,7 +133,7 @@ prediction_df.to_html("keras_example.html")
       <th rowspan="12" valign="top">0.8.1</th>
       <th>2019.1</th>
       <td>2.52</td>
-      <td>0.90</td>
+      <td>1.80</td>
       <td>0.32</td>
       <td>0.14</td>
       <td>1265.02</td>
@@ -146,7 +146,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2019.2</th>
       <td>2.47</td>
-      <td>0.88</td>
+      <td>1.76</td>
       <td>0.48</td>
       <td>0.22</td>
       <td>1262.29</td>
@@ -159,7 +159,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2020.1</th>
       <td>2.29</td>
-      <td>0.82</td>
+      <td>1.64</td>
       <td>0.49</td>
       <td>0.22</td>
       <td>1109.34</td>
@@ -172,7 +172,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2020.2</th>
       <td>2.55</td>
-      <td>0.91</td>
+      <td>1.82</td>
       <td>0.53</td>
       <td>0.24</td>
       <td>1490.04</td>
@@ -185,7 +185,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2021.1</th>
       <td>2.31</td>
-      <td>0.83</td>
+      <td>1.65</td>
       <td>0.44</td>
       <td>0.20</td>
       <td>1054.50</td>
@@ -198,7 +198,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2021.2</th>
       <td>2.48</td>
-      <td>0.89</td>
+      <td>1.77</td>
       <td>0.58</td>
       <td>0.26</td>
       <td>1085.17</td>
@@ -211,7 +211,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2022.1</th>
       <td>2.53</td>
-      <td>0.90</td>
+      <td>1.81</td>
       <td>0.47</td>
       <td>0.21</td>
       <td>1301.50</td>
@@ -224,7 +224,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2022.2</th>
       <td>2.43</td>
-      <td>0.87</td>
+      <td>1.74</td>
       <td>0.57</td>
       <td>0.26</td>
       <td>1150.09</td>
@@ -237,7 +237,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2023.1</th>
       <td>2.51</td>
-      <td>0.90</td>
+      <td>1.79</td>
       <td>0.59</td>
       <td>0.27</td>
       <td>1357.55</td>
@@ -250,7 +250,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2023.2</th>
       <td>2.39</td>
-      <td>0.85</td>
+      <td>1.71</td>
       <td>0.29</td>
       <td>0.13</td>
       <td>304.04</td>
@@ -263,7 +263,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2024.1</th>
       <td>2.41</td>
-      <td>0.86</td>
+      <td>1.72</td>
       <td>0.54</td>
       <td>0.25</td>
       <td>1574.28</td>
@@ -276,7 +276,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2024.2</th>
       <td>2.08</td>
-      <td>0.74</td>
+      <td>1.49</td>
       <td>0.77</td>
       <td>0.35</td>
       <td>936.16</td>
@@ -290,7 +290,7 @@ prediction_df.to_html("keras_example.html")
       <th rowspan="12" valign="top">1.1.0</th>
       <th>2019.1</th>
       <td>2.57</td>
-      <td>0.92</td>
+      <td>1.84</td>
       <td>1.16</td>
       <td>0.53</td>
       <td>1237.20</td>
@@ -303,7 +303,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2019.2</th>
       <td>2.53</td>
-      <td>0.90</td>
+      <td>1.81</td>
       <td>1.39</td>
       <td>0.63</td>
       <td>1273.41</td>
@@ -316,7 +316,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2020.1</th>
       <td>2.35</td>
-      <td>0.84</td>
+      <td>1.68</td>
       <td>1.42</td>
       <td>0.65</td>
       <td>1023.07</td>
@@ -329,7 +329,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2020.2</th>
       <td>2.64</td>
-      <td>0.94</td>
+      <td>1.89</td>
       <td>1.45</td>
       <td>0.66</td>
       <td>1314.61</td>
@@ -342,7 +342,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2021.1</th>
       <td>2.34</td>
-      <td>0.84</td>
+      <td>1.67</td>
       <td>1.35</td>
       <td>0.61</td>
       <td>983.35</td>
@@ -355,7 +355,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2021.2</th>
       <td>2.56</td>
-      <td>0.91</td>
+      <td>1.83</td>
       <td>1.50</td>
       <td>0.68</td>
       <td>1149.12</td>
@@ -368,7 +368,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2022.1</th>
       <td>2.65</td>
-      <td>0.95</td>
+      <td>1.89</td>
       <td>1.39</td>
       <td>0.63</td>
       <td>1104.21</td>
@@ -381,7 +381,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2022.2</th>
       <td>2.47</td>
-      <td>0.88</td>
+      <td>1.76</td>
       <td>1.49</td>
       <td>0.68</td>
       <td>1200.66</td>
@@ -394,7 +394,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2023.1</th>
       <td>2.58</td>
-      <td>0.92</td>
+      <td>1.84</td>
       <td>1.64</td>
       <td>0.74</td>
       <td>1247.67</td>
@@ -407,7 +407,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2023.2</th>
       <td>2.49</td>
-      <td>0.89</td>
+      <td>1.78</td>
       <td>1.14</td>
       <td>0.52</td>
       <td>499.64</td>
@@ -420,7 +420,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2024.1</th>
       <td>2.46</td>
-      <td>0.88</td>
+      <td>1.76</td>
       <td>1.45</td>
       <td>0.66</td>
       <td>1373.96</td>
@@ -433,7 +433,7 @@ prediction_df.to_html("keras_example.html")
     <tr>
       <th>2024.2</th>
       <td>2.09</td>
-      <td>0.75</td>
+      <td>1.49</td>
       <td>1.99</td>
       <td>0.91</td>
       <td>1059.89</td>

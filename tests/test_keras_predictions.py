@@ -14,7 +14,7 @@ def test_predict_model_apis(estimator, model, hls_config):
         "vivado_versions": ["2023.2"],
         "round_digits": 10,
     }
-    targets = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
+    targets = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
 
     x = inputs = keras.Input(shape=(16,))
 
@@ -86,7 +86,7 @@ def test_predict_torch_twin(estimator, hls_config):
         "vivado_versions": ["2023.2"],
         "round_digits": 10,
     }
-    targets = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
+    targets = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
 
     x = inputs = keras.Input(shape=(16,))
     x = layers.Activation("relu")(layers.Dense(32, name="dense1")(x))

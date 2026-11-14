@@ -41,6 +41,7 @@
     null,
     1
   ],
+  "report": "hls_resource_report",
   "model_class": "KerasMLP",
   "model_config": {
     "name": "LUT_MLP",

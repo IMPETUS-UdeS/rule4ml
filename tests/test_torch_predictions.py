@@ -6,7 +6,7 @@ import torch
 
 from rule4ml.surrogates import KerasSurrogate, TorchSurrogate
 
-TARGETS = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
+TARGETS = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
 
 
 def test_predict_defaults(estimator, top_quarks):
