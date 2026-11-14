@@ -4,14 +4,6 @@ import os
 import re
 from bisect import bisect_left
 
-# hls4ml fixed-point grammar: width, integer bits, rounding, saturation, sat bits
-_ROUNDING = r"(?:ap_)?(?:trn|trn_zero|rnd|rnd_zero|rnd_inf|rnd_min_inf|rnd_conv)"
-_SATURATION = r"(?:ap_)?(?:wrap|sat|sat_zero|sat_sym)"
-_FIXED_PRECISION = re.compile(
-    rf"(?:ap_)?fixed<(\d+),(-?\d+)(?:,{_ROUNDING}(?:,{_SATURATION}(?:,\d+)?)?)?>",
-    re.IGNORECASE,
-)
-
 
 def camel_keys_to_snake(d: dict, recursive=True):
     """Convert HLS config keys to snake_case and LayerType/LayerName identifiers to lowercase."""
@@ -110,6 +102,76 @@ def get_reuse_factor(hls_config, layer, name=None):
     return reuse_factor
 
 
+def get_weight_bits(hls_config, layer, name=None):
+    """Weight bit width hls4ml gives a layer record, in hls4ml's precision lookup order."""
+
+    layer_type = layer["class_name"].lower().removeprefix("q")  # QDense is a Dense
+    if layer_type not in ("dense", "conv1d", "conv2d"):
+        return None
+
+    model_precision = hls_config["model"]["precision"]
+    levels = [
+        hls_config.get("layer_type", {}).get(layer_type, {}).get("precision"),
+        model_precision,
+    ]
+    if name is not None:
+        layer_config = hls_config.get("layer_name", {}).get(name.lower(), {})
+        levels.insert(0, layer_config.get("precision"))
+
+    for precision in levels:
+        if isinstance(precision, dict):
+            precision = precision.get("weight", precision.get("default"))
+        if precision is not None:
+            break
+
+    if precision == "auto":  # hls4ml infers the model default
+        if isinstance(model_precision, dict):
+            model_precision = model_precision["default"]
+        precision = model_precision
+
+    precision = re.sub(r"\s", "", precision)
+    if match := re.fullmatch(r"(?:ap_)?u?int<(\d+)>", precision, re.IGNORECASE):
+        return int(match[1])
+
+    signed = re.sub(r"^((?:ap_)?)u(?=fixed)", r"\1", precision, flags=re.IGNORECASE)
+
+    return fixed_precision_to_bit_width(signed)[0]
+
+
+def name_weighted_layers(model_config, hls_config):
+    """Name a record's weighted layers after their LayerName weight precisions.
+
+    Records drop layer names, and hls4ml lists LayerName entries in layer order.
+    """
+
+    model_config = [dict(layer) for layer in model_config]
+    if any("name" in layer for layer in model_config):
+        return model_config
+
+    names = [
+        name
+        for name, config in (hls_config.get("layer_name") or {}).items()
+        if isinstance(config.get("precision"), dict) and "weight" in config["precision"]
+    ]
+    if not names:  # precision set by type or model
+        return model_config
+
+    layers = [
+        layer
+        for layer in model_config
+        if get_weight_bits(hls_config, layer) is not None
+    ]
+    if len(names) != len(layers):
+        raise ValueError(
+            f"{len(names)} LayerName weight precisions for {len(layers)} layers"
+        )
+
+    for layer, name in zip(layers, names):
+        layer["name"] = name
+
+    return model_config
+
+
 def ensure_input_layer(model_config, hls_config, name="input1"):
     """Prepend the InputLayer that Keras model.layers omits for Sequential models."""
 
@@ -140,7 +202,14 @@ def get_activation_name(activation):
 def fixed_precision_to_bit_width(precision: str):
     """Return (total_bits, integer_bits) of an hls4ml ap_fixed precision string."""
 
-    match = _FIXED_PRECISION.fullmatch(re.sub(r"\s", "", precision))
+    # hls4ml fixed-point grammar: width, integer bits, rounding, saturation, sat bits
+    rounding = r"(?:ap_)?(?:trn|trn_zero|rnd|rnd_zero|rnd_inf|rnd_min_inf|rnd_conv)"
+    saturation = r"(?:ap_)?(?:wrap|sat|sat_zero|sat_sym)"
+    match = re.fullmatch(
+        rf"(?:ap_)?fixed<(\d+),(-?\d+)(?:,{rounding}(?:,{saturation}(?:,\d+)?)?)?>",
+        re.sub(r"\s", "", precision),
+        re.IGNORECASE,
+    )
     if not match:
         raise ValueError(
             f'Invalid precision: {precision}, expecting "ap_fixed<W,I[,Q[,O[,N]]]>"'

@@ -7,10 +7,15 @@ from rule4ml.dataset import load, prepare, split
 
 
 def test_prepare_roundtrip(tmp_path, record):
+    named = record(blocks=1)
+    named["hls_config"]["LayerName"] = {
+        "fc1": {"Precision": {"weight": "ap_fixed<4,1>"}},
+        "fc2": {"Precision": {"weight": "ap_fixed<12,4>"}},
+    }
     sequential = record(blocks=2, hls=False)
     del sequential["model_config"][0]  # Sequential records lack the InputLayer
     source = tmp_path / "records.json"
-    source.write_text(json.dumps([record(blocks=1), None, sequential]))
+    source.write_text(json.dumps([named, None, sequential]))
     prepare([source], tmp_path / "data.npz")
     dataset = load(tmp_path / "data.npz")
 
@@ -21,6 +26,10 @@ def test_prepare_roundtrip(tmp_path, record):
         ["inputlayer", "dense", "relu", "dense"]
         + ["inputlayer", "dense", "relu", "dense", "relu", "dense"]
     )
+    weight_bits = dataset.layer_values[
+        :, dataset.layer_names.index("layer_weight_bits")
+    ]
+    assert weight_bits.tolist() == [0, 4, 0, 12, 0, 8, 0, 8, 0, 8]
 
     glob = {
         name: dataset.global_values[:, i] for i, name in enumerate(dataset.global_names)

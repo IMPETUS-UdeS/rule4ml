@@ -11,6 +11,8 @@ from rule4ml.parsers.utils import (
     camel_keys_to_snake,
     ensure_input_layer,
     get_board_from_part,
+    get_weight_bits,
+    name_weighted_layers,
 )
 
 
@@ -44,9 +46,16 @@ def record_features(record):
     if (target_part := record.get("target_part")) is not None:
         hls_config["board"] = get_board_from_part(target_part)
 
-    model_config = ensure_input_layer(
-        record["model_config"], camel_keys_to_snake(hls_config)
+    snake_config = camel_keys_to_snake(hls_config)
+    model_config = name_weighted_layers(
+        ensure_input_layer(record["model_config"], snake_config), snake_config
     )
+
+    for layer in model_config:
+        weight_bits = get_weight_bits(snake_config, layer, layer.get("name"))
+        if weight_bits is not None:
+            layer["weight_bits"] = weight_bits
+
     global_inputs = get_global_inputs(
         model_config,
         hls_config,

@@ -716,7 +716,7 @@ class TorchSurrogate(BaseSurrogate):
             return outputs.detach().cpu().numpy()
 
     def _save_weights(self, save_dir):
-        weights_path = os.path.join(save_dir, f"{self.model.name}_weights.pt")
+        weights_path = os.path.join(save_dir, f"{self.model.name}.weights.pt")
         torch.save(self.model.state_dict(), weights_path)
 
     def _load_weights(self, weights_path):

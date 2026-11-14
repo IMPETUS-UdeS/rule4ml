@@ -132,6 +132,7 @@ def get_layers_data(model_config):
             "layer_op_mult": layers_fixed_ops[idx].get("mult", 0),
             "layer_op_logical": layers_fixed_ops[idx].get("logical", 0),
             "layer_op_lookup": layers_fixed_ops[idx].get("lookup", 0),
+            "layer_weight_bits": layer_config.get("weight_bits", 0),
         }
         layers_data.append(data)
 
@@ -484,6 +485,7 @@ def get_global_inputs(model_config, hls_config, **kwargs):
     extracted_features = unwrap_nested_dicts(adjusted_features)
 
     reuse_factor_mean = np.mean([x["reuse_factor"] for x in model_config])
+    weight_bits = [x["weight_bits"] for x in model_config if "weight_bits" in x]
 
     hls_config = camel_keys_to_snake(hls_config)
     precision = hls_config["model"]["precision"]
@@ -506,6 +508,9 @@ def get_global_inputs(model_config, hls_config, **kwargs):
         "fractional_bits": total_bits - integer_bits,
         "global_reuse": hls_config["model"]["reuse_factor"],
         "reuse_mean": reuse_factor_mean,
+        "weight_bits_min": min(weight_bits, default=0),
+        "weight_bits_max": max(weight_bits, default=0),
+        "weight_bits_mean": float(np.mean(weight_bits)) if weight_bits else 0.0,
         "clock_period": None if clock_period is None else float(clock_period),
         "hls4ml_version": kwargs.get("hls4ml_version", None),
         "vivado_version": kwargs.get("vivado_version", None),

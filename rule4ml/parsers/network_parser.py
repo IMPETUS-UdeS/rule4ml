@@ -6,6 +6,7 @@ from rule4ml.parsers.utils import (
     ensure_input_layer,
     get_closest_reuse_factor,
     get_reuse_factor,
+    get_weight_bits,
 )
 
 try:
@@ -142,6 +143,20 @@ def config_from_keras_model(model, hls_config):
 
         reuse_factor = get_reuse_factor(hls_config, layer_dict, layer.name)
         layer_dict["reuse_factor"] = reuse_factor
+
+        quantizer = layer_config.get("kernel_quantizer")  # hls4ml prefers it to config
+        if quantizer is None:
+            weight_bits = get_weight_bits(hls_config, layer_dict, layer.name)
+        elif quantizer["class_name"] in ("quantized_bits", "quantized_po2"):
+            weight_bits = int(quantizer["config"]["bits"])
+        elif "binary" in quantizer["class_name"]:
+            weight_bits = 1
+        elif "ternary" in quantizer["class_name"]:
+            weight_bits = 2
+        else:  # hls4ml's width for unsupported quantizers
+            weight_bits = 16
+        if weight_bits is not None:
+            layer_dict["weight_bits"] = weight_bits
 
         if class_name in ["Dense", "QDense"]:
             n_in = np.prod([x for x in input_shape if x is not None])
@@ -422,6 +437,9 @@ def config_from_torch_model(model, hls_config):
             reuse_factor = get_closest_reuse_factor(n_in, n_out, reuse_factor)
 
         layer_dict["reuse_factor"] = reuse_factor
+        weight_bits = get_weight_bits(hls_config, layer_dict, node.name)
+        if weight_bits is not None:
+            layer_dict["weight_bits"] = weight_bits
         layers_data[node.name] = layer_dict
 
     layers_data = list(layers_data.values())

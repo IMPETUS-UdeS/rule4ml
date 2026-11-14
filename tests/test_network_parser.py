@@ -31,7 +31,7 @@ def test_parse_pooling_cnn(keras_cnn):
         assert inputs[f"conv2d_{statistic}_mean"] > 0
 
 
-def test_parse_reuse_overrides():
+def test_parse_layer_overrides():
     model = keras.Sequential(
         [
             keras.Input(shape=(16,), name="Features"),
@@ -45,6 +45,7 @@ def test_parse_reuse_overrides():
         "LayerType": {"Dense": {"ReuseFactor": 8}, "Activation": {"ReuseFactor": 2}},
         "LayerName": {
             "FEATURES": {"ReuseFactor": 16},
+            "HIDDEN": {"Precision": {"weight": "ap_int<4>"}},
             "HIDDEN_RELU": {"ReuseFactor": 4},
         },
     }
@@ -52,6 +53,8 @@ def test_parse_reuse_overrides():
     layers_config = config_from_keras_model(model, hls_config)
 
     assert [layer["reuse_factor"] for layer in layers_config] == [16, 8, 4, 8, 1]
+    weight_bits = [layer.get("weight_bits") for layer in layers_config]
+    assert weight_bits == [None, 4, None, 16, None]
 
 
 def test_parse_subclassed_dense():
