@@ -10,11 +10,11 @@ def test_prepare_roundtrip(tmp_path, record):
     sequential = record(blocks=2, hls=False)
     del sequential["model_config"][0]  # Sequential records lack the InputLayer
     source = tmp_path / "records.json"
-    source.write_text(json.dumps([record(blocks=1), sequential]))
+    source.write_text(json.dumps([record(blocks=1), None, sequential]))
     prepare([source], tmp_path / "data.npz")
     dataset = load(tmp_path / "data.npz")
 
-    assert dataset.offsets.tolist() == [0, 4, 10]  # linear activations skipped
+    assert dataset.offsets.tolist() == [0, 4, 10]  # null and linear skipped
 
     codes, vocab = dataset.layer_types
     assert vocab[codes].tolist() == (

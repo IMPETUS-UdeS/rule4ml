@@ -1,4 +1,3 @@
-import os
 from dataclasses import replace
 
 import numpy as np
@@ -20,8 +19,6 @@ from rule4ml.parsers.data_parser import (
     default_strategy_map,
 )
 from rule4ml.surrogates import TorchSurrogate, TrainSettings
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
 GLOBAL_LABELS = ["dense_count", "dense_parameters_mean", "bit_width", "reuse_mean"]
 SEQUENTIAL_LABELS = ["layer_input_size", "layer_output_size", "layer_parameter_count"]

@@ -1,3 +1,7 @@
+import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only, set before any import
+
 import json
 from pathlib import Path
 

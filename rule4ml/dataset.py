@@ -170,6 +170,9 @@ def prepare(json_paths, out_path):
         del content
 
         for record in records if isinstance(records, list) else [records]:
+            if record is None:  # a few published records are null
+                continue
+
             global_inputs, layers = record_features(record)
             if not layers:
                 raise ValueError(f"Record without layers in {path}")

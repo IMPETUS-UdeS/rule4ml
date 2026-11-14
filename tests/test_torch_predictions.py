@@ -1,4 +1,3 @@
-import os
 from importlib.util import find_spec
 
 import numpy as np
@@ -6,8 +5,6 @@ import pytest
 import torch
 
 from rule4ml.surrogates import KerasSurrogate, TorchSurrogate
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
 TARGETS = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
 

@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pytest
 import torch
@@ -7,8 +5,6 @@ import torch
 keras = pytest.importorskip("keras")
 layers = keras.layers
 from rule4ml.surrogates import KerasSurrogate
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
 
 def test_predict_model_apis(estimator, model, hls_config):
