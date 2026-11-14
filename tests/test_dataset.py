@@ -7,8 +7,10 @@ from rule4ml.dataset import load, prepare, split
 
 
 def test_prepare_roundtrip(tmp_path, record):
+    sequential = record(blocks=2, hls=False)
+    del sequential["model_config"][0]  # Sequential records lack the InputLayer
     source = tmp_path / "records.json"
-    source.write_text(json.dumps([record(blocks=1), record(blocks=2, hls=False)]))
+    source.write_text(json.dumps([record(blocks=1), sequential]))
     prepare([source], tmp_path / "data.npz")
     dataset = load(tmp_path / "data.npz")
 

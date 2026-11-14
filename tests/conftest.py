@@ -92,6 +92,7 @@ def _record(blocks, hls=True, lut=500.0, record_id=None):
             "parameters": (n_in + 1) * n_out,
             "trainable_parameters": (n_in + 1) * n_out,
             "use_bias": True,
+            "dtype": "float32",
             "reuse_factor": 4,
         }
 

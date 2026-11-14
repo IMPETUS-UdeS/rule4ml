@@ -7,7 +7,11 @@ from rule4ml.parsers.network_parser import (
     config_from_keras_model,
     config_from_torch_model,
 )
-from rule4ml.parsers.utils import get_board_from_part
+from rule4ml.parsers.utils import (
+    camel_keys_to_snake,
+    ensure_input_layer,
+    get_board_from_part,
+)
 
 
 def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
@@ -40,12 +44,15 @@ def record_features(record):
     if (target_part := record.get("target_part")) is not None:
         hls_config["board"] = get_board_from_part(target_part)
 
+    model_config = ensure_input_layer(
+        record["model_config"], camel_keys_to_snake(hls_config)
+    )
     global_inputs = get_global_inputs(
-        record["model_config"],
+        model_config,
         hls_config,
         clock_period=(record.get("latency_report") or {}).get("target_clock"),
         hls4ml_version=record.get("hls4ml_version"),
         vivado_version=record.get("vivado_version") or record.get("backend_version"),
     )
 
-    return global_inputs, get_layers_data(record["model_config"])
+    return global_inputs, get_layers_data(model_config)

@@ -1,7 +1,11 @@
 import numpy as np
 import torch
 
-from rule4ml.parsers.utils import camel_keys_to_snake, get_closest_reuse_factor
+from rule4ml.parsers.utils import (
+    camel_keys_to_snake,
+    ensure_input_layer,
+    get_closest_reuse_factor,
+)
 
 try:
     import onnx
@@ -69,19 +73,18 @@ def config_from_keras_model(model, hls_config):
                     f"Could not get the input shape for layer {layer.name}. Make sure model.build() was called previously."
                 )
 
-        input_shape = np.asarray(input_shape).flatten()
-        input_shape = tuple(input_shape)
-        layer_dict["input_shape"] = input_shape
+        layer_dict["input_shape"] = tuple(np.asarray(input_shape).flatten())
 
         if class_name == "InputLayer":  # Same input and output shape for InputLayer
-            output_shape = input_shape
+            output_shape = layer_dict["input_shape"]
         elif hasattr(layer, "output_shape"):  # Keras 2
             output_shape = layer.output_shape
-        else:  # Keras 3, layers other than InputLayer
+        else:  # Keras 3, merge layers take the list of input shapes
             output_shape = layer.compute_output_shape(input_shape)
 
+        input_shape = layer_dict["input_shape"]
         output_shape = tuple(output_shape)
-        layer_dict["output_shape"] = tuple(output_shape)
+        layer_dict["output_shape"] = output_shape
 
         # Tracking inbound layers can be useful for add/concatenate layers
         if hasattr(layer, "inbound_nodes"):
@@ -180,7 +183,7 @@ def config_from_keras_model(model, hls_config):
 
             layers_data.append(activation_dict)
 
-    return layers_data
+    return ensure_input_layer(layers_data, hls_config)
 
 
 def _input_shape(layer):

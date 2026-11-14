@@ -11,11 +11,28 @@ from rule4ml.surrogates import KerasSurrogate
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # CPU only
 
 
-def test_predict_defaults(estimator, model):
-    prediction_df = estimator.predict(model)
+def test_predict_model_apis(estimator, model, hls_config):
+    settings = {
+        "hls_configs": hls_config,
+        "hls4ml_versions": ["0.8.1"],
+        "vivado_versions": ["2023.2"],
+        "round_digits": 10,
+    }
+    targets = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
 
-    assert not prediction_df.empty
-    assert not prediction_df.isna().any().any()
+    x = inputs = keras.Input(shape=(16,))
+
+    for units in [32, 32, 32]:
+        x = layers.Activation("relu")(layers.Dense(units)(x))
+
+    x = layers.Activation("softmax")(layers.Dense(5)(x))
+
+    functional_predictions = estimator.predict(keras.Model(inputs, x), **settings)
+    predictions = estimator.predict(model, **settings)
+
+    np.testing.assert_allclose(
+        predictions[targets], functional_predictions[targets], rtol=1e-6
+    )
 
 
 def test_predict_pooling_cnn(estimator):
@@ -76,9 +93,11 @@ def test_predict_torch_twin(estimator, hls_config):
     targets = ["BRAM", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
 
     x = inputs = keras.Input(shape=(16,))
+    x = layers.Activation("relu")(layers.Dense(32, name="dense1")(x))
 
-    for idx in [1, 2, 3]:
-        x = layers.Activation("relu")(layers.Dense(32, name=f"dense{idx}")(x))
+    for idx in [2, 3]:
+        residual = layers.Activation("relu")(layers.Dense(32, name=f"dense{idx}")(x))
+        x = layers.Add()([x, residual])
 
     x = layers.Activation("softmax")(layers.Flatten()(layers.Dense(5)(x)))
 
@@ -115,7 +134,7 @@ class JetClassifier(keras.Model):
 
 
 class TorchJetClassifier(torch.nn.Module):
-    """Jet Classifier in Torch, mixing activation forms."""
+    """Residual Jet Classifier in Torch, mixing activation forms."""
 
     def __init__(self):
         super().__init__()
@@ -128,8 +147,8 @@ class TorchJetClassifier(torch.nn.Module):
 
     def forward(self, x):
         x = self.relu(self.dense1(x))
-        x = torch.relu(self.dense2(x))
-        x = self.dense3(x).relu()
+        x = x + torch.relu(self.dense2(x))
+        x = x + self.dense3(x).relu()
 
         return self.softmax(self.dense4(x).view(-1, 5))
 

@@ -82,6 +82,25 @@ def unwrap_nested_dicts(d, prefix=None):
     return dict(items)
 
 
+def ensure_input_layer(model_config, hls_config):
+    """Prepend the InputLayer that Keras model.layers omits for Sequential models."""
+
+    if model_config[0]["class_name"] == "InputLayer":
+        return model_config
+
+    input_layer = {
+        "class_name": "InputLayer",
+        "input_shape": model_config[0]["input_shape"],
+        "output_shape": model_config[0]["input_shape"],
+        "parameters": 0,
+        "trainable_parameters": 0,
+        "dtype": model_config[0]["dtype"],
+        "reuse_factor": hls_config["model"]["reuse_factor"],
+    }
+
+    return [input_layer, *model_config]
+
+
 def get_activation_name(activation):
     match = re.match(r"quantized_(\w+)(?:\(?[^)]*\)?)", activation)
     if match:
