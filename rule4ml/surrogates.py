@@ -22,6 +22,7 @@ from rule4ml.models import architectures, metrics, scaling
 from rule4ml.models.architectures import (
     TorchGNN,
     TorchMLP,
+    TorchTransformer,
 )
 from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.losses import get_loss_from_str
@@ -809,7 +810,14 @@ class TorchSurrogate(BaseSurrogate):
             )
 
         def set_dropout_train(m):
-            if isinstance(m, torch.nn.Dropout):
+            if isinstance(  # attention dropout and the encoder fast path skip Dropout
+                m,
+                (
+                    torch.nn.Dropout,
+                    torch.nn.MultiheadAttention,
+                    torch.nn.TransformerEncoderLayer,
+                ),
+            ):
                 m.train()
 
         self.model.apply(set_dropout_train)
@@ -960,7 +968,11 @@ class MultiSurrogate:
                     raise FileNotFoundError(
                         f"Weights file not found: {path}.weights.h5"
                     )
-            elif class_name in [TorchMLP.__name__, TorchGNN.__name__]:
+            elif class_name in [
+                TorchMLP.__name__,
+                TorchGNN.__name__,
+                TorchTransformer.__name__,
+            ]:
                 if os.path.exists(f"{path}.weights.pt"):
                     surrogate = TorchSurrogate()
                     surrogate.load(f"{path}.config.json", f"{path}.weights.pt")

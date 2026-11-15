@@ -11,6 +11,8 @@ from rule4ml.models.architectures import (
     MLPSettings,
     TorchGNN,
     TorchMLP,
+    TorchTransformer,
+    TransformerSettings,
 )
 from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.metrics import TorchParametricR2, r2
@@ -46,6 +48,14 @@ def _torch_gnn(linear_output=False):
     return TorchGNN(settings, *_shapes(), GLOBAL_MAPS, SEQUENTIAL_MAPS, device="cpu")
 
 
+def _torch_transformer(linear_output=False):
+    settings = TransformerSettings([4], [1, 2], [2], 8, 2, 1, 16, 0.0, dense_layers=[8])
+    settings.linear_output = linear_output
+    return TorchTransformer(
+        settings, *_shapes(), GLOBAL_MAPS, SEQUENTIAL_MAPS, device="cpu"
+    )
+
+
 def _torch_mlp(linear_output=False):
     settings = MLPSettings([1, 1, 2], [4], [8], [0.0], linear_output=linear_output)
     return TorchMLP(settings, _shapes()[0], (None, 1), GLOBAL_MAPS, device="cpu")
@@ -70,6 +80,7 @@ def _shapes():
     ("surrogate_class", "build", "sequential", "scaler_class"),
     [
         (TorchSurrogate, _torch_gnn, True, None),
+        (TorchSurrogate, _torch_transformer, True, None),
         (TorchSurrogate, _torch_mlp, False, BoardScaler),
         (TorchSurrogate, _torch_mlp, False, BoardPercentScaler),
         ("keras", _keras_mlp, False, Log1pScaler),

@@ -86,6 +86,30 @@ class GNNSettings:
         return cls(**config)
 
 
+@dataclass
+class TransformerSettings:
+    numerical_dense_layers: list = field(default_factory=lambda: [32])
+    global_embedding_layers: list = field(default_factory=lambda: [16, 16, 16, 16])
+    seq_embedding_layers: list = field(default_factory=lambda: [16])
+
+    d_model: int = 128
+    num_heads: int = 8
+    num_layers: int = 4
+    feedforward_dim: int = 512
+    dropout: float = 0.1
+    max_layers: int = 256  # positions of the layer tokens
+
+    dense_layers: list = field(default_factory=lambda: [128, 64])
+    linear_output: bool = True  # Keep negative outputs. For targets scaled below 0
+
+    def to_config(self):
+        return dict(self.__dict__)
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+
 if keras is not None:
 
     class KerasMLP(keras.Model):
@@ -521,8 +545,193 @@ class TorchGNN(torch.nn.Module):
         return cls(**config)
 
 
+class TorchTransformer(torch.nn.Module):
+    """Transformer encoder over a global-feature token and one token per layer."""
+
+    def __init__(
+        self,
+        settings: TransformerSettings,
+        global_input_shape,
+        sequential_input_shape,
+        output_shape,
+        global_categorical_maps,
+        sequential_categorical_maps,
+        name="TorchTransformer",
+        device=None,
+    ):
+        super().__init__()
+
+        d_model = settings.d_model
+        output_size = output_shape[-1]
+
+        self.global_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(global_categorical_maps):
+            self.global_embeddings[f"g{idx}_{key}_embedding"] = zero_embedding(
+                len(global_categorical_maps[key]) + 1,
+                settings.global_embedding_layers[idx],
+            )
+
+        g_in_dim = global_input_shape[-1] - len(global_categorical_maps)
+        self.numerical_layers = torch.nn.ModuleDict()
+        for idx, units in enumerate(settings.numerical_dense_layers):
+            self.numerical_layers[
+                f"g{idx + len(global_categorical_maps)}_numerical_layer"
+            ] = torch.nn.Linear(g_in_dim, units, bias=False)
+            g_in_dim = units
+
+        global_embedding_dim = sum(
+            settings.global_embedding_layers[: len(global_categorical_maps)]
+        )
+        self.global_projection = torch.nn.Linear(
+            global_embedding_dim + g_in_dim, d_model
+        )
+
+        self.sequential_embeddings = torch.nn.ModuleDict()
+        for idx, key in enumerate(sequential_categorical_maps):
+            self.sequential_embeddings[f"s{idx}_{key}_embedding"] = zero_embedding(
+                len(sequential_categorical_maps[key]) + 1,
+                settings.seq_embedding_layers[idx],
+            )
+
+        seq_embedding_dim = sum(
+            settings.seq_embedding_layers[: len(sequential_categorical_maps)]
+        )
+        seq_numerical_dim = sequential_input_shape[-1] - len(
+            sequential_categorical_maps
+        )
+        self.layer_projection = torch.nn.Linear(
+            seq_embedding_dim + seq_numerical_dim, d_model
+        )
+        self.positions = zero_embedding(  # depths absent from training add nothing
+            settings.max_layers + 1, d_model
+        )
+
+        self.encoder = torch.nn.TransformerEncoder(
+            torch.nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=settings.num_heads,
+                dim_feedforward=settings.feedforward_dim,
+                dropout=settings.dropout,
+                batch_first=True,
+                norm_first=True,
+            ),
+            num_layers=settings.num_layers,
+            norm=torch.nn.LayerNorm(d_model),
+            enable_nested_tensor=False,
+        )
+
+        # one learned query per output, plus a share of the encoded global token
+        self.queries = torch.nn.Parameter(torch.randn(output_size, d_model))
+        self.cross_attention = torch.nn.MultiheadAttention(
+            d_model, settings.num_heads, dropout=settings.dropout, batch_first=True
+        )
+        self.global_share = torch.nn.Parameter(torch.full((output_size, 1), 0.25))
+
+        self.heads = torch.nn.ModuleList()
+        for _ in range(output_size):
+            layers, in_dim = [], d_model
+            for units in settings.dense_layers:
+                layers += [torch.nn.Linear(in_dim, units), torch.nn.ReLU()]
+                in_dim = units
+            layers.append(torch.nn.Linear(in_dim, 1))
+            self.heads.append(torch.nn.Sequential(*layers))
+
+        self.name = name
+        self.settings = settings
+
+        self.global_input_keys = {
+            "categorical": [name for name in self.global_embeddings],
+            "numerical": f"g{len(global_categorical_maps)}_numerical_layer",
+        }
+        self.global_input_shape = global_input_shape
+        self.global_categorical_maps = global_categorical_maps
+
+        self.sequential_input_keys = {
+            "categorical": [name for name in self.sequential_embeddings],
+            "numerical": f"s{len(sequential_categorical_maps)}_numerical_layer",
+        }
+        self.sequential_input_shape = sequential_input_shape
+        self.sequential_categorical_maps = sequential_categorical_maps
+
+        self.output_shape = output_shape
+
+        if device is None:
+            if torch.cuda.is_available() and os.environ.get(
+                "CUDA_VISIBLE_DEVICES"
+            ) not in ["", "-1"]:
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
+
+        self.device = device
+        self.to(self.device)
+
+    def forward(self, inputs):
+        x_global = [
+            self.global_embeddings[key](inputs[key]).flatten(1)
+            for key in self.global_embeddings
+        ]
+        x_numerical = inputs[self.global_input_keys["numerical"]]
+        for key in self.numerical_layers:
+            x_numerical = self.numerical_layers[key](x_numerical)
+        global_token = self.global_projection(torch.cat([*x_global, x_numerical], -1))
+
+        layer_values = inputs[self.sequential_input_keys["numerical"]]
+        padding = (layer_values == 0.0).all(dim=-1)
+        if padding.all(dim=1).any():
+            empty = torch.nonzero(padding.all(dim=1))[0].item()
+            raise ValueError(f"Record {empty} of the batch has no layers")
+
+        x_layers = [
+            self.sequential_embeddings[key](inputs[key]).flatten(2)
+            for key in self.sequential_embeddings
+        ]
+        layer_tokens = self.layer_projection(torch.cat([*x_layers, layer_values], -1))
+
+        batch_size, depth = padding.shape
+        if depth > self.settings.max_layers:
+            raise ValueError(
+                f"{depth} layers exceed max_layers={self.settings.max_layers}"
+            )
+
+        tokens = torch.cat([global_token.unsqueeze(1), layer_tokens], dim=1)
+        tokens = tokens + self.positions(torch.arange(depth + 1, device=tokens.device))
+        padding = torch.cat([padding.new_zeros(batch_size, 1), padding], dim=1)
+        encoded = self.encoder(tokens, src_key_padding_mask=padding)
+
+        queries = self.queries.expand(batch_size, -1, -1)
+        pooled, _ = self.cross_attention(
+            queries, encoded, encoded, key_padding_mask=padding
+        )
+        pooled = pooled + self.global_share * encoded[:, :1]
+        outputs = torch.cat(
+            [head(pooled[:, idx]) for idx, head in enumerate(self.heads)], dim=-1
+        )
+
+        if not self.settings.linear_output:
+            outputs = torch.nn.functional.softplus(outputs)
+
+        return outputs
+
+    def to_config(self):
+        return {
+            "name": self.name,
+            "settings": self.settings.to_config(),
+            "global_input_shape": self.global_input_shape,
+            "sequential_input_shape": self.sequential_input_shape,
+            "output_shape": self.output_shape,
+            "global_categorical_maps": self.global_categorical_maps,
+            "sequential_categorical_maps": self.sequential_categorical_maps,
+        }
+
+    @classmethod
+    def from_config(cls, config):
+        config["settings"] = TransformerSettings.from_config(config["settings"])
+        return cls(**config)
+
+
 def zero_embedding(num_embeddings, embedding_dim):
-    """Embedding with zero rows, so categories absent from training add nothing."""
+    """Embedding with zero rows, so rows absent from training add nothing."""
 
     embedding = torch.nn.Embedding(num_embeddings, embedding_dim)
     torch.nn.init.zeros_(embedding.weight)
