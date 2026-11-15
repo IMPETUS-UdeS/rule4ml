@@ -13,7 +13,12 @@ from rule4ml.models.architectures import (
 )
 from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.metrics import TorchParametricR2, r2
-from rule4ml.models.scaling import BoardPercentScaler, BoardScaler, Log1pScaler
+from rule4ml.models.scaling import (
+    AsinhInputScaler,
+    BoardPercentScaler,
+    BoardScaler,
+    Log1pScaler,
+)
 from rule4ml.parsers.data_parser import (
     default_board_map,
     default_layer_type_map,
@@ -82,6 +87,7 @@ def test_fit_save_load(
         SEQUENTIAL_LABELS if sequential else (),
         report="resource_report",
         scaler=scaler,
+        input_scaler=AsinhInputScaler(standardize_layers=sequential),  # reload keeps it
     )
 
     surrogate.fit(train, TrainSettings(num_epochs=1, batch_size=4), val_dataset=val)
@@ -89,6 +95,16 @@ def test_fit_save_load(
 
     loaded = _reload(surrogate, tmp_path)
     assert np.array_equal(loaded.predict_dataset(val), surrogate.predict_dataset(val))
+
+
+def test_input_scaler_integer_layers():
+    scaler = AsinhInputScaler(standardize_layers=True)
+    scaler.fit(np.array([[1.0, 8.0], [3.0, 2.0]], dtype=np.float32))
+    layers = np.array([[[1, 8], [3, 2], [0, 0]]])
+
+    assert np.allclose(
+        scaler.transform(layers), scaler.transform(layers.astype(np.float32))
+    )
 
 
 @pytest.mark.parametrize(

@@ -111,6 +111,7 @@ if keras is not None:
                     keras.layers.Embedding(
                         input_dim=len(categorical_maps[key]) + 1,
                         output_dim=settings.embedding_layers[idx],
+                        embeddings_initializer="zeros",  # unseen categories add nothing
                         name=f"{key}_embedding",
                     )(input_layer),
                     axis=-2,
@@ -207,9 +208,8 @@ class TorchMLP(torch.nn.Module):
 
         self.embeddings = torch.nn.ModuleDict()
         for idx, key in enumerate(categorical_maps):
-            self.embeddings[f"g{idx}_{key}_embedding"] = torch.nn.Embedding(
-                num_embeddings=len(categorical_maps[key]) + 1,
-                embedding_dim=settings.embedding_layers[idx],
+            self.embeddings[f"g{idx}_{key}_embedding"] = zero_embedding(
+                len(categorical_maps[key]) + 1, settings.embedding_layers[idx]
             )
 
         self.numerical_layers = torch.nn.ModuleDict()
@@ -312,16 +312,16 @@ class TorchGNN(torch.nn.Module):
 
         self.global_embeddings = torch.nn.ModuleDict()
         for idx, key in enumerate(global_categorical_maps):
-            self.global_embeddings[f"g{idx}_{key}_embedding"] = torch.nn.Embedding(
-                num_embeddings=len(global_categorical_maps[key]) + 1,
-                embedding_dim=settings.global_embedding_layers[idx],
+            self.global_embeddings[f"g{idx}_{key}_embedding"] = zero_embedding(
+                len(global_categorical_maps[key]) + 1,
+                settings.global_embedding_layers[idx],
             )
 
         self.sequential_embeddings = torch.nn.ModuleDict()
         for idx, key in enumerate(sequential_categorical_maps):
-            self.sequential_embeddings[f"s{idx}_{key}_embedding"] = torch.nn.Embedding(
-                num_embeddings=len(sequential_categorical_maps[key]) + 1,
-                embedding_dim=settings.seq_embedding_layers[idx],
+            self.sequential_embeddings[f"s{idx}_{key}_embedding"] = zero_embedding(
+                len(sequential_categorical_maps[key]) + 1,
+                settings.seq_embedding_layers[idx],
             )
 
         self.numerical_layers = torch.nn.ModuleDict()
@@ -519,6 +519,14 @@ class TorchGNN(torch.nn.Module):
     def from_config(cls, config):
         config["settings"] = GNNSettings.from_config(config["settings"])
         return cls(**config)
+
+
+def zero_embedding(num_embeddings, embedding_dim):
+    """Embedding with zero rows, so categories absent from training add nothing."""
+
+    embedding = torch.nn.Embedding(num_embeddings, embedding_dim)
+    torch.nn.init.zeros_(embedding.weight)
+    return embedding
 
 
 class TorchBayesianLinear(torch.nn.Module):

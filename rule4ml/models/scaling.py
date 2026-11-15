@@ -164,15 +164,15 @@ class Log1pScaler(BaseScaler):
         else:
             return math.log1p(max(0.0, float(y)))
 
-    def _inv(self, z, mu, sig):
+    def _inv(self, z, mu, sig):  # clamped at 0 like the forward transform
         if _is_torch(z):
             mu_t = torch.as_tensor(mu, dtype=z.dtype, device=z.device)
             sig_t = torch.as_tensor(max(sig, 1e-8), dtype=z.dtype, device=z.device)
-            return torch.expm1(z * sig_t + mu_t)
+            return torch.expm1(z * sig_t + mu_t).clamp(min=0.0)
         elif isinstance(z, np.ndarray):
-            return np.expm1(z * sig + mu)
+            return np.maximum(np.expm1(z * sig + mu), 0.0)
         else:
-            return math.expm1(float(z) * sig + mu)
+            return max(math.expm1(float(z) * sig + mu), 0.0)
 
     def fit(self, target_rows):
         from collections import defaultdict
@@ -219,6 +219,50 @@ class Log1pScaler(BaseScaler):
 
     def to_config(self):
         return {"mu": self.mu, "sigma": self.sigma}
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+
+class AsinhInputScaler:
+    """Signed log of numerical inputs, then optional standardization of layer features.
+
+    Layer padding stays zero.
+    """
+
+    def __init__(self, standardize_layers=False, layer_mean=None, layer_std=None):
+        self.standardize_layers = standardize_layers
+        self.layer_mean = layer_mean
+        self.layer_std = layer_std
+
+    def fit(self, layer_values):
+        """Fit layer feature statistics on training layers (L, F)."""
+
+        if not self.standardize_layers:
+            return
+
+        logged = np.arcsinh(layer_values)
+        std = logged.std(axis=0)
+        self.layer_mean = logged.mean(axis=0).tolist()
+        self.layer_std = np.where(std == 0, 1.0, std).tolist()
+
+    def transform(self, values):
+        logged = np.arcsinh(values)
+        if values.ndim != 3 or self.layer_mean is None:
+            return logged
+
+        scaled = (logged - np.asarray(self.layer_mean)) / np.asarray(self.layer_std)
+        scaled[(values == 0).all(axis=-1)] = 0.0
+
+        return scaled
+
+    def to_config(self):
+        return {
+            "standardize_layers": self.standardize_layers,
+            "layer_mean": self.layer_mean,
+            "layer_std": self.layer_std,
+        }
 
     @classmethod
     def from_config(cls, config):

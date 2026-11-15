@@ -67,6 +67,7 @@ class BaseSurrogate:
 
         self.model = None
         self.scaler = None
+        self.input_scaler = None
 
     def set_model(
         self,
@@ -76,11 +77,13 @@ class BaseSurrogate:
         sequential_labels=(),
         report=None,
         scaler=None,
+        input_scaler=None,
     ):
-        """Attach a model with its numerical feature labels, targets and scaler.
+        """Attach a model with its numerical feature labels, targets and scalers.
 
         Categorical inputs come from the model's maps. Resource targets are read
-        from `report` ("resource_report" or "hls_resource_report").
+        from `report` ("resource_report" or "hls_resource_report"). `input_scaler`
+        transforms the numerical inputs the model sees.
         """
 
         self.model = model
@@ -101,6 +104,7 @@ class BaseSurrogate:
         self.output_labels = list(target_labels)
         self.report = report
         self.scaler = scaler
+        self.input_scaler = input_scaler
 
         for attribute, labels, maps in [
             ("global_input_shape", global_labels, self.global_categorical_maps),
@@ -146,6 +150,11 @@ class BaseSurrogate:
         dataset = dataset.subset(np.flatnonzero(np.isfinite(targets).all(axis=1)))
         if len(dataset) == 0:
             raise ValueError(f"No records have every target of {self.output_labels}")
+
+        if fit_scaler and self.input_scaler and self.sequential_numerical_labels:
+            self.input_scaler.fit(
+                dataset.columns(self.sequential_numerical_labels, per_layer=True)
+            )
 
         targets = dataset.targets(self.output_labels, self.report)
         inputs, numerical, codes = self._dataset_inputs(dataset)
@@ -392,7 +401,7 @@ class BaseSurrogate:
                 ]
             )
 
-        return inputs, numerical, codes
+        return self._scale_inputs(inputs), numerical, codes
 
     def _dataset_inputs(self, dataset):
         """Model inputs of every Dataset record, plus numerical and category codes.
@@ -435,7 +444,22 @@ class BaseSurrogate:
                 layer_values
             )
 
-        return inputs, numerical, codes
+        return self._scale_inputs(inputs), numerical, codes
+
+    def _scale_inputs(self, inputs):
+        """Apply the input scaler to the numerical model inputs."""
+
+        if self.input_scaler is None:
+            return inputs
+
+        for key in (
+            self.global_input_keys["numerical"],
+            self.sequential_input_keys["numerical"],
+        ):
+            if key in inputs:
+                inputs[key] = self.input_scaler.transform(inputs[key])
+
+        return inputs
 
     def to_config(self):
         return {
@@ -450,6 +474,12 @@ class BaseSurrogate:
             "model_config": self.model.to_config(),
             "scaler_class": self.scaler.__class__.__name__ if self.scaler else None,
             "scaler_config": self.scaler.to_config() if self.scaler else None,
+            "input_scaler_class": (
+                self.input_scaler.__class__.__name__ if self.input_scaler else None
+            ),
+            "input_scaler_config": (
+                self.input_scaler.to_config() if self.input_scaler else None
+            ),
         }
 
     def from_config(self, config):
@@ -463,6 +493,12 @@ class BaseSurrogate:
                 config["scaler_config"]
             )
 
+        input_scaler = None
+        if config.get("input_scaler_class"):
+            input_scaler = getattr(scaling, config["input_scaler_class"]).from_config(
+                config["input_scaler_config"]
+            )
+
         sequential_labels = config["sequential_numerical_labels"]
         if not getattr(model, "sequential_input_shape", None):
             sequential_labels = ()  # older MLP bundles list layer labels they never read
@@ -474,6 +510,7 @@ class BaseSurrogate:
             sequential_labels,
             report=config.get("report"),
             scaler=scaler,
+            input_scaler=input_scaler,
         )
 
     def save(self, save_dir):
