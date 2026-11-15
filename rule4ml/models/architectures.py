@@ -33,7 +33,7 @@ class MLPSettings:
             0.0,
         ]
     )
-    linear_output: bool = False  # for centered targets (Log1pScaler)
+    linear_output: bool = False  # Keep negative outputs. For targets scaled below 0
 
     def to_config(self):
         return {
@@ -66,7 +66,7 @@ class GNNSettings:
         ]
     )
     bayesian_output: bool = False
-    linear_output: bool = False  # for centered targets (Log1pScaler)
+    linear_output: bool = False  # Keep negative outputs. For targets scaled below 0
 
     def to_config(self):
         return {

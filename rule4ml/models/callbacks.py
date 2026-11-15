@@ -107,14 +107,17 @@ class EarlyStopping:
                     + f"Best {self.monitor}: {self._best:.6f}"
                 )
 
-            if self.restore_best and self._best_state is not None:
-                surrogate.model.load_state_dict(self._best_state)
-                if verbose > 0:
-                    print(f"[{self.__class__.__name__}] Restored best model state.")
+            self.restore(surrogate, verbose)
 
             return True
 
         return False
+
+    def restore(self, surrogate, verbose=0):
+        if self.restore_best and self._best_state is not None:
+            surrogate.model.load_state_dict(self._best_state)
+            if verbose > 0:
+                print(f"[{self.__class__.__name__}] Restored best model state.")
 
 
 class ModelCheckpoint:

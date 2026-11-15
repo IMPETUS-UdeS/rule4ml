@@ -659,6 +659,10 @@ class TorchSurrogate(BaseSurrogate):
                 if isinstance(callback, EarlyStopping) and cb_result:
                     return history
 
+        for callback in callbacks:  # epochs ran out before early stopping
+            if isinstance(callback, EarlyStopping):
+                callback.restore(self, verbose)
+
         return history
 
     def _validation_loss(self, val, loss_function, metric_functions, batch_size):

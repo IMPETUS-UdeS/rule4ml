@@ -11,6 +11,7 @@ from rule4ml.models.architectures import (
     TorchGNN,
     TorchMLP,
 )
+from rule4ml.models.callbacks import EarlyStopping
 from rule4ml.models.metrics import TorchParametricR2, r2
 from rule4ml.models.scaling import BoardPercentScaler, BoardScaler, Log1pScaler
 from rule4ml.parsers.data_parser import (
@@ -137,6 +138,30 @@ def _reload(surrogate, tmp_path):
     loaded.load(str(config), str(weights))
 
     return loaded
+
+
+@pytest.mark.parametrize("patience", [1, 10])  # stops early, runs out of epochs
+def test_fit_restores_best(make_dataset, patience):
+    train = make_dataset([1, 2, 3, 4])
+    resources = train.resources["resource_report"].copy()
+    resources[:, 3] = 0.0  # validation LUT pulls against training
+    val = replace(train, resources={**train.resources, "resource_report": resources})
+
+    model = _torch_mlp(linear_output=True)
+    for parameter in model.parameters():  # only the output bias learns
+        torch.nn.init.zeros_(parameter)
+    surrogate = TorchSurrogate()
+    surrogate.set_model(model, GLOBAL_LABELS, ["lut"], report="resource_report")
+
+    settings = TrainSettings(
+        num_epochs=3, batch_size=4, learning_rate=0.1, loss_function="mse"
+    )
+    history = surrogate.fit(
+        train, settings, val_dataset=val, callbacks=[EarlyStopping(patience=patience)]
+    )
+
+    val_loss = np.mean(surrogate.predict_dataset(val) ** 2)
+    assert val_loss == pytest.approx(min(history["val"]["loss"]))
 
 
 @pytest.mark.parametrize("scaler_class", [BoardScaler, Log1pScaler])
