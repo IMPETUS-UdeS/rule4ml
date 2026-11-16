@@ -9,11 +9,10 @@ import numpy as np
 import pytest
 import torch
 
-import rule4ml
 from rule4ml.dataset import load, prepare
 from rule4ml.surrogates import MultiSurrogate
 
-WEIGHTS = Path(rule4ml.__file__).parent / "models" / "weights"
+BUNDLES = Path(__file__).parent / "bundles"
 
 
 @pytest.fixture(scope="session")
@@ -42,11 +41,11 @@ def top_quarks():
 
 @pytest.fixture
 def check_mc_dropout(hls_config, top_quarks):
-    """Load a shipped bundle, then check MC sampling varies and leaves predict as is."""
+    """Load a saved bundle, then check MC sampling varies and leaves predict as is."""
 
     def check(surrogate, bundle, versions):
         config = bundle.split(".weights")[0] + ".config.json"
-        surrogate.load(str(WEIGHTS / config), str(WEIGHTS / bundle))
+        surrogate.load(str(BUNDLES / config), str(BUNDLES / bundle))
         args = ([top_quarks], [hls_config], *versions)
 
         before = surrogate.predict(*args)

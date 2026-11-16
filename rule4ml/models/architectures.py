@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import torch
-import torch_geometric
 
 try:
     import keras
@@ -371,6 +370,13 @@ class TorchGNN(torch.nn.Module):
             torch.nn.ReLU(),
         )
 
+        from torch_geometric.nn import (  # only GNNs need PyG, slow to import
+            AttentionalAggregation,
+            GINConv,
+            GraphNorm,
+            JumpingKnowledge,
+        )
+
         self.gconvs = torch.nn.ModuleList()
         self.norms = torch.nn.ModuleList()
         for idx, units in enumerate(settings.gconv_layers):
@@ -379,13 +385,13 @@ class TorchGNN(torch.nn.Module):
                 torch.nn.ReLU(),
                 torch.nn.Linear(units, units),
             )
-            self.gconvs.append(torch_geometric.nn.GINConv(nn=mlp))
-            self.norms.append(torch_geometric.nn.GraphNorm(in_channels=units))
+            self.gconvs.append(GINConv(nn=mlp))
+            self.norms.append(GraphNorm(in_channels=units))
             gnn_dim = units
 
-        self.jumping_knowledge = torch_geometric.nn.JumpingKnowledge(mode="cat")
+        self.jumping_knowledge = JumpingKnowledge(mode="cat")
 
-        self.attention_pool = torch_geometric.nn.AttentionalAggregation(
+        self.attention_pool = AttentionalAggregation(
             gate_nn=torch.nn.Sequential(torch.nn.Linear(sum(settings.gconv_layers), 1))
         )
 
@@ -487,13 +493,11 @@ class TorchGNN(torch.nn.Module):
         source = torch.arange(ptr - 1, device=batch.device)[batch[1:] == batch[:-1]]
         edge_indices = torch.stack([source, source + 1], dim=0)
 
+        from torch_geometric.utils import add_self_loops, to_undirected
+
         if edge_indices.numel() > 0:
-            edge_indices = torch_geometric.utils.to_undirected(
-                edge_indices, num_nodes=ptr
-            )
-        edge_indices, _ = torch_geometric.utils.add_self_loops(
-            edge_indices, num_nodes=ptr
-        )
+            edge_indices = to_undirected(edge_indices, num_nodes=ptr)
+        edge_indices, _ = add_self_loops(edge_indices, num_nodes=ptr)
 
         xs = []
         for gconv, norm in zip(self.gconvs, self.norms):

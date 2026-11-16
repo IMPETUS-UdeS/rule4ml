@@ -6,7 +6,16 @@ import torch
 
 from rule4ml.surrogates import KerasSurrogate, TorchSurrogate
 
-TARGETS = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
+TARGETS = [
+    "BRAM_36K",
+    "DSP",
+    "FF",
+    "LUT",
+    "CYCLES_MIN",
+    "CYCLES_MAX",
+    "INTERVAL_MIN",
+    "INTERVAL_MAX",
+]
 
 
 def test_predict_defaults(estimator, top_quarks):
@@ -63,7 +72,7 @@ def test_predict_unseen_version(estimator, hls_config):
 
 
 def test_mc_predict(check_mc_dropout):
-    check_mc_dropout(TorchSurrogate(), "v2/gnn/LUT.weights.pt", (["0.8.1"], ["2023.2"]))
+    check_mc_dropout(TorchSurrogate(), "gnn/LUT.weights.pt", (["0.8.1"], ["2023.2"]))
 
 
 @pytest.mark.skipif(find_spec("tensorflow") is not None, reason="TensorFlow installed")

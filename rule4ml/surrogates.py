@@ -990,15 +990,20 @@ class MultiSurrogate:
 
     def load_default_surrogates(self):
         base_path = os.path.join(
-            os.path.dirname(__file__), "models", "weights", "v2", "gnn"
+            os.path.dirname(__file__), "models", "weights", "default"
         )
         default_paths = [
-            os.path.join(base_path, "BRAM"),
-            os.path.join(base_path, "DSP"),
-            os.path.join(base_path, "FF"),
-            os.path.join(base_path, "LUT"),
-            os.path.join(base_path, "CYCLES"),
-            os.path.join(base_path, "INTERVAL"),
+            os.path.join(base_path, name)
+            for name in (
+                "BRAM",
+                "DSP",
+                "FF",
+                "LUT",
+                "CYCLES_MIN",
+                "CYCLES_MAX",
+                "INTERVAL_MIN",
+                "INTERVAL_MAX",
+            )
         ]
 
         for path in default_paths:

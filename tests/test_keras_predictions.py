@@ -14,7 +14,7 @@ def test_predict_model_apis(estimator, model, hls_config):
         "vivado_versions": ["2023.2"],
         "round_digits": 10,
     }
-    targets = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
+    targets = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES_MAX", "INTERVAL_MAX"]
 
     x = inputs = keras.Input(shape=(16,))
 
@@ -86,7 +86,7 @@ def test_predict_torch_twin(estimator, hls_config):
         "vivado_versions": ["2023.2"],
         "round_digits": 10,
     }
-    targets = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES", "INTERVAL"]
+    targets = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES_MAX", "INTERVAL_MAX"]
 
     x = inputs = keras.Input(shape=(16,))
     x = layers.Activation("relu")(layers.Dense(32, name="dense1")(x))
@@ -106,7 +106,7 @@ def test_predict_torch_twin(estimator, hls_config):
 
 
 def test_mc_predict(check_mc_dropout):
-    check_mc_dropout(KerasSurrogate(), "v2/mlp/LUT.weights.h5", ([], []))
+    check_mc_dropout(KerasSurrogate(), "mlp/LUT.weights.h5", ([], []))
 
 
 @pytest.fixture(params=["sequential", "subclassed"])

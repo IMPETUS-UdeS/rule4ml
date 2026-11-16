@@ -39,7 +39,11 @@
     "total_add",
     "total_mult",
     "total_lookup",
-    "total_logical"
+    "total_logical",
+    "weight_bits_min",
+    "weight_bits_max",
+    "weight_bits_mean",
+    "clock_period"
   ],
   "sequential_numerical_labels": [
     "layer_input_size",
@@ -55,7 +59,8 @@
     "layer_op_add",
     "layer_op_mult",
     "layer_op_lookup",
-    "layer_op_logical"
+    "layer_op_logical",
+    "layer_weight_bits"
   ],
   "global_categorical_maps": {
     "strategy": {
@@ -74,17 +79,8 @@
     },
     "vivado_version": {
       "2019.1": 1,
-      "2019.2": 2,
-      "2020.1": 3,
-      "2020.2": 4,
-      "2021.1": 5,
-      "2021.2": 6,
-      "2022.1": 7,
-      "2022.2": 8,
-      "2023.1": 9,
-      "2023.2": 10,
-      "2024.1": 11,
-      "2024.2": 12
+      "2023.2": 2,
+      "2024.2": 3
     }
   },
   "sequential_categorical_maps": {
@@ -109,51 +105,60 @@
     }
   },
   "output_labels": [
-    "interval"
+    "bram"
   ],
   "output_shape": [
     null,
     1
   ],
-  "model_class": "TorchGNN",
+  "report": "resource_report",
+  "clock_periods": [
+    5.0,
+    10.0
+  ],
+  "io_types": {
+    "conv": [
+      "io_stream"
+    ],
+    "dense": [
+      "io_parallel"
+    ]
+  },
+  "model_class": "TorchTransformer",
   "model_config": {
-    "name": "INTERVAL_GNN_14",
+    "name": "BRAM_TRANSFORMER",
     "settings": {
-      "numerical_dense_layers": [],
-      "gconv_layers": [
-        16
+      "numerical_dense_layers": [
+        32
       ],
       "global_embedding_layers": [
-        8,
         16,
-        8,
-        8
+        16,
+        16,
+        16
       ],
       "seq_embedding_layers": [
         16
       ],
+      "d_model": 128,
+      "num_heads": 8,
+      "num_layers": 4,
+      "feedforward_dim": 512,
+      "dropout": 0.1,
+      "max_layers": 256,
       "dense_layers": [
-        16,
-        32
+        128,
+        64
       ],
-      "bayesian_dense": [
-        false,
-        false,
-        false
-      ],
-      "dense_dropouts": [
-        0.0,
-        0.5
-      ],
-      "bayesian_output": false
+      "linear_output": true
     },
     "global_input_shape": [
       null,
-      44
+      48
     ],
     "sequential_input_shape": [
       null,
-      15
+      16
     ],
     "output_shape": [
       null,
@@ -176,17 +181,8 @@
       },
       "vivado_version": {
         "2019.1": 1,
-        "2019.2": 2,
-        "2020.1": 3,
-        "2020.2": 4,
-        "2021.1": 5,
-        "2021.2": 6,
-        "2022.1": 7,
-        "2022.2": 8,
-        "2023.1": 9,
-        "2023.2": 10,
-        "2024.1": 11,
-        "2024.2": 12
+        "2023.2": 2,
+        "2024.2": 3
       }
     },
     "sequential_categorical_maps": {
@@ -211,6 +207,51 @@
       }
     }
   },
-  "scaler_class": null,
-  "scaler_config": null
+  "scaler_class": "Log1pScaler",
+  "scaler_config": {
+    "mu": {
+      "bram": 1.3393476852747377
+    },
+    "sigma": {
+      "bram": 0.7344182115504772
+    }
+  },
+  "input_scaler_class": "AsinhInputScaler",
+  "input_scaler_config": {
+    "standardize_layers": true,
+    "layer_mean": [
+      4.711535453796387,
+      4.6758599281311035,
+      5.675900459289551,
+      5.6748504638671875,
+      0.05486982688307762,
+      0.037628598511219025,
+      0.037628598511219025,
+      0.02578321099281311,
+      0.02578321099281311,
+      7.439187049865723,
+      5.743596076965332,
+      5.746487617492676,
+      0.3017609119415283,
+      0.1743401139974594,
+      1.857323408126831
+    ],
+    "layer_std": [
+      1.1581776142120361,
+      1.084053874015808,
+      4.095181465148926,
+      4.0954999923706055,
+      0.39943069219589233,
+      0.27633213996887207,
+      0.27633213996887207,
+      0.19230377674102783,
+      0.19230377674102783,
+      2.110144853591919,
+      4.1411895751953125,
+      4.141669750213623,
+      1.1848392486572266,
+      0.9057044386863708,
+      1.3955847024917603
+    ]
+  }
 }

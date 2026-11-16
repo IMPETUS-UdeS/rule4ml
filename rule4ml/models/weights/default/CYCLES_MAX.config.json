@@ -1,0 +1,225 @@
+{
+  "global_numerical_labels": [
+    "bit_width",
+    "reuse_mean",
+    "dense_inputs_mean",
+    "dense_outputs_mean",
+    "dense_parameters_mean",
+    "dense_reuse_mean",
+    "dense_count",
+    "conv1d_inputs_mean",
+    "conv1d_outputs_mean",
+    "conv1d_parameters_mean",
+    "conv1d_filters_mean",
+    "conv1d_kernel_size_mean",
+    "conv1d_strides_mean",
+    "conv1d_reuse_mean",
+    "conv1d_count",
+    "conv2d_inputs_mean",
+    "conv2d_outputs_mean",
+    "conv2d_parameters_mean",
+    "conv2d_filters_mean",
+    "conv2d_kernel_size_mean",
+    "conv2d_strides_mean",
+    "conv2d_reuse_mean",
+    "conv2d_count",
+    "batchnormalization_inputs_mean",
+    "batchnormalization_outputs_mean",
+    "batchnormalization_parameters_mean",
+    "batchnormalization_count",
+    "add_count",
+    "concatenate_count",
+    "dropout_count",
+    "relu_count",
+    "sigmoid_count",
+    "tanh_count",
+    "softmax_inputs_mean",
+    "softmax_outputs_mean",
+    "softmax_count",
+    "total_add",
+    "total_mult",
+    "total_lookup",
+    "total_logical",
+    "weight_bits_min",
+    "weight_bits_max",
+    "weight_bits_mean",
+    "clock_period"
+  ],
+  "sequential_numerical_labels": [
+    "layer_input_size",
+    "layer_output_size",
+    "layer_parameter_count",
+    "layer_trainable_parameter_count",
+    "layer_filters",
+    "layer_kernel_height",
+    "layer_kernel_width",
+    "layer_stride_height",
+    "layer_stride_width",
+    "layer_reuse",
+    "layer_op_add",
+    "layer_op_mult",
+    "layer_op_lookup",
+    "layer_op_logical",
+    "layer_weight_bits"
+  ],
+  "global_categorical_maps": {
+    "strategy": {
+      "latency": 1,
+      "resource": 2
+    },
+    "board": {
+      "pynq-z2": 1,
+      "zcu102": 2,
+      "alveo-u200": 3,
+      "alveo-u250": 4
+    },
+    "hls4ml_version": {
+      "0.8.1": 1,
+      "1.1.0": 2
+    },
+    "vivado_version": {
+      "2019.1": 1,
+      "2023.2": 2,
+      "2024.2": 3
+    }
+  },
+  "sequential_categorical_maps": {
+    "layer_type": {
+      "inputlayer": 1,
+      "dense": 2,
+      "conv1d": 3,
+      "conv2d": 4,
+      "maxpooling1d": 5,
+      "averagepooling1d": 6,
+      "maxpooling2d": 7,
+      "averagepooling2d": 8,
+      "relu": 9,
+      "sigmoid": 10,
+      "tanh": 11,
+      "softmax": 12,
+      "batchnormalization": 13,
+      "add": 14,
+      "concatenate": 15,
+      "dropout": 16,
+      "flatten": 17
+    }
+  },
+  "output_labels": [
+    "cycles_max"
+  ],
+  "output_shape": [
+    null,
+    1
+  ],
+  "report": "resource_report",
+  "clock_periods": [
+    5.0,
+    10.0
+  ],
+  "io_types": {
+    "conv": [
+      "io_stream"
+    ],
+    "dense": [
+      "io_parallel"
+    ]
+  },
+  "model_class": "TorchTransformer",
+  "model_config": {
+    "name": "CYCLES_MAX_TRANSFORMER",
+    "settings": {
+      "numerical_dense_layers": [
+        32
+      ],
+      "global_embedding_layers": [
+        16,
+        16,
+        16,
+        16
+      ],
+      "seq_embedding_layers": [
+        16
+      ],
+      "d_model": 128,
+      "num_heads": 8,
+      "num_layers": 4,
+      "feedforward_dim": 512,
+      "dropout": 0.1,
+      "max_layers": 256,
+      "dense_layers": [
+        128,
+        64
+      ],
+      "linear_output": true
+    },
+    "global_input_shape": [
+      null,
+      48
+    ],
+    "sequential_input_shape": [
+      null,
+      16
+    ],
+    "output_shape": [
+      null,
+      1
+    ],
+    "global_categorical_maps": {
+      "strategy": {
+        "latency": 1,
+        "resource": 2
+      },
+      "board": {
+        "pynq-z2": 1,
+        "zcu102": 2,
+        "alveo-u200": 3,
+        "alveo-u250": 4
+      },
+      "hls4ml_version": {
+        "0.8.1": 1,
+        "1.1.0": 2
+      },
+      "vivado_version": {
+        "2019.1": 1,
+        "2023.2": 2,
+        "2024.2": 3
+      }
+    },
+    "sequential_categorical_maps": {
+      "layer_type": {
+        "inputlayer": 1,
+        "dense": 2,
+        "conv1d": 3,
+        "conv2d": 4,
+        "maxpooling1d": 5,
+        "averagepooling1d": 6,
+        "maxpooling2d": 7,
+        "averagepooling2d": 8,
+        "relu": 9,
+        "sigmoid": 10,
+        "tanh": 11,
+        "softmax": 12,
+        "batchnormalization": 13,
+        "add": 14,
+        "concatenate": 15,
+        "dropout": 16,
+        "flatten": 17
+      }
+    }
+  },
+  "scaler_class": "Log1pScaler",
+  "scaler_config": {
+    "mu": {
+      "cycles_max": 8.444068445340307
+    },
+    "sigma": {
+      "cycles_max": 1.4831950321817313
+    }
+  },
+  "input_scaler_class": "AsinhInputScaler",
+  "input_scaler_config": {
+    "standardize_layers": false,
+    "layer_mean": null,
+    "layer_std": null
+  }
+}
