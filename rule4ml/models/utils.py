@@ -9,16 +9,14 @@ def torch_weights_init(m):
 
 
 def get_optimizer_from_str(optimizer_name, backend, **kwargs):
-    """
-    Get an optimizer from a string name.
+    """Get an optimizer from its name.
 
     Args:
-        optimizer_name (str): The name of the optimizer.
-        backend (str): The backend to use ('keras' or 'torch').
-        **kwargs: Additional arguments to pass to the optimizer.
+        optimizer_name (str): Name of the optimizer, case-insensitive.
+        backend (str): "keras" or "torch".
 
     Returns:
-        Optimizer: The optimizer instance.
+        The optimizer instance.
     """
 
     optimizer_name = optimizer_name.lower()

@@ -56,14 +56,13 @@ default_vivado_map = {
 
 
 def get_layers_data(model_config):
-    """
-    Processes the layers data of a model.
+    """Get the features of a model's layers.
 
     Args:
-        model_data (dict): The model data containing configuration and layer information.
+        model_config (list): Layer configs of a parsed model.
 
     Returns:
-        list: A list of processed layer data dictionaries.
+        list: One feature dict per layer.
     """
 
     layers_fixed_ops = []

@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 import torch_geometric
-from packaging import version
 
 try:
     import keras
@@ -14,7 +13,7 @@ except ModuleNotFoundError as error:
         raise
     keras = None
 
-if keras is not None and version.parse(keras.__version__).major >= 3:
+if keras is not None and int(keras.__version__.split(".")[0]) >= 3:
     from keras import ops as kops
 else:
     kops = None
@@ -198,12 +197,9 @@ if keras is not None:
             return cls(**config)
 
     class KerasMCDropout(keras.layers.Dropout):
-        def __init__(self, rate, **kwargs):
-            """
-            Expose an additional attribute to better control the call method's
-            'training' argument for MC Dropout at inference time.
-            """
+        """Dropout that stays active at inference when enable_mc is set."""
 
+        def __init__(self, rate, **kwargs):
             self.enable_mc = kwargs.pop("enable_mc", False)
             super().__init__(rate, **kwargs)
 

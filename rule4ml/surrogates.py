@@ -84,11 +84,17 @@ class BaseSurrogate:
         scaler=None,
         input_scaler=None,
     ):
-        """Attach a model with its numerical feature labels, targets and scalers.
+        """Attach a model with its feature labels, targets and scalers.
 
-        Categorical inputs come from the model's maps. Resource targets are read
-        from `report` ("resource_report" or "hls_resource_report"). `input_scaler`
-        transforms the numerical inputs the model sees.
+        Args:
+            model: Torch or Keras model, whose maps give the categorical inputs.
+            global_labels (list): Numerical global feature labels.
+            target_labels (list): Target labels, one per model output.
+            sequential_labels (list, optional): Numerical per-layer feature labels.
+            report (str, optional): Report of the resource targets, "resource_report"
+                or "hls_resource_report".
+            scaler (optional): Target scaler.
+            input_scaler (optional): Scaler of the numerical inputs.
         """
 
         self.model = model
@@ -139,7 +145,16 @@ class BaseSurrogate:
     ):
         """Train on a prepared Dataset, skipping records without every target.
 
-        `seed` fixes the batch order.
+        Args:
+            dataset (Dataset): Training records.
+            train_settings (TrainSettings): Epochs, batch size, optimizer and loss.
+            val_dataset (Dataset, optional): Validation records.
+            seed (int): Seed of the batch order.
+            callbacks (tuple): Callbacks run after each epoch.
+            verbose (int): Verbosity level.
+
+        Returns:
+            The training history, a dict for Torch and a History for Keras.
         """
 
         if self.model is None:
@@ -189,9 +204,15 @@ class BaseSurrogate:
         return inputs, targets.astype(np.float32), input_rows
 
     def predict_dataset(self, dataset, mc_dropout=False, verbose=0):
-        """Raw-unit predictions for every record of a Dataset, in order.
+        """Predict every record of a Dataset, in order.
 
-        Torch runs all records as one batch. Keras uses its default batch size.
+        Args:
+            dataset (Dataset): Records to predict.
+            mc_dropout (bool): Keep dropout active.
+            verbose (int): Verbosity level.
+
+        Returns:
+            np.ndarray: Raw-unit predictions, one row per record.
         """
 
         inputs, numerical, codes = self._dataset_inputs(dataset)
@@ -222,6 +243,20 @@ class BaseSurrogate:
         mc_dropout=False,
         verbose=0,
     ):
+        """Predict every combination of models and settings.
+
+        Args:
+            models_to_predict (list): Keras or Torch models.
+            hls_configs (list): HLS config dicts.
+            hls4ml_versions (list, optional): hls4ml versions.
+            vivado_versions (list, optional): Vivado versions.
+            mc_dropout (bool): Keep dropout active.
+            verbose (int): Verbosity level.
+
+        Returns:
+            np.ndarray: Raw-unit predictions, one row per combination.
+        """
+
         features = self._features(
             models_to_predict, hls_configs, hls4ml_versions, vivado_versions
         )
@@ -237,7 +272,20 @@ class BaseSurrogate:
         return_all=False,
         verbose=0,
     ):
-        """MC dropout predictions: mean and std over samples, plus samples if asked."""
+        """Predict with MC dropout, as the mean and std over samples.
+
+        Args:
+            models_to_predict (list): Keras or Torch models.
+            hls_configs (list): HLS config dicts.
+            hls4ml_versions (list, optional): hls4ml versions.
+            vivado_versions (list, optional): Vivado versions.
+            num_samples (int): Number of dropout samples.
+            return_all (bool): Also return the samples.
+            verbose (int): Verbosity level.
+
+        Returns:
+            tuple: Mean and std arrays, plus the samples when return_all is set.
+        """
 
         features = self._features(
             models_to_predict, hls_configs, hls4ml_versions, vivado_versions
@@ -440,9 +488,13 @@ class BaseSurrogate:
         return self._scale_inputs(inputs), numerical, codes
 
     def _dataset_inputs(self, dataset):
-        """Model inputs of every Dataset record, plus numerical and category codes.
+        """Get the model inputs of every Dataset record.
 
-        Selected features must be finite, and layers distinguishable from padding.
+        Returns:
+            tuple: Model inputs, numerical values and category codes.
+
+        Raises:
+            ValueError: If a feature is not finite or a layer reads as padding.
         """
 
         codes = {
@@ -800,9 +852,7 @@ class TorchSurrogate(BaseSurrogate):
         return total / len(targets)
 
     def _enable_mc_dropout(self):
-        """
-        Enable MC Dropout by setting all dropout layers to train mode.
-        """
+        """Set dropout layers to train mode."""
 
         if self.model is None:
             raise RuntimeError(
@@ -994,7 +1044,22 @@ class MultiSurrogate:
         round_digits=2,
         verbose=0,
     ):
-        """Predictions per model and setting, sweeping training values for None."""
+        """Predict every model over a sweep of settings.
+
+        Args:
+            models_to_predict: Keras or Torch model, or a list of them.
+            hls_configs (dict or list, optional): HLS configs, camelCase or snake_case.
+                None sweeps the training boards, strategies and clocks, with default
+                precisions and reuse factors.
+            hls4ml_versions (str or list, optional): None sweeps the training versions.
+            vivado_versions (str or list, optional): None sweeps the training versions.
+            round_digits (int): Decimals of the returned values.
+            verbose (int): Verbosity level.
+
+        Returns:
+            pd.DataFrame: One row per model and setting, with the raw predictions and
+                their share of the board resources in percent.
+        """
 
         if not self._surrogates:
             raise RuntimeError("No surrogates have been added to the MultiSurrogate.")

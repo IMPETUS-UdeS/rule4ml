@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from packaging import version
 
 try:
     import keras
@@ -10,7 +9,7 @@ except ModuleNotFoundError as error:
         raise
     keras = None
 
-if keras is not None and version.parse(keras.__version__).major >= 3:
+if keras is not None and int(keras.__version__.split(".")[0]) >= 3:
     from keras import ops as kops
 else:
     kops = None

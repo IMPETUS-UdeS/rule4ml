@@ -2,15 +2,14 @@ import torch
 
 
 def get_loss_from_str(loss_name, backend, **kwargs):
-    """
-    Get a loss function from a string name.
+    """Get a loss function from its name.
 
     Args:
-        loss_name (str): The name of the loss function.
-        backend (str): The backend to use ('keras' or 'torch').
+        loss_name (str): Name of the loss, case-insensitive.
+        backend (str): "keras" or "torch".
 
     Returns:
-        Loss function: The loss function instance.
+        The loss function instance.
     """
 
     loss_name = loss_name.lower()

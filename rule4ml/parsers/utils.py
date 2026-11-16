@@ -29,15 +29,14 @@ def camel_keys_to_snake(d: dict, recursive=True):
 
 
 def to_lower_keys(d: dict, recursive=True):
-    """
-    Transforms dictionary keys to lower case.
+    """Transform dictionary keys to lower case.
 
     Args:
-        d (dict): Targeted dictionary for keys conversion.
-        recursive (bool, optional): Whether to apply to nested dictionaries. Defaults to True.
+        d (dict): Dictionary to transform.
+        recursive (bool, optional): Also transform nested dicts. Defaults to True.
 
     Returns:
-        dict: Transformed dictionary.
+        dict: Dictionary with lowercase keys.
     """
 
     if not isinstance(d, dict):
@@ -140,9 +139,17 @@ def get_weight_bits(hls_config, layer, name=None):
 
 
 def name_weighted_layers(model_config, hls_config):
-    """Name a record's weighted layers after their LayerName weight precisions.
+    """Name a record's weighted layers after its LayerName weight precisions.
 
-    Records drop layer names, and hls4ml lists LayerName entries in layer order.
+    Args:
+        model_config (list): Layer dicts of a record, which carry no names.
+        hls_config (dict): HLS config, with LayerName entries in layer order.
+
+    Returns:
+        list: Copies of the layer dicts, with the weighted layers named.
+
+    Raises:
+        ValueError: If the LayerName and weighted layer counts differ.
     """
 
     model_config = [dict(layer) for layer in model_config]
@@ -260,9 +267,15 @@ def _validate_reuse_factor(n_in, n_out, rf):
 
 # https://github.com/fastmachinelearning/hls4ml/blob/main/hls4ml/backends/fpga/fpga_backend.py#L277
 def get_closest_reuse_factor(n_in, n_out, chosen_rf):
-    """
-    Returns closest value to chosen_rf.
-    If two numbers are equally close, return the smallest number.
+    """Get the valid reuse factor closest to chosen_rf, the smaller one on a tie.
+
+    Args:
+        n_in (int): Layer input size.
+        n_out (int): Layer output size.
+        chosen_rf (int): Requested reuse factor.
+
+    Returns:
+        int: Closest valid reuse factor.
     """
 
     max_rf = n_in * n_out
