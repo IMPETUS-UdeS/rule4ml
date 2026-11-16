@@ -15,6 +15,9 @@ from rule4ml.parsers.utils import (
     name_weighted_layers,
 )
 
+DEFAULT_CLOCK_PERIOD = 5.0  # hls4ml's, when the config sets none
+DEFAULT_IO_TYPE = "io_parallel"
+
 
 def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
     """Return the global and per-layer features of a Keras or Torch model."""
@@ -31,10 +34,12 @@ def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
     global_inputs = get_global_inputs(
         model_config,
         hls_config,
-        clock_period=10.0,  # when the config sets none
+        clock_period=DEFAULT_CLOCK_PERIOD,
         hls4ml_version=hls4ml_version,
         vivado_version=vivado_version,
     )
+    io_type = camel_keys_to_snake(hls_config or {}).get("io_type", DEFAULT_IO_TYPE)
+    global_inputs["io_type"] = io_type.lower()  # metadata, not a model input
 
     return global_inputs, get_layers_data(model_config)
 
@@ -59,7 +64,8 @@ def record_features(record):
     global_inputs = get_global_inputs(
         model_config,
         hls_config,
-        clock_period=(record.get("latency_report") or {}).get("target_clock"),
+        clock_period=(record.get("latency_report") or {}).get("target_clock")
+        or DEFAULT_CLOCK_PERIOD,
         hls4ml_version=record.get("hls4ml_version"),
         vivado_version=record.get("vivado_version") or record.get("backend_version"),
     )

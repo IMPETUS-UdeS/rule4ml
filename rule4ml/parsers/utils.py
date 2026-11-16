@@ -13,7 +13,8 @@ def camel_keys_to_snake(d: dict, recursive=True):
 
     new_dict = {}
     for key, value in d.items():
-        new_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+        new_key = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", key)
+        new_key = new_key.lower()  # acronyms stay whole: IOType -> io_type
         if not (recursive and isinstance(value, dict)):
             new_dict[new_key] = value
         elif new_key in ["layer_type", "layer_name"]:

@@ -50,6 +50,18 @@ def test_predict_forward_order(estimator, hls_config):
     np.testing.assert_allclose(reordered[TARGETS], functional[TARGETS], rtol=1e-6)
 
 
+def test_predict_unseen_version(estimator, hls_config):
+    with pytest.warns(UserWarning, match="2099.1"):
+        prediction_df = estimator.predict(
+            _sequential(16),
+            hls_configs=hls_config,
+            hls4ml_versions="0.8.1",
+            vivado_versions="2099.1",
+        )
+
+    assert np.isfinite(prediction_df[TARGETS]).all().all()
+
+
 def test_mc_predict(check_mc_dropout):
     check_mc_dropout(TorchSurrogate(), "v2/gnn/LUT.weights.pt", (["0.8.1"], ["2023.2"]))
 

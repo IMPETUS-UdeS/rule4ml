@@ -2,10 +2,12 @@ import dataclasses
 import hashlib
 import json
 import os
+import warnings
 
 import numpy as np
 
 CATEGORICALS = ("strategy", "board", "precision", "hls4ml_version", "vivado_version")
+UNSEEN_AS_ZERO = ("hls4ml_version", "vivado_version")  # unseen values use row 0
 REPORTS = ("resource_report", "hls_resource_report")
 RESOURCES = ("bram", "dsp", "ff", "lut")
 LATENCIES = ("cycles_min", "cycles_max", "interval_min", "interval_max")
@@ -78,10 +80,20 @@ class Dataset:
                 raise ValueError(f"Datasets have no category {label}")
             codes, vocab = self.categoricals[label]
 
+        unseen = 0 if label in UNSEEN_AS_ZERO else -1
         table = np.array(
-            [mapping.get(str(value), -1) for value in vocab], dtype=np.int64
+            [mapping.get(str(value), unseen) for value in vocab], dtype=np.int64
         )
         mapped = table[codes]
+
+        if (mapped == 0).any():  # maps start at 1
+            unseen_values = sorted(
+                str(value) for value in vocab[np.unique(codes[mapped == 0])]
+            )
+            warnings.warn(
+                f"{label} values absent from training, predictions can be less "
+                f"reliable: {unseen_values}"
+            )
 
         if (mapped < 0).any():
             missing = sorted(

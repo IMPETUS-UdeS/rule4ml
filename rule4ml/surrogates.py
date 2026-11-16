@@ -1,6 +1,7 @@
 import itertools
 import json
 import os
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -15,7 +16,8 @@ except ModuleNotFoundError as error:
         raise
     tf = None
 
-from rule4ml.features import model_features
+from rule4ml.dataset import UNSEEN_AS_ZERO
+from rule4ml.features import DEFAULT_CLOCK_PERIOD, DEFAULT_IO_TYPE, model_features
 from rule4ml.models import architectures, metrics, scaling
 from rule4ml.models.architectures import (
     TorchGNN,
@@ -68,6 +70,8 @@ class BaseSurrogate:
         self.model = None
         self.scaler = None
         self.input_scaler = None
+        self.clock_periods = None
+        self.io_types = None
 
     def set_model(
         self,
@@ -105,6 +109,8 @@ class BaseSurrogate:
         self.report = report
         self.scaler = scaler
         self.input_scaler = input_scaler
+        self.clock_periods = None  # training clocks, set by fit
+        self.io_types = None  # {"conv" or "dense": IO types}
 
         for attribute, labels, maps in [
             ("global_input_shape", global_labels, self.global_categorical_maps),
@@ -137,6 +143,11 @@ class BaseSurrogate:
 
         if self.model is None:
             raise RuntimeError("A model needs to be set or loaded before training.")
+
+        if "clock_period" in self.global_numerical_labels:
+            labelled = np.isfinite(dataset.targets(self.output_labels, self.report))
+            clocks = dataset.columns(["clock_period"])[labelled.all(axis=1), 0]
+            self.clock_periods = sorted({round(clock, 6) for clock in clocks.tolist()})
 
         train = self.training_data(dataset, fit_scaler=True)
         val = None if val_dataset is None else self.training_data(val_dataset)
@@ -298,7 +309,7 @@ class BaseSurrogate:
                 )
 
             for version in versions:
-                if version.lower() not in supported.get(key, []):
+                if key not in supported:
                     raise ValueError(
                         f"Model {self.model.name} does not support {key}: {version}"
                     )
@@ -361,15 +372,39 @@ class BaseSurrogate:
     def _inputs_from_features(self, features):
         global_rows = [global_inputs for global_inputs, _ in features]
         codes = {
-            label: np.array([mapping[row[label]] for row in global_rows])
+            label: np.array(
+                [
+                    mapping.get(row[label], 0)
+                    if label in UNSEEN_AS_ZERO
+                    else mapping[row[label]]
+                    for row in global_rows
+                ]
+            )
             for label, mapping in self.global_categorical_maps.items()
         }
+
+        for label in UNSEEN_AS_ZERO:
+            if label in codes and (codes[label] == 0).any():
+                unseen = sorted(
+                    {
+                        str(row[label])
+                        for row, code in zip(global_rows, codes[label])
+                        if not code
+                    }
+                )
+                warnings.warn(
+                    f"Model {self.model.name} was not trained on {label} {unseen}, "
+                    "so the prediction can be less reliable"
+                )
+
         numerical = np.array(
             [
                 [row[label] for label in self.global_numerical_labels]
                 for row in global_rows
             ]
         )
+        self._warn_unseen_clocks(numerical)
+        self._warn_unseen_io_types(global_rows)
 
         inputs = dict(zip(self.global_input_keys["categorical"], codes.values()))
         inputs[self.global_input_keys["numerical"]] = numerical
@@ -416,6 +451,7 @@ class BaseSurrogate:
 
         numerical = dataset.columns(self.global_numerical_labels)
         _check_finite(numerical, self.global_numerical_labels)
+        self._warn_unseen_clocks(numerical)
 
         inputs = dict(zip(self.global_input_keys["categorical"], codes.values()))
         inputs[self.global_input_keys["numerical"]] = numerical
@@ -446,6 +482,39 @@ class BaseSurrogate:
 
         return self._scale_inputs(inputs), numerical, codes
 
+    def _warn_unseen_clocks(self, numerical):
+        if not self.clock_periods or "clock_period" not in self.global_numerical_labels:
+            return
+
+        clocks = numerical[:, self.global_numerical_labels.index("clock_period")]
+        unseen = sorted(
+            {round(clock, 6) for clock in clocks.tolist()} - set(self.clock_periods)
+        )
+        if unseen:
+            warnings.warn(
+                f"Model {self.model.name} was not trained at clock periods {unseen} "
+                "ns, so the prediction can be less reliable"
+            )
+
+    def _warn_unseen_io_types(self, global_rows):
+        if not self.io_types:
+            return
+
+        unseen = set()
+        for row in global_rows:
+            convolutional = row.get("conv1d_count", 0) + row.get("conv2d_count", 0)
+            kind = "conv" if convolutional else "dense"
+            io_type = row.get("io_type", DEFAULT_IO_TYPE)
+            if io_type not in self.io_types.get(kind, []):
+                unseen.add((kind, io_type))
+
+        for kind, io_type in sorted(unseen):
+            warnings.warn(
+                f"Model {self.model.name} was trained on {kind} models with "
+                f"{self.io_types.get(kind)}, not {io_type}, so the prediction can be "
+                "less reliable"
+            )
+
     def _scale_inputs(self, inputs):
         """Apply the input scaler to the numerical model inputs."""
 
@@ -470,6 +539,8 @@ class BaseSurrogate:
             "output_labels": list(self.output_labels),
             "output_shape": self.output_shape,
             "report": self.report,
+            "clock_periods": self.clock_periods,
+            "io_types": self.io_types,
             "model_class": self.model.__class__.__name__,
             "model_config": self.model.to_config(),
             "scaler_class": self.scaler.__class__.__name__ if self.scaler else None,
@@ -512,6 +583,8 @@ class BaseSurrogate:
             scaler=scaler,
             input_scaler=input_scaler,
         )
+        self.clock_periods = config.get("clock_periods")  # absent in older bundles
+        self.io_types = config.get("io_types")
 
     def save(self, save_dir):
         """Save the class config and model weights."""
@@ -909,13 +982,7 @@ class MultiSurrogate:
         round_digits=2,
         verbose=0,
     ):
-        """DataFrame of predictions, one row per model, config and versions.
-
-        `hls_configs` is a dict or a list of dicts like {"board": ..., "model":
-        {"strategy": ..., "precision": ..., "reuse_factor": ...}}, camelCase or
-        snake_case. Versions are a string or a list. None takes each surrogate's
-        training values, with default precisions and reuse factors for configs.
-        """
+        """Predictions per model and setting, sweeping training values for None."""
 
         if not self._surrogates:
             raise RuntimeError("No surrogates have been added to the MultiSurrogate.")
@@ -938,6 +1005,7 @@ class MultiSurrogate:
             "Strategy",
             "Precision",
             "Reuse Factor",
+            "Clock Period",
             "HLS4ML Version",
             "Vivado Version",
         )
@@ -961,6 +1029,12 @@ class MultiSurrogate:
                         MultiSurrogate._default_reuse_factors,
                     )
                 ]
+                if "clock_period" in surrogate.global_numerical_labels:
+                    configs = [
+                        {**config, "clock_period": clock}
+                        for config in configs
+                        for clock in surrogate.clock_periods or [DEFAULT_CLOCK_PERIOD]
+                    ]
 
             versions = []
             for label, values in [
@@ -985,6 +1059,7 @@ class MultiSurrogate:
                     config["model"]["strategy"],
                     config["model"]["precision"],
                     config["model"]["reuse_factor"],
+                    config.get("clock_period", DEFAULT_CLOCK_PERIOD),
                     hls4ml_version,
                     vivado_version,
                 )
@@ -1022,6 +1097,11 @@ class MultiSurrogate:
                         row[f"{target} (%)"] = value / capacity * 100
 
         outputs_df = pd.DataFrame(list(output_rows.values())).round(round_digits)
+        if not any(
+            "clock_period" in surrogate.global_numerical_labels
+            for surrogate in self._surrogates.values()
+        ):
+            outputs_df = outputs_df.drop(columns="Clock Period", errors="ignore")
 
         if not outputs_df.empty:
             for column, sort_key in [

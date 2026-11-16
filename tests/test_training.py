@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from rule4ml.dataset import split
+from rule4ml.features import DEFAULT_CLOCK_PERIOD
 from rule4ml.models.architectures import (
     GNNSettings,
     MLPSettings,
@@ -24,9 +25,15 @@ from rule4ml.parsers.data_parser import (
     default_layer_type_map,
     default_strategy_map,
 )
-from rule4ml.surrogates import TorchSurrogate, TrainSettings
+from rule4ml.surrogates import MultiSurrogate, TorchSurrogate, TrainSettings
 
-GLOBAL_LABELS = ["dense_count", "dense_parameters_mean", "bit_width", "reuse_mean"]
+GLOBAL_LABELS = [
+    "dense_count",
+    "dense_parameters_mean",
+    "bit_width",
+    "reuse_mean",
+    "clock_period",
+]
 SEQUENTIAL_LABELS = ["layer_input_size", "layer_output_size", "layer_parameter_count"]
 GLOBAL_MAPS = {"strategy": default_strategy_map, "board": default_board_map}
 SEQUENTIAL_MAPS = {"layer_type": default_layer_type_map}
@@ -95,6 +102,35 @@ def test_fit_save_load(
 
     loaded = _reload(surrogate, tmp_path)
     assert np.array_equal(loaded.predict_dataset(val), surrogate.predict_dataset(val))
+    assert loaded.clock_periods == [10.0]
+
+
+def test_predict_clock_sweep(make_dataset, top_quarks, hls_config):
+    surrogate = TorchSurrogate()
+    surrogate.set_model(
+        _torch_gnn(),
+        GLOBAL_LABELS,
+        ["lut"],
+        SEQUENTIAL_LABELS,
+        report="resource_report",
+    )
+    surrogate.fit(make_dataset([1, 2, 3]), TrainSettings(num_epochs=1, batch_size=4))
+    estimator = MultiSurrogate()
+    estimator.add_surrogate(surrogate)
+
+    swept = estimator.predict(top_quarks)
+    with pytest.warns(UserWarning, match=rf"clock periods \[{DEFAULT_CLOCK_PERIOD}\]"):
+        configured = estimator.predict(top_quarks, hls_configs=hls_config)
+
+    assert set(swept["Clock Period"]) == {10.0}  # the training clock
+    assert list(configured["Clock Period"]) == [DEFAULT_CLOCK_PERIOD]
+
+    surrogate.io_types = {"dense": ["io_parallel"]}
+    with pytest.warns(UserWarning, match="not io_stream"):
+        estimator.predict(
+            top_quarks,
+            hls_configs={**hls_config, "IOType": "io_stream", "ClockPeriod": 10},
+        )
 
 
 def test_input_scaler_integer_layers():
