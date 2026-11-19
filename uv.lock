@@ -631,6 +631,22 @@ wheels = [
 ]
 
 [[package]]
+name = "hls4ml"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "h5py" },
+    { name = "numpy" },
+    { name = "pydigitalwavetools" },
+    { name = "pyyaml" },
+    { name = "quantizers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/73/48/f32b7f3e85816bf35426f899ca1d6e87a8fda9b06f68c199af2e0c3ba753/hls4ml-1.3.0.tar.gz", hash = "sha256:bb231fe0ed1e8dbca2b353dafc3ccb96a5bf9c6a14cd6ff13bb7606407e834ae", size = 10199823, upload-time = "2026-03-20T14:59:58.45Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/0e/8bd7715acf09fc926facee273ef2d0c21caa3e091b9fb20801efbe4bcfc0/hls4ml-1.3.0-py3-none-any.whl", hash = "sha256:01bf1de2cd9bca56699b9fe3385cb1735026b022f9580fe1d73faf192dfb90f2", size = 3300830, upload-time = "2026-03-20T14:59:56.65Z" },
+]
+
+[[package]]
 name = "identify"
 version = "2.6.20"
 source = { registry = "https://pypi.org/simple" }
@@ -1775,6 +1791,24 @@ wheels = [
 ]
 
 [[package]]
+name = "py-cpuinfo"
+version = "9.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/a8/d832f7293ebb21690860d2e01d8115e5ff6f2ae8bbdc953f0eb0fa4bd2c7/py-cpuinfo-9.0.0.tar.gz", hash = "sha256:3cdbbf3fac90dc6f118bfd64384f309edeadd902d7c8fb17f02ffa1fc3f49690", size = 104716, upload-time = "2022-10-25T20:38:06.303Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/a9/023730ba63db1e494a271cb018dcd361bd2c917ba7004c3e49d5daf795a2/py_cpuinfo-9.0.0-py3-none-any.whl", hash = "sha256:859625bc251f64e21f077d099d4162689c762b5d6a4c3c97553d56241c9674d5", size = 22335, upload-time = "2022-10-25T20:38:27.636Z" },
+]
+
+[[package]]
+name = "pydigitalwavetools"
+version = "1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d4/5a/7fa453e7814cbbe48db8a0d466ef9e8296e9faabc2b440fcd8f83628c24f/pyDigitalWaveTools-1.1.tar.gz", hash = "sha256:c7f0e06f7ed543a2f5f7110a4a8f2aae9e3ae328bb67ebd5b2a6db862efe7d33", size = 10905, upload-time = "2021-07-01T14:34:21.687Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/10/c89dcdcb013a5f44019f034251fda561d18dd291e583ead8f9d859669586/pyDigitalWaveTools-1.1-py3-none-any.whl", hash = "sha256:aa1c3b2447786afab3412baa4d86bb4d1df9723a8df7076a1d9976ebdda1874c", size = 13072, upload-time = "2021-07-01T14:34:19.146Z" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1905,6 +1939,15 @@ wheels = [
 ]
 
 [[package]]
+name = "quantizers"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/56/5a240db3b16101dce9c3fca296f6806aa9b523d5bf43388293bf69fbe537/quantizers-1.2.2.tar.gz", hash = "sha256:cb76c4e273a96dd6735c33c9a3b0f7f688206aad4774cd7b9ee5effb9d9d6fab", size = 117969, upload-time = "2025-05-27T10:36:35.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/98/f1db1cf7ffea7e73767d5a816ca36dfd4cd9761127cb0545c945dc680272/quantizers-1.2.2-py3-none-any.whl", hash = "sha256:de6b6f9033fcd71593afd203dff68d5ee72563997b5426c6ecb2236fd11c9ef5", size = 15719, upload-time = "2025-05-27T10:36:33.863Z" },
+]
+
+[[package]]
 name = "requests"
 version = "2.34.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1953,6 +1996,14 @@ keras = [
 ]
 
 [package.dev-dependencies]
+datagen = [
+    { name = "hls4ml" },
+    { name = "psutil" },
+    { name = "py-cpuinfo" },
+    { name = "pyparsing" },
+    { name = "quantizers" },
+    { name = "rule4ml", extra = ["keras"] },
+]
 dev = [
     { name = "pre-commit", version = "4.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pre-commit", version = "4.7.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1972,6 +2023,14 @@ requires-dist = [
 provides-extras = ["keras"]
 
 [package.metadata.requires-dev]
+datagen = [
+    { name = "hls4ml" },
+    { name = "psutil" },
+    { name = "py-cpuinfo" },
+    { name = "pyparsing" },
+    { name = "quantizers", specifier = "<2" },
+    { name = "rule4ml", extras = ["keras"] },
+]
 dev = [
     { name = "pre-commit" },
     { name = "pytest" },

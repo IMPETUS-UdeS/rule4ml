@@ -30,7 +30,7 @@ class IntRange:
         if rng is None:
             rng = np.random.default_rng()
 
-        return rng.choice(self.to_list(endpoint), size=size)
+        return rng.choice(self.to_list(endpoint), size=size).tolist()
 
     def to_list(self, endpoint=True):
         return list(range(self.min, self.max + int(endpoint), self.step))
@@ -62,7 +62,7 @@ class Power2Range:
         rnd_exp = rng.integers(
             self.min_exp, high=self.max_exp, size=size, endpoint=endpoint
         )
-        return 2**rnd_exp
+        return (2**rnd_exp).tolist()
 
     def to_list(self, endpoint=True):
         return [2**x for x in range(self.min_exp, self.max_exp + int(endpoint))]
@@ -83,7 +83,7 @@ class FloatRange:
         if rng is None:
             rng = np.random.default_rng()
 
-        return rng.uniform(self.min, self.max, size=size)
+        return np.asarray(rng.uniform(self.min, self.max, size=size)).tolist()
 
     def to_list(self, n_samples=50, endpoint=True):
         return np.linspace(self.min, self.max, num=n_samples, endpoint=endpoint)

@@ -10,15 +10,6 @@ import hls4ml
 import numpy as np
 import tensorflow as tf
 from hls4ml.backends.backend import get_available_backends, get_backend
-from nn_gen import GeneratorSettings, IntRange, Power2Range, generate_fc_network
-from utils import (
-    data_from_synthesis,
-    get_cpu_info,
-    md5_hash_dict,
-    model_name_from_config,
-    print_hls_config,
-    save_to_json,
-)
 
 from rule4ml.parsers.network_parser import (
     config_from_keras_model,
@@ -26,6 +17,16 @@ from rule4ml.parsers.network_parser import (
     keras_model_from_config,
 )
 from rule4ml.parsers.utils import get_board_from_part, get_part_from_board
+
+from .nn_gen import GeneratorSettings, IntRange, Power2Range, generate_fc_network
+from .utils import (
+    data_from_synthesis,
+    get_cpu_info,
+    md5_hash_dict,
+    model_name_from_config,
+    print_hls_config,
+    save_to_json,
+)
 
 base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 

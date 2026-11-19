@@ -7,27 +7,32 @@
 
 ## Installation
 
-`rule4ml` releases are uploaded to the Python Package Index for easy installation via `pip`.
+`rule4ml` releases are on the Python Package Index and install with `uv` or `pip`:
 
 ```bash
-pip install rule4ml
+uv add rule4ml       # with uv
+pip install rule4ml  # with pip
 ```
 
 This will only install the [base package](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/rule4ml) and its dependencies for resources and latency prediction. The [data_gen](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/) scripts and the [Jupyter notebooks](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks) are to be cloned from the repo if needed.
 
-The package includes only the latest predictors. To use the predictors of an earlier release, install that release, for example `pip install rule4ml==0.2.0`.
+The package includes only the latest predictors. To use the predictors of an earlier release, install that release, for example `uv add rule4ml==0.2.0` or `pip install rule4ml==0.2.0`.
 
-The base package uses PyTorch for the default predictors. Keras models and predictors need an extra:
-
-```bash
-pip install "rule4ml[keras]"
-```
-
-The data generation dependencies are listed separately in [data_gen/requirements.txt](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/requirements.txt):
+The base package uses PyTorch for the default predictors. Keras predictors need an extra:
 
 ```bash
-pip install -r data_gen/requirements.txt
+uv add "rule4ml[keras]"       # with uv
+pip install "rule4ml[keras]"  # with pip
 ```
+
+The [data_gen](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/) scripts need the `datagen` dependency group, installed from a clone. uv installs the tested versions from `uv.lock`. pip needs version 25.1 or later:
+
+```bash
+uv sync --group datagen           # with uv
+pip install -e . --group datagen  # with pip
+```
+
+The group leaves the hls4ml version open, so datasets can be built with several tool versions. hls4ml 1.2.0 and later read Keras 3 models. Earlier versions need Keras 2, for example `uv pip install hls4ml==1.1.0 tensorflow==2.15.1`, or the same with `pip install`.
 
 ## Getting Started
 

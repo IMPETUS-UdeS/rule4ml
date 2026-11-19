@@ -33,16 +33,17 @@ keras = ["tensorflow>=2.15.1,<2.20", "keras"]
 
 [dependency-groups]
 dev = ["pre-commit", "pytest"]
+datagen = [
+    "rule4ml[keras]",
+    "hls4ml",
+    "quantizers<2",
+    "psutil",
+    "py-cpuinfo",
+    "pyparsing",
+]
 
 [tool.setuptools.packages.find]
 include = ["rule4ml*"]
 
 [tool.setuptools_scm]
 version_file = "rule4ml/_version.py"
-
-[tool.ruff]
-target-version = "py310"
-extend-exclude = ["hls4ml"]
-
-[tool.ruff.lint.isort]
-known-third-party = ["hls4ml"]
