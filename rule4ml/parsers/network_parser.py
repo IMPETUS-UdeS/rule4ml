@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import torch
 
@@ -269,8 +271,20 @@ def keras_model_from_config(model_config):
     return model
 
 
-def config_from_torch_model(model, hls_config):
-    """Parse a Torch model into per-layer configs with hls4ml reuse factors."""
+def config_from_torch_model(model, hls_config, input_shape=None):
+    """Parse a Torch model into per-layer configs with hls4ml reuse factors.
+
+    Args:
+        model (torch.nn.Module): Model to parse.
+        hls_config (dict): HLS config.
+        input_shape (tuple, optional): Input shape without the batch dimension, in
+            Torch's channels-first layout. Models that start with a layer other than
+            Linear need it, such as CNNs. Shapes are stored channels-last, as hls4ml
+            converts them.
+
+    Returns:
+        list: Layer configs in graph order.
+    """
 
     hls_config = camel_keys_to_snake(hls_config)
     traced_model = torch.fx.symbolic_trace(model)
@@ -295,26 +309,40 @@ def config_from_torch_model(model, hls_config):
             raise ValueError(f"Unsupported Torch operation: {node.op} {node.target}")
 
         if node.op == "placeholder":
+            shape = (None,)
+            if input_shape is not None:
+                shape = (None, *input_shape[1:], input_shape[0])
+
             layer_dict = {
                 "class_name": "InputLayer",
-                "input_shape": (None,),
-                "output_shape": (None,),
+                "input_shape": shape,
+                "output_shape": shape,
                 "parameters": 0,
                 "trainable_parameters": 0,
                 "dtype": "float32",
             }
 
         elif operation == "Linear":
-            use_bias = module.bias is not None
-            parameters = (module.in_features + int(use_bias)) * module.out_features
+            source_shape = layers_data[node.all_input_nodes[0].name]["output_shape"]
+            if len(source_shape) > 2:
+                raise NotImplementedError(
+                    "Linear on inputs with more than one feature axis is not supported."
+                )
+            if source_shape[-1] not in [None, module.in_features]:
+                raise ValueError(
+                    f"{node.name} expects {module.in_features} features, "
+                    f"got input shape {source_shape}."
+                )
+
+            parameters, trainable_parameters = _torch_parameter_counts(module)
             layer_dict = {
                 "class_name": "Dense",
                 "input_shape": (None, module.in_features),
                 "output_shape": (None, module.out_features),
                 "parameters": parameters,
-                "trainable_parameters": parameters,
+                "trainable_parameters": trainable_parameters,
                 "neurons": module.out_features,
-                "use_bias": use_bias,
+                "use_bias": module.bias is not None,
                 "dtype": ".".join(str(module.weight.dtype).split(".")[1:]),
             }
 
@@ -324,9 +352,12 @@ def config_from_torch_model(model, hls_config):
             else:
                 inputs = node.all_input_nodes
 
-            if any(input_node.op == "placeholder" for input_node in inputs):
+            if input_shape is None and any(
+                input_node.op == "placeholder" for input_node in inputs
+            ):
                 raise TypeError(
-                    f"Model has unexpected first layer of type {operation}."
+                    f"A model that starts with {operation} needs an input shape, "
+                    "passed as (model, input_shape)."
                 )
 
             input_shapes = [
@@ -362,13 +393,16 @@ def config_from_torch_model(model, hls_config):
 
             elif operation in ["cat", "concat", "concatenate"]:
                 dim = node.kwargs.get("dim", node.args[1] if len(node.args) > 1 else 0)
-                dim %= len(input_shapes[0])
+                rank = len(input_shapes[0])
+                dim %= rank
                 if dim == 0:
                     raise ValueError(
                         "Concatenation along the batch dimension is not supported."
                     )
                 if len(input_shapes) != 2:
                     raise ValueError("hls4ml concatenates exactly two tensors.")
+
+                dim = rank - 1 if dim == 1 else dim - 1  # Torch channels go last
 
                 output_shape = list(input_shapes[0])
                 output_shape[dim] = sum(shape[dim] for shape in input_shapes)
@@ -378,13 +412,13 @@ def config_from_torch_model(model, hls_config):
                 layer_dict["output_shape"] = tuple(output_shape)
 
             elif operation in ["Flatten", "flatten", "view"]:
-                input_shape = input_shapes[0]
+                tensor_shape = input_shapes[0]
                 if operation == "view":
                     view_shape = node.args[1:]
                     if isinstance(view_shape[0], (list, tuple)):
                         view_shape = view_shape[0]
 
-                    size = int(np.prod(input_shape[1:]))
+                    size = int(np.prod(tensor_shape[1:]))
                     if list(view_shape) != [-1, size]:
                         raise ValueError(
                             f"Unsupported view {tuple(view_shape)}, "
@@ -403,38 +437,93 @@ def config_from_torch_model(model, hls_config):
                             "end_dim", args[1] if len(args) > 1 else -1
                         )
 
-                    start, end = start % len(input_shape), end % len(input_shape)
+                    rank = len(tensor_shape)
+                    start, end = start % rank, end % rank
                     if start == 0:
                         raise ValueError(
                             "Flattening the batch dimension is not supported."
                         )
+                    if rank > 2 and (start, end) != (1, rank - 1):
+                        raise ValueError(
+                            "Channels-last tensors only flatten from dimension 1."
+                        )
 
-                    size = int(np.prod(input_shape[start : end + 1]))
-                    output_shape = (*input_shape[:start], size, *input_shape[end + 1 :])
+                    size = int(np.prod(tensor_shape[start : end + 1]))
+                    output_shape = (
+                        *tensor_shape[:start],
+                        size,
+                        *tensor_shape[end + 1 :],
+                    )
 
                 layer_dict["class_name"] = "Flatten"
                 layer_dict["output_shape"] = output_shape
 
             elif operation == "add":
+                if len(set(input_shapes)) > 1:  # hls4ml merges equal shapes only
+                    raise ValueError(f"Add of different shapes {input_shapes}.")
+
                 layer_dict["class_name"] = "Add"
                 layer_dict["input_shape"] = input_shapes
 
             elif operation in ["BatchNorm1d", "BatchNorm2d"]:
-                input_size = np.prod([x for x in input_shapes[0] if x is not None])
-
+                parameters, trainable_parameters = _torch_parameter_counts(module)
                 layer_dict["class_name"] = "BatchNormalization"
-                layer_dict["parameters"] = 4 * input_size
-                layer_dict["trainable_parameters"] = 2 * input_size
+                layer_dict["parameters"] = parameters
+                layer_dict["trainable_parameters"] = trainable_parameters
+
+            elif operation in ["Conv1d", "Conv2d"]:
+                if module.groups != 1:  # hls4ml reads them as depthwise
+                    raise NotImplementedError("Grouped convolutions are not supported.")
+                if input_shapes[0][-1] != module.in_channels:
+                    raise ValueError(
+                        f"{node.name} expects {module.in_channels} channels, "
+                        f"got channels-last input shape {input_shapes[0]}."
+                    )
+
+                parameters, trainable_parameters = _torch_parameter_counts(module)
+                padding = module.padding
+                no_padding = padding == "valid" or (
+                    padding != "same" and not any(padding)
+                )
+                spatial_shape = _spatial_output_shape(module, input_shapes[0])
+
+                layer_dict.update(
+                    {
+                        "class_name": f"Conv{len(module.kernel_size)}D",
+                        "output_shape": (None, *spatial_shape, module.out_channels),
+                        "parameters": parameters,
+                        "trainable_parameters": trainable_parameters,
+                        "channels": module.in_channels,
+                        "filters": module.out_channels,
+                        "kernel_size": tuple(module.kernel_size),
+                        "strides": tuple(module.stride),
+                        "padding": "valid" if no_padding else "same",  # as hls4ml
+                        "use_bias": module.bias is not None,
+                    }
+                )
+
+            elif operation in ["MaxPool1d", "MaxPool2d", "AvgPool1d", "AvgPool2d"]:
+                pooling = "Max" if operation.startswith("Max") else "Average"
+                spatial_shape = _spatial_output_shape(module, input_shapes[0])
+
+                layer_dict["class_name"] = f"{pooling}Pooling{operation[-2]}D"
+                layer_dict["output_shape"] = (None, *spatial_shape, input_shapes[0][-1])
+
+            elif operation in ["Dropout", "dropout"]:
+                layer_dict["class_name"] = "Dropout"
 
             else:
-                layer_dict["class_name"] = {"Conv2d": "Conv2D"}.get(
-                    operation, operation
-                )
+                raise ValueError(f"Unsupported Torch operation: {operation}")
 
         reuse_factor = get_reuse_factor(hls_config, layer_dict, node.name)
         if layer_dict["class_name"] == "Dense":
             n_in, n_out = layer_dict["input_shape"][-1], layer_dict["output_shape"][-1]
             reuse_factor = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+        elif layer_dict["class_name"] in ["Conv1D", "Conv2D"]:
+            n_in = layer_dict["channels"] * np.prod(layer_dict["kernel_size"])
+            reuse_factor = get_closest_reuse_factor(
+                n_in, layer_dict["filters"], reuse_factor
+            )
 
         layer_dict["reuse_factor"] = reuse_factor
         weight_bits = get_weight_bits(hls_config, layer_dict, node.name)
@@ -444,12 +533,65 @@ def config_from_torch_model(model, hls_config):
 
     layers_data = list(layers_data.values())
 
-    model_input_shape = layers_data[1]["input_shape"]
-    layers_data[0]["input_shape"] = model_input_shape
-    layers_data[0]["output_shape"] = model_input_shape
+    if input_shape is None:  # Only Linear layers can start the model
+        model_input_shape = layers_data[1]["input_shape"]
+        layers_data[0]["input_shape"] = model_input_shape
+        layers_data[0]["output_shape"] = model_input_shape
     layers_data[0]["dtype"] = layers_data[1]["dtype"]
 
     return layers_data
+
+
+def _torch_parameter_counts(module):
+    """Total and trainable parameters of a Torch layer, with running statistics."""
+
+    trainable = sum(
+        param.numel() for param in module.parameters() if param.requires_grad
+    )
+    statistics = [buffer for buffer in module.buffers() if buffer.is_floating_point()]
+    total = sum(tensor.numel() for tensor in [*module.parameters(), *statistics])
+
+    return total, trainable
+
+
+def _spatial_output_shape(module, input_shape):
+    """Spatial output shape of a Torch conv or pooling layer on a channels-last input."""
+
+    rank = int(type(module).__name__[-2])  # Conv1d, MaxPool2d and so on
+    if len(input_shape) != rank + 2:
+        raise ValueError(
+            f"{type(module).__name__} expects {rank} spatial dimensions, got "
+            f"channels-last input shape {input_shape}. input_shape takes Torch's "
+            "channels-first layout without the batch dimension."
+        )
+
+    spatial_shape = input_shape[1:-1]
+    if module.padding == "same":
+        return spatial_shape
+
+    ceil_mode = getattr(module, "ceil_mode", False)
+    padding = 0 if module.padding == "valid" else module.padding
+    windows = [
+        value if isinstance(value, (list, tuple)) else (value,) * rank
+        for value in [
+            module.kernel_size,
+            module.stride,
+            padding,
+            getattr(module, "dilation", 1),  # Average pooling has no dilation
+        ]
+    ]
+
+    output_shape = []
+    for size, kernel, stride, pad, dilation in zip(
+        spatial_shape, *windows, strict=True
+    ):
+        span = (size + 2 * pad - dilation * (kernel - 1) - 1) / stride
+        length = (math.ceil(span) if ceil_mode else math.floor(span)) + 1
+        if ceil_mode and (length - 1) * stride >= size + pad:  # Starts in padding
+            length -= 1
+        output_shape.append(length)
+
+    return tuple(output_shape)
 
 
 def config_from_onnx_model(model, hls_config):

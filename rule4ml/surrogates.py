@@ -17,7 +17,12 @@ except ModuleNotFoundError as error:
     tf = None
 
 from rule4ml.dataset import UNSEEN_AS_ZERO
-from rule4ml.features import DEFAULT_CLOCK_PERIOD, DEFAULT_IO_TYPE, model_features
+from rule4ml.features import (
+    DEFAULT_CLOCK_PERIOD,
+    DEFAULT_IO_TYPE,
+    model_features,
+    unpack_model,
+)
 from rule4ml.models import architectures, metrics, scaling
 from rule4ml.models.architectures import (
     TorchGNN,
@@ -246,7 +251,8 @@ class BaseSurrogate:
         """Predict every combination of models and settings.
 
         Args:
-            models_to_predict (list): Keras or Torch models.
+            models_to_predict (list): Keras or Torch models, or (torch_model,
+                input_shape) pairs.
             hls_configs (list): HLS config dicts.
             hls4ml_versions (list, optional): hls4ml versions.
             vivado_versions (list, optional): Vivado versions.
@@ -275,7 +281,8 @@ class BaseSurrogate:
         """Predict with MC dropout, as the mean and std over samples.
 
         Args:
-            models_to_predict (list): Keras or Torch models.
+            models_to_predict (list): Keras or Torch models, or (torch_model,
+                input_shape) pairs.
             hls_configs (list): HLS config dicts.
             hls4ml_versions (list, optional): hls4ml versions.
             vivado_versions (list, optional): Vivado versions.
@@ -1054,7 +1061,7 @@ class MultiSurrogate:
         """Predict every model over a sweep of settings.
 
         Args:
-            models_to_predict: Keras or Torch model, or a list of them.
+            models_to_predict: A model or (torch_model, input_shape) pair, or a list.
             hls_configs (dict or list, optional): HLS configs, camelCase or snake_case.
                 None sweeps the training boards, strategies and clocks, with default
                 precisions and reuse factors.
@@ -1071,7 +1078,8 @@ class MultiSurrogate:
         if not self._surrogates:
             raise RuntimeError("No surrogates have been added to the MultiSurrogate.")
 
-        if not isinstance(models_to_predict, (tuple, list)):
+        single = unpack_model(models_to_predict)[1] is not None  # (model, shape) pair
+        if single or not isinstance(models_to_predict, (tuple, list)):
             models_to_predict = [models_to_predict]
 
         if hls_configs is not None:
@@ -1137,8 +1145,9 @@ class MultiSurrogate:
                 *surrogate.accepted_settings(configs, *versions),
             ):
                 (index, model), config, hls4ml_version, vivado_version = combo
+                named = unpack_model(model)[0]
                 metadata = (
-                    getattr(model, "name", model.__class__.__name__),
+                    getattr(named, "name", named.__class__.__name__),
                     config["board"],
                     config["model"]["strategy"],
                     config["model"]["precision"],

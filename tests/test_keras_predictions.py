@@ -31,31 +31,45 @@ def test_predict_model_apis(estimator, model, hls_config):
     )
 
 
-def test_predict_pooling_cnn(estimator):
-    inputs = keras.Input(shape=(32, 32, 3))
-    x = layers.Conv2D(8, 3, padding="same", activation="relu")(inputs)
-    x = layers.MaxPooling2D()(x)
-    x = layers.Flatten()(x)
-    outputs = layers.Dense(10, activation="softmax")(x)
-
-    hls_config = {
-        "board": "alveo-u250",
-        "model": {
-            "strategy": "Resource",
-            "precision": "ap_fixed<16,6>",
-            "reuse_factor": 1,
+@pytest.mark.parametrize("dims", [1, 2])
+def test_predict_pooling_cnn(estimator, dims):
+    settings = {
+        "hls_configs": {
+            "board": "alveo-u250",
+            "model": {
+                "strategy": "Resource",
+                "precision": "ap_fixed<16,6>",
+                "reuse_factor": 4,
+            },
         },
+        "hls4ml_versions": ["0.8.1"],
+        "vivado_versions": ["2023.2"],
+        "round_digits": 10,
     }
+    targets = ["BRAM_36K", "DSP", "FF", "LUT", "CYCLES_MAX", "INTERVAL_MAX"]
 
-    prediction_df = estimator.predict(
-        keras.Model(inputs=inputs, outputs=outputs),
-        hls_configs=[hls_config],
-        hls4ml_versions=["0.8.1"],
-        vivado_versions=["2023.2"],
+    inputs = keras.Input(shape=(*(32,) * dims, 3))
+    x = getattr(layers, f"Conv{dims}D")(8, 3, padding="same", activation="relu")(inputs)
+    x = layers.BatchNormalization()(getattr(layers, f"MaxPooling{dims}D")()(x))
+    outputs = layers.Dense(10, activation="softmax")(layers.Flatten()(x))
+
+    torch_cnn = torch.nn.Sequential(
+        getattr(torch.nn, f"Conv{dims}d")(3, 8, 3, padding=1),
+        torch.nn.ReLU(),
+        getattr(torch.nn, f"MaxPool{dims}d")(2),
+        getattr(torch.nn, f"BatchNorm{dims}d")(8),
+        torch.nn.Flatten(),
+        torch.nn.Linear(8 * 16**dims, 10),
+        torch.nn.Softmax(dim=1),
     )
 
-    assert len(prediction_df) == 1
-    assert not prediction_df.isna().any().any()
+    keras_predictions = estimator.predict(keras.Model(inputs, outputs), **settings)
+    torch_predictions = estimator.predict((torch_cnn, (3, *(32,) * dims)), **settings)
+
+    assert not keras_predictions.isna().any().any()
+    np.testing.assert_allclose(
+        torch_predictions[targets], keras_predictions[targets], rtol=1e-6
+    )
 
 
 def test_predict_mixed_models(estimator, top_quarks):
