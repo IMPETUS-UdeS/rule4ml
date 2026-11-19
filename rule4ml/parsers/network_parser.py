@@ -4,9 +4,11 @@ from collections import Counter
 import numpy as np
 import torch
 
+from rule4ml.parsers.data_parser import default_layer_type_map
 from rule4ml.parsers.utils import (
     camel_keys_to_snake,
     ensure_input_layer,
+    get_activation_name,
     get_closest_reuse_factor,
     get_reuse_factor,
     get_weight_bits,
@@ -25,7 +27,9 @@ def config_from_keras_model(model, hls_config):
 
     Raises:
         AttributeError: If the model or a layer has no known input shape.
-        NotImplementedError: If the model has several inputs.
+        NotImplementedError: If the model has several inputs, or a layer is a
+            grouped convolution or a Dense on several feature axes.
+        ValueError: If a layer or activation is unsupported or shapes do not match.
     """
 
     import tensorflow as tf
@@ -53,6 +57,9 @@ def config_from_keras_model(model, hls_config):
 
         class_name = layer.__class__.__name__
         layer_name = layer.name
+        layer_type = class_name.lower().removeprefix("q")  # QKeras layers
+        if layer_type not in default_layer_type_map and layer_type != "activation":
+            raise ValueError(f"Unsupported Keras layer: {class_name}")
 
         layer_config = layer.get_config()
         layer_weights = layer.get_weights()
@@ -84,6 +91,18 @@ def config_from_keras_model(model, hls_config):
                 raise AttributeError(
                     f"Could not get the input shape for layer {layer.name}. Make sure model.build() was called previously."
                 )
+
+        if class_name in ["Add", "Concatenate"]:  # hls4ml merges two equal shapes
+            input_shapes = [tuple(shape) for shape in input_shape]
+            if class_name == "Add" and len(set(input_shapes)) > 1:
+                raise ValueError(f"Add of different shapes {input_shapes}.")
+            if class_name == "Concatenate":
+                if len(input_shapes) != 2:
+                    raise ValueError("hls4ml concatenates exactly two tensors.")
+                if layer_config["axis"] % len(input_shapes[0]) == 0:
+                    raise ValueError(
+                        "Concatenation along the batch dimension is not supported."
+                    )
 
         layer_dict["input_shape"] = tuple(np.asarray(input_shape).flatten())
 
@@ -124,10 +143,18 @@ def config_from_keras_model(model, hls_config):
         layer_dict["trainable_parameters"] = trainable_parameter_count
 
         if class_name in ["Dense", "QDense"]:
+            if len(input_shape) > 2:
+                raise NotImplementedError(
+                    "Dense on inputs with more than one feature axis is not supported."
+                )
+
             layer_dict["neurons"] = int(layer_config["units"])
             layer_dict["use_bias"] = layer_config["use_bias"]
 
         elif class_name in ["Conv1D", "Conv2D", "QConv1D", "QConv2D"]:
+            if layer_config.get("groups", 1) != 1:  # hls4ml reads them as depthwise
+                raise NotImplementedError("Grouped convolutions are not supported.")
+
             layer_dict["channels"] = int(input_shape[-1])
             layer_dict["filters"] = int(layer_config["filters"])
             layer_dict["kernel_size"] = tuple(
@@ -140,8 +167,29 @@ def config_from_keras_model(model, hls_config):
         elif class_name == "Dropout":
             layer_dict["dropout_rate"] = layer_config["rate"]
 
-        if "activation" in layer_config and layer_config["activation"] != "linear":
-            if class_name in ["Activation", "QActivation"]:
+        elif class_name in ["ReLU", "Softmax"]:  # as Activation, like Torch modules
+            if class_name == "ReLU" and (
+                layer_config.get("max_value") is not None
+                or layer_config.get("negative_slope")
+                or layer_config.get("threshold")
+            ):
+                raise ValueError(f"Only plain ReLU is supported, got {layer_name}.")
+            if class_name == "Softmax" and layer_config["axis"] % len(input_shape) == 0:
+                raise ValueError("Softmax along the batch dimension is not supported.")
+
+            layer_dict["class_name"] = "Activation"
+            layer_config["activation"] = class_name.lower()
+
+        activation = layer_config.get("activation")
+        if activation is not None and (
+            not isinstance(activation, str)
+            or get_activation_name(activation)
+            not in ["relu", "sigmoid", "tanh", "softmax", "linear"]
+        ):
+            raise ValueError(f"Unsupported activation in {layer_name}: {activation}")
+
+        if activation not in [None, "linear"]:
+            if layer_dict["class_name"] in ["Activation", "QActivation"]:
                 layer_dict["activation"] = layer_config["activation"]
             else:
                 nested_activation = True
