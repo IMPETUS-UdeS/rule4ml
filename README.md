@@ -18,7 +18,7 @@ This will only install the [base package](https://github.com/IMPETUS-UdeS/rule4m
 
 The package includes only the latest predictors. To use the predictors of an earlier release, install that release, for example `uv add rule4ml==0.2.0` or `pip install rule4ml==0.2.0`.
 
-The base package uses PyTorch for the default predictors. Keras predictors need an extra:
+The base package uses PyTorch for the default predictors. Keras predictors need an extra, which supports Python 3.12 and earlier (Python 3.13+, TF 2.21.0, triton 3.9 combination seems to crash):
 
 ```bash
 uv add "rule4ml[keras]"       # with uv
