@@ -14,7 +14,19 @@ from rule4ml.parsers.utils import (
 
 
 def config_from_keras_model(model, hls_config):
-    """Parse a Keras model into per-layer configs with hls4ml reuse factors."""
+    """Parse a Keras model into per-layer configs with hls4ml reuse factors.
+
+    Args:
+        model (keras.Model): Built model.
+        hls_config (dict): HLS config.
+
+    Returns:
+        list: Layer configs in model order.
+
+    Raises:
+        AttributeError: If the model or a layer has no known input shape.
+        NotImplementedError: If the model has several inputs.
+    """
 
     import tensorflow as tf
 
@@ -270,16 +282,20 @@ def keras_model_from_config(model_config):
 def config_from_torch_model(model, hls_config, input_shape=None):
     """Parse a Torch model into per-layer configs with hls4ml reuse factors.
 
+    Shapes are stored channels-last.
+
     Args:
         model (torch.nn.Module): Model to parse.
         hls_config (dict): HLS config.
-        input_shape (tuple, optional): Input shape without the batch dimension, in
-            Torch's channels-first layout. Models that start with a layer other than
-            Linear need it, such as CNNs. Shapes are stored channels-last, as hls4ml
-            converts them.
+        input_shape (tuple, optional): Torch input shape without the batch axis.
 
     Returns:
         list: Layer configs in graph order.
+
+    Raises:
+        TypeError: If the first layer needs input_shape and it is missing.
+        ValueError: If an operation is unsupported or shapes do not match.
+        NotImplementedError: If a layer form is not covered.
     """
 
     hls_config = camel_keys_to_snake(hls_config)
@@ -526,7 +542,14 @@ def config_from_torch_model(model, hls_config, input_shape=None):
 
 
 def _torch_parameter_counts(module):
-    """Total and trainable parameters of a Torch layer, with running statistics."""
+    """Count the parameters of a Torch layer.
+
+    Args:
+        module (torch.nn.Module): Layer.
+
+    Returns:
+        tuple: Total parameters, running statistics included, and trainable ones.
+    """
 
     trainable = sum(
         param.numel() for param in module.parameters() if param.requires_grad
@@ -538,7 +561,15 @@ def _torch_parameter_counts(module):
 
 
 def _spatial_output_shape(module, input_shape):
-    """Spatial output shape of a Torch conv or pooling layer on a channels-last input."""
+    """Compute the spatial output shape of a Torch conv or pooling layer.
+
+    Args:
+        module (torch.nn.Module): Conv or pooling layer.
+        input_shape (tuple): Channels-last input shape with the batch dimension.
+
+    Returns:
+        tuple: Spatial output shape, without the batch and channel dimensions.
+    """
 
     rank = int(type(module).__name__[-2])  # Conv1d, MaxPool2d and so on
     if len(input_shape) != rank + 2:
@@ -580,8 +611,7 @@ def _spatial_output_shape(module, input_shape):
 def config_from_onnx_model(model, hls_config):
     """Parse an ONNX model into per-layer configs with hls4ml reuse factors.
 
-    Shapes come from ONNX shape inference, so the model needs a fixed input shape.
-    They are stored channels-last, as hls4ml converts them.
+    Shapes come from ONNX shape inference and are stored channels-last.
 
     Args:
         model (onnx.ModelProto or str): Model, or the path to an .onnx file.
@@ -589,6 +619,11 @@ def config_from_onnx_model(model, hls_config):
 
     Returns:
         list: Layer configs in graph order.
+
+    Raises:
+        ImportError: If onnx is not installed.
+        ValueError: If the input shape or an operation is unsupported.
+        NotImplementedError: If a layer form is not covered.
     """
 
     try:
@@ -817,7 +852,15 @@ def config_from_onnx_model(model, hls_config):
 
 
 def _set_hls_settings(layer_dict, hls_config, name):
-    """Set the reuse factor and weight bits hls4ml gives a parsed layer."""
+    """Set the reuse factor and weight bits hls4ml gives a parsed layer.
+
+    Dense and Conv reuse factors snap to the closest valid one.
+
+    Args:
+        layer_dict (dict): Layer config, updated in place.
+        hls_config (dict): Snake_case HLS config.
+        name (str): Layer name for LayerName lookups.
+    """
 
     reuse_factor = get_reuse_factor(hls_config, layer_dict, name)
 

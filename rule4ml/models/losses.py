@@ -9,7 +9,10 @@ def get_loss_from_str(loss_name, backend, **kwargs):
         backend (str): "keras" or "torch".
 
     Returns:
-        The loss function instance.
+        keras.losses.Loss or torch.nn.Module: The loss function instance.
+
+    Raises:
+        ValueError: If the backend or loss is unsupported.
     """
 
     loss_name = loss_name.lower()

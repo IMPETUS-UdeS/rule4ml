@@ -10,7 +10,11 @@ def _is_torch(x):
 
 class BaseScaler:
     def fit(self, target_rows):
-        """Learn statistics from training target rows, nothing for fixed scalers."""
+        """Learn statistics from training target rows, nothing for fixed scalers.
+
+        Args:
+            target_rows (list): Target dicts, one per record.
+        """
 
     def transform(self, target_row, input_row):
         raise NotImplementedError()
@@ -243,7 +247,11 @@ class AsinhInputScaler:
         self.layer_std = layer_std
 
     def fit(self, layer_values):
-        """Fit layer feature statistics on training layers (L, F)."""
+        """Fit layer feature statistics on training layers.
+
+        Args:
+            layer_values (np.ndarray): Layer features of shape (L, F).
+        """
 
         if not self.standardize_layers:
             return

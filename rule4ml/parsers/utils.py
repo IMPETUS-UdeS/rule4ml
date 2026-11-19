@@ -6,7 +6,17 @@ from bisect import bisect_left
 
 
 def camel_keys_to_snake(d: dict, recursive=True):
-    """Convert HLS config keys to snake_case and LayerType/LayerName identifiers to lowercase."""
+    """Convert HLS config keys to snake_case and layer identifiers to lowercase.
+
+    Acronyms stay whole, so IOType becomes io_type.
+
+    Args:
+        d (dict): HLS config, or any value, which is returned as is.
+        recursive (bool, optional): Also convert nested dicts.
+
+    Returns:
+        dict: Config with snake_case keys.
+    """
 
     if not isinstance(d, dict):
         return d
@@ -33,7 +43,7 @@ def to_lower_keys(d: dict, recursive=True):
 
     Args:
         d (dict): Dictionary to transform.
-        recursive (bool, optional): Also transform nested dicts. Defaults to True.
+        recursive (bool, optional): Also transform nested dicts.
 
     Returns:
         dict: Dictionary with lowercase keys.
@@ -54,7 +64,15 @@ def to_lower_keys(d: dict, recursive=True):
 
 
 def unwrap_nested_dicts(d, prefix=None):
-    """Flatten nested dicts, joining keys with underscores."""
+    """Flatten nested dicts, joining keys with underscores.
+
+    Args:
+        d (dict): Dict to flatten, or any value, which is returned as is.
+        prefix (str, optional): Prefix of the flattened keys.
+
+    Returns:
+        dict: Flat dict.
+    """
 
     if not isinstance(d, dict):
         return d
@@ -71,7 +89,16 @@ def unwrap_nested_dicts(d, prefix=None):
 
 
 def get_reuse_factor(hls_config, layer, name=None):
-    """Reuse factor hls4ml gives a layer record: by name, then type, then model."""
+    """Get the reuse factor hls4ml gives a layer, by name, then type, then model.
+
+    Args:
+        hls_config (dict): Snake_case HLS config.
+        layer (dict): Layer config.
+        name (str, optional): Layer name for LayerName lookups.
+
+    Returns:
+        int: Reuse factor.
+    """
 
     layer_type = layer["class_name"].lower()
     if layer.get("activation") == "softmax":
@@ -103,7 +130,16 @@ def get_reuse_factor(hls_config, layer, name=None):
 
 
 def get_weight_bits(hls_config, layer, name=None):
-    """Weight bit width hls4ml gives a layer record, in hls4ml's precision lookup order."""
+    """Get the weight bit width hls4ml gives a layer, in its precision lookup order.
+
+    Args:
+        hls_config (dict): Snake_case HLS config.
+        layer (dict): Layer config.
+        name (str, optional): Layer name for LayerName lookups.
+
+    Returns:
+        int or None: Weight bits of a Dense or Conv layer, None for other layers.
+    """
 
     layer_type = layer["class_name"].lower().removeprefix("q")  # QDense is a Dense
     if layer_type not in ("dense", "conv1d", "conv2d"):
@@ -181,7 +217,16 @@ def name_weighted_layers(model_config, hls_config):
 
 
 def ensure_input_layer(model_config, hls_config, name="input1"):
-    """Prepend the InputLayer that Keras model.layers omits for Sequential models."""
+    """Prepend the InputLayer that Keras model.layers omits for Sequential models.
+
+    Args:
+        model_config (list): Layer configs.
+        hls_config (dict): Snake_case HLS config.
+        name (str, optional): Input layer name for LayerName lookups.
+
+    Returns:
+        list: Layer configs that start with an InputLayer.
+    """
 
     if model_config[0]["class_name"] == "InputLayer":
         return model_config
@@ -208,7 +253,17 @@ def get_activation_name(activation):
 
 
 def fixed_precision_to_bit_width(precision: str):
-    """Return (total_bits, integer_bits) of an hls4ml ap_fixed precision string."""
+    """Get the bit widths of an hls4ml ap_fixed precision string.
+
+    Args:
+        precision (str): Precision such as "ap_fixed<16,6>".
+
+    Returns:
+        tuple: Total bits and integer bits.
+
+    Raises:
+        ValueError: If the precision is not an ap_fixed type.
+    """
 
     # hls4ml fixed-point grammar: width, integer bits, rounding, saturation, sat bits
     rounding = r"(?:ap_)?(?:trn|trn_zero|rnd|rnd_zero|rnd_inf|rnd_min_inf|rnd_conv)"

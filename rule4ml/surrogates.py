@@ -92,14 +92,13 @@ class BaseSurrogate:
         """Attach a model with its feature labels, targets and scalers.
 
         Args:
-            model: Torch or Keras model, whose maps give the categorical inputs.
+            model (torch.nn.Module or keras.Model): Model with categorical maps.
             global_labels (list): Numerical global feature labels.
             target_labels (list): Target labels, one per model output.
             sequential_labels (list, optional): Numerical per-layer feature labels.
-            report (str, optional): Report of the resource targets, "resource_report"
-                or "hls_resource_report".
-            scaler (optional): Target scaler.
-            input_scaler (optional): Scaler of the numerical inputs.
+            report (str, optional): Report of the resource targets.
+            scaler (BaseScaler, optional): Target scaler.
+            input_scaler (AsinhInputScaler, optional): Scaler of the numerical inputs.
         """
 
         self.model = model
@@ -154,12 +153,15 @@ class BaseSurrogate:
             dataset (Dataset): Training records.
             train_settings (TrainSettings): Epochs, batch size, optimizer and loss.
             val_dataset (Dataset, optional): Validation records.
-            seed (int): Seed of the batch order.
-            callbacks (tuple): Callbacks run after each epoch.
-            verbose (int): Verbosity level.
+            seed (int, optional): Seed of the batch order.
+            callbacks (tuple, optional): Callbacks run after each epoch.
+            verbose (int, optional): Verbosity level.
 
         Returns:
-            The training history, a dict for Torch and a History for Keras.
+            dict or keras.callbacks.History: Training history.
+
+        Raises:
+            RuntimeError: If no model is set.
         """
 
         if self.model is None:
@@ -176,7 +178,18 @@ class BaseSurrogate:
         return self._fit(train, val, train_settings, seed, callbacks, verbose)
 
     def training_data(self, dataset, fit_scaler=False):
-        """Inputs, scaled targets and scaler rows of records with every target."""
+        """Get the training inputs of the records with every target.
+
+        Args:
+            dataset (Dataset): Records.
+            fit_scaler (bool, optional): Fit the scalers on these records.
+
+        Returns:
+            tuple: Model inputs, scaled targets and the scaler input rows.
+
+        Raises:
+            ValueError: If no record has every target.
+        """
 
         targets = dataset.targets(self.output_labels, self.report)
         dataset = dataset.subset(np.flatnonzero(np.isfinite(targets).all(axis=1)))
@@ -213,8 +226,8 @@ class BaseSurrogate:
 
         Args:
             dataset (Dataset): Records to predict.
-            mc_dropout (bool): Keep dropout active.
-            verbose (int): Verbosity level.
+            mc_dropout (bool, optional): Keep dropout active.
+            verbose (int, optional): Verbosity level.
 
         Returns:
             np.ndarray: Raw-unit predictions, one row per record.
@@ -226,7 +239,19 @@ class BaseSurrogate:
         )
 
     def evaluate(self, dataset, report=None, verbose=0):
-        """SMAPE, RMSE and R2 per output label, over the records where it is known."""
+        """Score the predictions of a Dataset per output label.
+
+        Args:
+            dataset (Dataset): Records with targets.
+            report (str, optional): Report of the resource targets.
+            verbose (int, optional): Verbosity level.
+
+        Returns:
+            dict: SMAPE, RMSE and R2 per label, over the records where it is known.
+
+        Raises:
+            ValueError: If BRAM targets come from a report with other units.
+        """
 
         if (
             "bram" in self.output_labels
@@ -251,13 +276,12 @@ class BaseSurrogate:
         """Predict every combination of models and settings.
 
         Args:
-            models_to_predict (list): Keras, Torch or ONNX models, or (torch_model,
-                input_shape) pairs.
+            models_to_predict (list): Models or (torch_model, input_shape) pairs.
             hls_configs (list): HLS config dicts.
             hls4ml_versions (list, optional): hls4ml versions.
             vivado_versions (list, optional): Vivado versions.
-            mc_dropout (bool): Keep dropout active.
-            verbose (int): Verbosity level.
+            mc_dropout (bool, optional): Keep dropout active.
+            verbose (int, optional): Verbosity level.
 
         Returns:
             np.ndarray: Raw-unit predictions, one row per combination.
@@ -281,14 +305,13 @@ class BaseSurrogate:
         """Predict with MC dropout, as the mean and std over samples.
 
         Args:
-            models_to_predict (list): Keras, Torch or ONNX models, or (torch_model,
-                input_shape) pairs.
+            models_to_predict (list): Models or (torch_model, input_shape) pairs.
             hls_configs (list): HLS config dicts.
             hls4ml_versions (list, optional): hls4ml versions.
             vivado_versions (list, optional): Vivado versions.
-            num_samples (int): Number of dropout samples.
-            return_all (bool): Also return the samples.
-            verbose (int): Verbosity level.
+            num_samples (int, optional): Number of dropout samples.
+            return_all (bool, optional): Also return the samples.
+            verbose (int, optional): Verbosity level.
 
         Returns:
             tuple: Mean and std arrays, plus the samples when return_all is set.
@@ -335,7 +358,19 @@ class BaseSurrogate:
         ]
 
     def accepted_settings(self, hls_configs, hls4ml_versions, vivado_versions):
-        """Validate settings against the training categories, None when empty."""
+        """Validate settings against the training categories.
+
+        Args:
+            hls_configs (list): Snake_case HLS configs.
+            hls4ml_versions (list): hls4ml versions.
+            vivado_versions (list): Vivado versions.
+
+        Returns:
+            list: Configs, hls4ml versions and Vivado versions, [None] when empty.
+
+        Raises:
+            ValueError: If a board, strategy or version is unsupported or missing.
+        """
 
         supported = {
             key: self.categorical_values(key) for key in self.global_categorical_maps
@@ -375,12 +410,31 @@ class BaseSurrogate:
         return [list(hls_configs) or [None], *accepted_versions]
 
     def categorical_values(self, label):
-        """Lowercased training values of a global category, in map order."""
+        """Get the training values of a global category.
+
+        Args:
+            label (str): Categorical feature label.
+
+        Returns:
+            list: Lowercased values, in map order.
+        """
 
         return [value.lower() for value in self.global_categorical_maps.get(label, {})]
 
     def predict_features(self, features, mc_dropout=False, verbose=0):
-        """Predict from (global_inputs, layers) pairs of model_features."""
+        """Predict from model_features results.
+
+        Args:
+            features (list): (global_inputs, layers) pairs from model_features.
+            mc_dropout (bool, optional): Keep dropout active.
+            verbose (int, optional): Verbosity level.
+
+        Returns:
+            np.ndarray: Raw-unit predictions, one row per pair.
+
+        Raises:
+            RuntimeError: If no model is set.
+        """
 
         if self.model is None:
             raise RuntimeError(
@@ -497,6 +551,9 @@ class BaseSurrogate:
     def _dataset_inputs(self, dataset):
         """Get the model inputs of every Dataset record.
 
+        Args:
+            dataset (Dataset): Records.
+
         Returns:
             tuple: Model inputs, numerical values and category codes.
 
@@ -576,7 +633,14 @@ class BaseSurrogate:
             )
 
     def _scale_inputs(self, inputs):
-        """Apply the input scaler to the numerical model inputs."""
+        """Apply the input scaler to the numerical model inputs.
+
+        Args:
+            inputs (dict): Model inputs by key.
+
+        Returns:
+            dict: Inputs with scaled numerical values.
+        """
 
         if self.input_scaler is None:
             return inputs
@@ -647,7 +711,11 @@ class BaseSurrogate:
         self.io_types = config.get("io_types")
 
     def save(self, save_dir):
-        """Save the class config and model weights."""
+        """Save the surrogate config and model weights.
+
+        Args:
+            save_dir (str): Directory to write, created if missing.
+        """
 
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
@@ -660,7 +728,16 @@ class BaseSurrogate:
         self._save_weights(save_dir)
 
     def load(self, config_path, weights_path):
-        """Load saved class config."""
+        """Load a saved surrogate config and model weights.
+
+        Args:
+            config_path (str): Path of the .json config.
+            weights_path (str): Path of the model weights.
+
+        Raises:
+            ValueError: If the config path does not end with .json.
+            FileNotFoundError: If a file does not exist.
+        """
 
         if not config_path.endswith(".json"):
             raise ValueError("Config file name must end with .json")
@@ -836,7 +913,17 @@ class TorchSurrogate(BaseSurrogate):
         return history
 
     def _validation_loss(self, val, loss_function, metric_functions, batch_size):
-        """Record-weighted validation loss, updating the metrics."""
+        """Compute the record-weighted validation loss, updating the metrics.
+
+        Args:
+            val (tuple): Validation inputs, targets and scaler input rows.
+            loss_function (callable): Training loss.
+            metric_functions (list): Metrics to update.
+            batch_size (int): Records per batch.
+
+        Returns:
+            float: Mean loss per record.
+        """
 
         inputs, targets, input_rows = val
         self.model.eval()
@@ -1061,18 +1148,15 @@ class MultiSurrogate:
         """Predict every model over a sweep of settings.
 
         Args:
-            models_to_predict: A model or (torch_model, input_shape) pair, or a list.
-            hls_configs (dict or list, optional): HLS configs, camelCase or snake_case.
-                None sweeps the training boards, strategies and clocks, with default
-                precisions and reuse factors.
+            models_to_predict (object or list): Models or (model, input_shape) pairs.
+            hls_configs (dict or list, optional): HLS configs, None for a sweep.
             hls4ml_versions (str or list, optional): None sweeps the training versions.
             vivado_versions (str or list, optional): None sweeps the training versions.
-            round_digits (int): Decimals of the returned values.
-            verbose (int): Verbosity level.
+            round_digits (int, optional): Decimals of the returned values.
+            verbose (int, optional): Verbosity level.
 
         Returns:
-            pd.DataFrame: One row per model and setting, with the raw predictions and
-                their share of the board resources in percent.
+            pd.DataFrame: Predictions and board shares in percent, one row per setting.
         """
 
         if not self._surrogates:

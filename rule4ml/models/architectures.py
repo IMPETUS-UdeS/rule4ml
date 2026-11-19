@@ -731,7 +731,15 @@ class TorchTransformer(torch.nn.Module):
 
 
 def zero_embedding(num_embeddings, embedding_dim):
-    """Embedding with zero rows, so rows absent from training add nothing."""
+    """Create an embedding with zero rows, so rows absent from training add nothing.
+
+    Args:
+        num_embeddings (int): Number of rows.
+        embedding_dim (int): Size of each row.
+
+    Returns:
+        torch.nn.Embedding: The embedding.
+    """
 
     embedding = torch.nn.Embedding(num_embeddings, embedding_dim)
     torch.nn.init.zeros_(embedding.weight)
@@ -776,7 +784,11 @@ class TorchBayesianLinear(torch.nn.Module):
         return torch.nn.functional.linear(input, weight, bias)
 
     def kl_divergence(self):
-        """KL(q(w|θ) || p(w)) for both weights and biases, assuming Gaussian prior."""
+        """Compute KL(q(w|θ) || p(w)) for the weights and biases, with a Gaussian prior.
+
+        Returns:
+            torch.Tensor: KL divergence.
+        """
 
         # posterior and prior variances
         w_var = torch.exp(self.weight_logvar)

@@ -16,7 +16,10 @@ def get_optimizer_from_str(optimizer_name, backend, **kwargs):
         backend (str): "keras" or "torch".
 
     Returns:
-        The optimizer instance.
+        keras.optimizers.Optimizer or torch.optim.Optimizer: The optimizer.
+
+    Raises:
+        ValueError: If the backend or optimizer is unsupported.
     """
 
     optimizer_name = optimizer_name.lower()

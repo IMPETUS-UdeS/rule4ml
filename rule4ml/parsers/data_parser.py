@@ -139,7 +139,15 @@ def get_layers_data(model_config):
 
 
 def get_global_inputs(model_config, hls_config, **kwargs):
-    """Gets the global input features from the model and HLS configurations."""
+    """Get the global features of a model from its layers and HLS config.
+
+    Args:
+        model_config (list): Layer configs of a parsed model.
+        hls_config (dict): HLS config, camelCase or snake_case.
+
+    Returns:
+        dict: Global features, with per-layer-type statistics and op totals.
+    """
 
     features_to_extract = {
         "dense": {
@@ -526,7 +534,14 @@ def get_global_inputs(model_config, hls_config, **kwargs):
 
 
 def get_prediction_targets(model_data):
-    """Extract raw resource and latency targets from synthesis reports."""
+    """Extract raw resource and latency targets from synthesis reports.
+
+    Args:
+        model_data (dict): Record with resource_report and latency_report dicts.
+
+    Returns:
+        dict: Resources and min and max latencies, None when missing.
+    """
 
     resource_report = to_lower_keys(model_data["resource_report"])
     latency_report = to_lower_keys(model_data["latency_report"])
@@ -544,7 +559,14 @@ def get_prediction_targets(model_data):
 
 
 def get_network_fixed_ops(model_json):
-    """Count fixed-point add, mult, logical and lookup ops per layer and in total."""
+    """Count fixed-point add, mult, logical and lookup ops per layer and in total.
+
+    Args:
+        model_json (list): Layer configs of a parsed model.
+
+    Returns:
+        dict: Op totals, and the per-layer counts under "layers".
+    """
 
     fops_dict = {
         "total_add": 0,

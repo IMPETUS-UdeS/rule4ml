@@ -16,7 +16,19 @@ else:
 
 
 def evaluate(y_true, y_pred, labels):
-    """SMAPE, RMSE and R2 per target, each over the records where it is known."""
+    """Score predictions per target, each over the records where it is known.
+
+    Args:
+        y_true (array-like): Targets of shape (records, labels), NaN when unknown.
+        y_pred (array-like): Predictions of the same shape.
+        labels (list): Target labels.
+
+    Returns:
+        dict: Record counts, SMAPE, RMSE and R2 per label.
+
+    Raises:
+        ValueError: If the shapes differ or a prediction is not finite.
+    """
 
     y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = np.asarray(y_pred, dtype=np.float64)
@@ -45,7 +57,15 @@ def evaluate(y_true, y_pred, labels):
 
 
 def smape(y_true, y_pred):
-    """SMAPE in percent, from 0 to 200, with exact zeros counted as 0."""
+    """Compute the SMAPE in percent, from 0 to 200, with exact zeros counted as 0.
+
+    Args:
+        y_true (array-like): Targets.
+        y_pred (array-like): Predictions.
+
+    Returns:
+        float: SMAPE.
+    """
 
     y_true = np.asarray(y_true, dtype=np.float64).squeeze()
     y_pred = np.asarray(y_pred, dtype=np.float64).squeeze()
@@ -65,7 +85,15 @@ def rmse(y_true, y_pred):
 
 
 def r2(y_true, y_pred):
-    """Coefficient of determination, NaN when the targets have no variance."""
+    """Compute the coefficient of determination.
+
+    Args:
+        y_true (array-like): Targets.
+        y_pred (array-like): Predictions.
+
+    Returns:
+        float: R2, NaN when the targets have no variance.
+    """
 
     y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = np.asarray(y_pred, dtype=np.float64)

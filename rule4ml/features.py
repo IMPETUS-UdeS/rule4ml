@@ -21,10 +21,19 @@ DEFAULT_IO_TYPE = "io_parallel"
 
 
 def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
-    """Return the global and per-layer features of a Keras, Torch or ONNX model.
+    """Get the global and per-layer features of a Keras, Torch or ONNX model.
 
-    A Torch model can come as a (model, input_shape) pair, the input shape without
-    the batch dimension.
+    Args:
+        model (object or tuple): Model or (torch_model, input_shape) pair.
+        hls_config (dict): HLS config, camelCase or snake_case.
+        hls4ml_version (str, optional): hls4ml version of the prediction.
+        vivado_version (str, optional): Vivado version of the prediction.
+
+    Returns:
+        tuple: Global feature dict and per-layer feature dicts.
+
+    Raises:
+        TypeError: If the model is not a Keras, Torch or ONNX model.
     """
 
     model, input_shape = unpack_model(model)
@@ -75,7 +84,14 @@ def unpack_model(model):
 
 
 def record_features(record):
-    """Return the global and per-layer features of a synthesis record."""
+    """Get the global and per-layer features of a synthesis record.
+
+    Args:
+        record (dict): Synthesis record.
+
+    Returns:
+        tuple: The global feature dict and a list of per-layer feature dicts.
+    """
 
     hls_config = dict(record["hls_config"])
     if (target_part := record.get("target_part")) is not None:

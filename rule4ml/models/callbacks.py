@@ -85,7 +85,16 @@ class EarlyStopping:
             return value > (self._best + self.min_delta)
 
     def step(self, value, surrogate, verbose=0) -> bool:
-        """Returns True if training should stop."""
+        """Record a monitored value and decide whether to stop.
+
+        Args:
+            value (float): Monitored value of the epoch.
+            surrogate (TorchSurrogate): Surrogate whose best state is kept.
+            verbose (int, optional): Verbosity level.
+
+        Returns:
+            bool: True if training should stop.
+        """
 
         if self._has_improved(value):
             self._best = float(value)

@@ -33,7 +33,18 @@ class Dataset:
         return len(self.global_values)
 
     def targets(self, labels, report=None):
-        """Raw targets (N, len(labels)), resources read from the given report."""
+        """Get the raw targets of every record.
+
+        Args:
+            labels (list): Target labels, "cycles" and "interval" average min and max.
+            report (str, optional): Report of the resource targets.
+
+        Returns:
+            np.ndarray: Targets of shape (N, len(labels)), NaN where unknown.
+
+        Raises:
+            ValueError: If a label is unknown or a resource target has no report.
+        """
 
         columns = []
         for label in labels:
@@ -54,7 +65,18 @@ class Dataset:
         return np.stack(columns, axis=1)
 
     def columns(self, labels, *, per_layer=False):
-        """Numerical features (N, k), or (L, k) per layer, in the order of labels."""
+        """Get numerical feature columns in the order of labels.
+
+        Args:
+            labels (list): Feature labels.
+            per_layer (bool, optional): Read the per-layer features.
+
+        Returns:
+            np.ndarray: Features of shape (N, k), or (L, k) per layer.
+
+        Raises:
+            ValueError: If a label is missing from the dataset.
+        """
 
         names, values = (
             (self.layer_names, self.layer_values)
@@ -69,7 +91,22 @@ class Dataset:
         return values[:, [names.index(label) for label in labels]]
 
     def encode(self, label, mapping, *, per_layer=False):
-        """Category codes (N,), or (L,) per layer, as values of a model's map."""
+        """Encode a categorical feature with a model's category map.
+
+        Unseen hls4ml and Vivado versions take row 0 with a warning. Other values
+        absent from the map raise.
+
+        Args:
+            label (str): Categorical feature label.
+            mapping (dict): Model map from category value to code, starting at 1.
+            per_layer (bool, optional): Encode the per-layer "layer_type".
+
+        Returns:
+            np.ndarray: Codes of shape (N,), or (L,) per layer.
+
+        Raises:
+            ValueError: If the category, or a value without an unseen row, is missing.
+        """
 
         if per_layer:
             if label != "layer_type":
@@ -104,7 +141,17 @@ class Dataset:
         return mapped
 
     def pad_layers(self, layer_rows):
-        """Per-layer rows (L, ...) as zero-padded per-record rows (N, depth, ...)."""
+        """Pad per-layer rows into per-record rows.
+
+        Args:
+            layer_rows (np.ndarray): Rows of shape (L, ...), one per layer.
+
+        Returns:
+            np.ndarray: Zero-padded rows of shape (N, depth, ...).
+
+        Raises:
+            ValueError: If there is not one row per layer.
+        """
 
         if np.ndim(layer_rows) == 0 or len(layer_rows) != self.offsets[-1]:
             raise ValueError(f"Expected {self.offsets[-1]} layer rows")
@@ -121,7 +168,14 @@ class Dataset:
         return padded
 
     def subset(self, rows):
-        """Records at the given indices, in that order."""
+        """Select records by index.
+
+        Args:
+            rows (array-like): Record indices, in the order to keep.
+
+        Returns:
+            Dataset: The selected records.
+        """
 
         rows = np.asarray(rows, dtype=np.int64)
         counts = np.diff(self.offsets)[rows]
@@ -149,7 +203,19 @@ class Dataset:
 
 
 def split(dataset, val_ratio, seed=0):
-    """Seeded random (train, validation) split of a Dataset."""
+    """Split a Dataset into random training and validation records.
+
+    Args:
+        dataset (Dataset): Records to split.
+        val_ratio (float): Share of validation records, between 0 and 1.
+        seed (int, optional): Seed of the split.
+
+    Returns:
+        tuple: The training and validation Datasets.
+
+    Raises:
+        ValueError: If val_ratio is outside (0, 1) or leaves a split empty.
+    """
 
     if not 0 < val_ratio < 1:
         raise ValueError(f"val_ratio must be in (0, 1), got {val_ratio}")
@@ -163,7 +229,15 @@ def split(dataset, val_ratio, seed=0):
 
 
 def prepare(json_paths, out_path):
-    """Extract features and raw targets from synthesis JSON files into one .npz."""
+    """Extract features and raw targets from synthesis JSON files into one .npz.
+
+    Args:
+        json_paths (list): Paths of JSON files, each with one record or a list.
+        out_path (str): Path of the .npz file to write.
+
+    Raises:
+        ValueError: If records are missing, have no layers or differ in features.
+    """
 
     from rule4ml.features import record_features  # imports Keras and Torch
 
@@ -241,7 +315,17 @@ def prepare(json_paths, out_path):
 
 
 def load(path):
-    """Load and validate a prepared .npz dataset."""
+    """Load and validate a prepared .npz dataset.
+
+    Args:
+        path (str): Path of a file written by prepare.
+
+    Returns:
+        Dataset: The loaded records.
+
+    Raises:
+        ValueError: If an array has an unexpected shape or invalid codes.
+    """
 
     with np.load(path, allow_pickle=False) as data:
         arrays = dict(data)
