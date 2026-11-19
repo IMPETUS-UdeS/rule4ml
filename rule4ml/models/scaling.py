@@ -208,6 +208,12 @@ class Log1pScaler(BaseScaler):
     def inverse(self, target_row, input_row):
         out = {}
         for k, z in target_row.items():
+            if k not in self.mu:
+                raise RuntimeError(
+                    f"No scaler statistics for {k}. "
+                    "Make sure the surrogate is trained before prediction."
+                )
+
             mu = self.mu[k]
             sig = self.sigma[k]
             if z is None:

@@ -37,11 +37,20 @@ The group leaves the hls4ml version open, so datasets can be built with several 
 ## Getting Started
 
 ### Tutorial
-To get started with `rule4ml`, please refer to the detailed Jupyter Notebook [tutorial](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks/tutorial.ipynb). This tutorial covers:
+The [tutorial](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks) has three Jupyter notebooks:
 
-- Using pre-trained estimators for resources and latency predictions.
-- Generating synthetic datasets.
-- Training and testing your own predictors.
+1. [Predicting resources and latency](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks/01_predict.ipynb) with the included predictors.
+2. [Training and evaluating a surrogate](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks/02_train_and_evaluate.ipynb) on the `wa-hls4ml` dataset.
+3. [Building a dataset](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/notebooks/03_build_a_dataset.ipynb) of synthesized neural networks.
+
+They run from a clone of the repository, with the `notebooks` dependency group installed from the repository root:
+
+```bash
+uv sync --group notebooks           # with uv
+pip install -e . --group notebooks  # with pip
+```
+
+Part 3 also needs the `datagen` group.
 
 ### Usage
 The following example uses a Keras input model and requires `rule4ml[keras]`:

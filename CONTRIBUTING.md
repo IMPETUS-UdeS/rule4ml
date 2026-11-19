@@ -8,7 +8,7 @@ We welcome contributions from the community and are grateful for your support.
 
 Generating large and diverse datasets of neural networks is crucial for improving the accuracy and generalization of our predictors. If you are able to generate synthetic datasets, your contribution would be highly valuable. To contribute datasets, please follow these steps:
 
-1. **Generate Datasets**: Our [data_gen](data_gen/) scripts help generate and synthesize random neural networks to build a synthetic dataset. Follow the *Data Generation* section in the [tutorial](notebooks/tutorial.ipynb) to create your datasets.
+1. **Generate Datasets**: Our [data_gen](data_gen/) scripts help generate and synthesize random neural networks to build a synthetic dataset. You can follow [part 3 of the tutorial](notebooks/03_build_a_dataset.ipynb) to create your datasets.
 
 2. **Upload Your Dataset**: Share your dataset on a public repository or data sharing platform.
 

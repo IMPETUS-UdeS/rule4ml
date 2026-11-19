@@ -71,3 +71,22 @@ jobs:
         uv pip install --python .venv/bin/python --torch-backend cpu -e . --group dev
     - name: Run tests without Keras
       run: uv run --no-sync pytest tests
+
+  notebooks:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: astral-sh/setup-uv@v10.3.3
+      with:
+        python-version: '3.12'
+        enable-cache: true
+    - name: Install dependencies
+      run: |
+        uv venv .venv
+        uv pip install --python .venv/bin/python --torch-backend cpu -e . --group dev --group notebooks
+    - name: Keep the smallest dataset family in notebook 2
+      run: sed -i 's/families = \[[^]]*\]/families = [\\"2_20\\"]/' notebooks/02_train_and_evaluate.ipynb
+    - name: Run tutorial notebooks
+      run: uv run --no-sync pytest --nbmake notebooks/01_predict.ipynb notebooks/02_train_and_evaluate.ipynb

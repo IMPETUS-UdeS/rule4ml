@@ -387,7 +387,7 @@ class BaseSurrogate:
 
     def _predict(self, inputs, numerical, codes, mc_dropout=False, verbose=0):
         prediction = self._model_predict(
-            inputs, 0, mc_dropout=mc_dropout, verbose=verbose
+            inputs, 1024, mc_dropout=mc_dropout, verbose=verbose
         )
 
         if self.scaler:
@@ -877,15 +877,17 @@ class TorchSurrogate(BaseSurrogate):
         if mc_dropout:
             self._enable_mc_dropout()
 
+        tensors = self._tensors(inputs)
+        records = len(next(iter(tensors.values())))
+        outputs = []
         with torch.no_grad():
-            if isinstance(inputs, dict):
-                inputs = {
-                    key: value.to(self.device)
-                    for key, value in self._tensors(inputs).items()
+            for rows in torch.arange(records).split(batch_size):
+                batch = {
+                    key: value[rows].to(self.device) for key, value in tensors.items()
                 }
+                outputs.append(self.model(batch).cpu())
 
-            outputs = self.model(inputs)
-            return outputs.detach().cpu().numpy()
+        return torch.cat(outputs).numpy()
 
     def _save_weights(self, save_dir):
         weights_path = os.path.join(save_dir, f"{self.model.name}.weights.pt")

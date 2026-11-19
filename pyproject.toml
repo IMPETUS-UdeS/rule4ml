@@ -32,7 +32,8 @@ dependencies = [
 keras = ["tensorflow>=2.15.1,<2.20", "keras"]
 
 [dependency-groups]
-dev = ["pre-commit", "pytest"]
+dev = ["nbmake", "pre-commit", "pytest"]
+notebooks = ["huggingface_hub", "ipykernel", "matplotlib"]
 datagen = [
     "rule4ml[keras]",
     "hls4ml",

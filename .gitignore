@@ -37,8 +37,9 @@ ipython_config.py
 .*_cache
 *cleanup*.sh
 notebooks/**
-!notebooks/models
-!notebooks/tutorial.ipynb
+!notebooks/01_predict.ipynb
+!notebooks/02_train_and_evaluate.ipynb
+!notebooks/03_build_a_dataset.ipynb
 **/hls4ml_prj*
 *.log
 *.out
