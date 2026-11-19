@@ -30,9 +30,11 @@ dependencies = [
 
 [project.optional-dependencies]
 keras = ["tensorflow>=2.15.1,<2.20", "keras"]
+onnx = ["onnx"]
 
 [dependency-groups]
 dev = ["nbmake", "pre-commit", "pytest"]
+onnx-export = ["rule4ml[onnx]", "onnxscript"]  # onnx needs a newer ml-dtypes than TF 2.17
 notebooks = ["huggingface_hub", "ipykernel", "matplotlib"]
 datagen = [
     "rule4ml[keras]",

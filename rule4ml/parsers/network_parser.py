@@ -1,4 +1,5 @@
 import math
+from collections import Counter
 
 import numpy as np
 import torch
@@ -10,11 +11,6 @@ from rule4ml.parsers.utils import (
     get_reuse_factor,
     get_weight_bits,
 )
-
-try:
-    import onnx
-except ImportError:
-    onnx = None
 
 
 def config_from_keras_model(model, hls_config):
@@ -515,20 +511,7 @@ def config_from_torch_model(model, hls_config, input_shape=None):
             else:
                 raise ValueError(f"Unsupported Torch operation: {operation}")
 
-        reuse_factor = get_reuse_factor(hls_config, layer_dict, node.name)
-        if layer_dict["class_name"] == "Dense":
-            n_in, n_out = layer_dict["input_shape"][-1], layer_dict["output_shape"][-1]
-            reuse_factor = get_closest_reuse_factor(n_in, n_out, reuse_factor)
-        elif layer_dict["class_name"] in ["Conv1D", "Conv2D"]:
-            n_in = layer_dict["channels"] * np.prod(layer_dict["kernel_size"])
-            reuse_factor = get_closest_reuse_factor(
-                n_in, layer_dict["filters"], reuse_factor
-            )
-
-        layer_dict["reuse_factor"] = reuse_factor
-        weight_bits = get_weight_bits(hls_config, layer_dict, node.name)
-        if weight_bits is not None:
-            layer_dict["weight_bits"] = weight_bits
+        _set_hls_settings(layer_dict, hls_config, node.name)
         layers_data[node.name] = layer_dict
 
     layers_data = list(layers_data.values())
@@ -595,10 +578,260 @@ def _spatial_output_shape(module, input_shape):
 
 
 def config_from_onnx_model(model, hls_config):
-    """Placeholder, ONNX parsing is not implemented."""
+    """Parse an ONNX model into per-layer configs with hls4ml reuse factors.
 
-    if onnx is None:
-        raise ImportError("Failed to import module onnx.")
+    Shapes come from ONNX shape inference, so the model needs a fixed input shape.
+    They are stored channels-last, as hls4ml converts them.
 
-    layers_data = []
+    Args:
+        model (onnx.ModelProto or str): Model, or the path to an .onnx file.
+        hls_config (dict): HLS config.
+
+    Returns:
+        list: Layer configs in graph order.
+    """
+
+    try:
+        import onnx
+    except ImportError as error:
+        raise ImportError('ONNX support needs: pip install "rule4ml[onnx]"') from error
+
+    if not isinstance(model, onnx.ModelProto):
+        model = onnx.load(model)
+
+    graph = onnx.shape_inference.infer_shapes(model).graph
+    hls_config = camel_keys_to_snake(hls_config)
+
+    weights = {
+        tensor.name: onnx.numpy_helper.to_array(tensor) for tensor in graph.initializer
+    }
+    tensors = {}
+    for value in [*graph.input, *graph.value_info, *graph.output]:
+        tensor_type = value.type.tensor_type
+        dims = [dim.dim_value or None for dim in tensor_type.shape.dim]
+        if len(dims) > 2:  # Channels-first to channels-last
+            dims = [*dims[:1], *dims[2:], dims[1]]
+
+        tensors[value.name] = {
+            "shape": (None, *dims[1:]),
+            "dtype": onnx.helper.tensor_dtype_to_np_dtype(tensor_type.elem_type).name,
+        }
+
+    graph_inputs = [value.name for value in graph.input if value.name not in weights]
+    if len(graph_inputs) != 1:
+        raise NotImplementedError("Models with multiple inputs are not supported.")
+
+    input_name = graph_inputs[0]
+    input_tensor = tensors[input_name]
+    if len(input_tensor["shape"]) < 2 or None in input_tensor["shape"][1:]:
+        raise ValueError("ONNX models need a batch axis and a fixed input shape.")
+
+    input_dict = {
+        "class_name": "InputLayer",
+        "name": input_name,
+        "input_shape": input_tensor["shape"],
+        "output_shape": input_tensor["shape"],
+        "parameters": 0,
+        "trainable_parameters": 0,
+        "dtype": input_tensor["dtype"],
+    }
+    _set_hls_settings(input_dict, hls_config, input_name)
+
+    layers_data = [input_dict]
+    consumers = Counter(name for node in graph.node for name in node.input)
+    unbiased_dense = {}  # MatMul outputs, which an Add can give a bias
+    for node in graph.node:
+        operation = node.op_type
+        if node.domain not in ["", "ai.onnx"]:  # Such as QONNX channels-last layers
+            raise NotImplementedError(
+                f"Unsupported ONNX operation: {node.domain}.{operation}"
+            )
+
+        attributes = {
+            attribute.name: onnx.helper.get_attribute_value(attribute)
+            for attribute in node.attribute
+        }
+
+        if operation == "Constant":
+            (value,) = attributes.values()
+            if isinstance(value, onnx.TensorProto):
+                value = onnx.numpy_helper.to_array(value)
+            weights[node.output[0]] = np.asarray(value)
+            continue
+
+        if operation == "Identity":  # Shapes are already inferred
+            if node.input[0] in weights:
+                weights[node.output[0]] = weights[node.input[0]]
+            continue
+
+        inputs = [name for name in node.input if name and name not in weights]
+        params = [weights[name] for name in node.input if name in weights]
+        input_shapes = [tensors[name]["shape"] for name in inputs]
+        output_tensor = tensors[node.output[0]]
+
+        if not inputs:  # Constant folding left to the exporter
+            raise NotImplementedError(f"{operation} of constants is not supported.")
+        if operation in ["Gemm", "MatMul", "Conv"] and (
+            len(inputs) != 1 or node.input[0] != inputs[0]
+        ):
+            raise NotImplementedError(
+                f"Only {operation} of one input by stored weights is supported."
+            )
+
+        dense = unbiased_dense.get(inputs[0]) if operation == "Add" else None
+        if (
+            dense is not None
+            and len(inputs) == 1
+            and params[0].size == dense["neurons"]
+            and output_tensor["shape"] == dense["output_shape"]
+        ):
+            del unbiased_dense[inputs[0]]
+            dense["use_bias"] = True
+            dense["parameters"] += params[0].size
+            dense["trainable_parameters"] += params[0].size
+            continue
+
+        parameters = sum(param.size for param in params)
+        layer_dict = {
+            "name": node.name or node.output[0],
+            "input_shape": input_shapes[0],
+            "output_shape": output_tensor["shape"],
+            "parameters": 0,
+            "trainable_parameters": 0,
+            "dtype": output_tensor["dtype"],
+        }
+
+        if operation in ["Gemm", "MatMul"]:
+            kernel = params[0]
+            if (
+                len(input_shapes[0]) != 2
+                or kernel.ndim != 2
+                or attributes.get("transA")
+            ):
+                raise NotImplementedError(
+                    f"Only {operation} of 2D inputs by 2D weights is supported."
+                )
+            if attributes.get("transB", 0):
+                kernel = kernel.T
+            if len(params) > 1 and params[1].size != kernel.shape[1]:
+                raise NotImplementedError(
+                    f"Only {operation} with one bias per neuron is supported."
+                )
+
+            layer_dict["class_name"] = "Dense"
+            layer_dict["parameters"] = layer_dict["trainable_parameters"] = parameters
+            layer_dict["neurons"] = kernel.shape[1]
+            layer_dict["use_bias"] = len(params) > 1
+
+            if operation == "MatMul" and consumers[node.output[0]] == 1:
+                unbiased_dense[node.output[0]] = layer_dict
+
+        elif operation == "Conv":
+            kernel_size = tuple(attributes.get("kernel_shape", params[0].shape[2:]))
+            if len(kernel_size) > 2:
+                raise NotImplementedError("Only 1D and 2D convolutions are supported.")
+            if attributes.get("group", 1) != 1:  # hls4ml reads them as depthwise
+                raise NotImplementedError("Grouped convolutions are not supported.")
+
+            auto_pad = attributes.get("auto_pad", b"NOTSET").decode()
+            no_padding = auto_pad == "VALID" or (
+                auto_pad == "NOTSET" and not any(attributes.get("pads", []))
+            )
+
+            layer_dict["class_name"] = f"Conv{len(kernel_size)}D"
+            layer_dict["parameters"] = layer_dict["trainable_parameters"] = parameters
+            layer_dict["channels"] = input_shapes[0][-1]
+            layer_dict["filters"] = params[0].shape[0]
+            layer_dict["kernel_size"] = kernel_size
+            layer_dict["strides"] = tuple(
+                attributes.get("strides", (1,) * len(kernel_size))
+            )
+            layer_dict["padding"] = "valid" if no_padding else "same"  # as hls4ml
+            layer_dict["use_bias"] = len(params) > 1
+
+        elif operation in ["MaxPool", "AveragePool"]:
+            pooling = "Max" if operation == "MaxPool" else "Average"
+            dims = len(attributes["kernel_shape"])
+            if dims > 2:
+                raise NotImplementedError("Only 1D and 2D pooling is supported.")
+
+            layer_dict["class_name"] = f"{pooling}Pooling{dims}D"
+
+        elif operation == "BatchNormalization":
+            channels = params[0].size  # Scale, one per channel
+            layer_dict["class_name"] = "BatchNormalization"
+            layer_dict["parameters"] = 4 * channels
+            layer_dict["trainable_parameters"] = 2 * channels
+
+        elif operation in ["Relu", "Sigmoid", "Tanh", "Softmax"]:
+            rank = len(input_shapes[0])
+            if operation == "Softmax" and attributes.get("axis", -1) % rank == 0:
+                raise ValueError("Softmax along the batch dimension is not supported.")
+
+            layer_dict["class_name"] = "Activation"
+            layer_dict["activation"] = operation.lower()
+
+        elif operation in ["Add", "Concat"]:
+            if params:
+                raise NotImplementedError(
+                    f"{operation} with a constant is not supported."
+                )
+            if operation == "Add" and len(set(input_shapes)) > 1:
+                raise ValueError(f"Add of different shapes {input_shapes}.")
+            if operation == "Concat":
+                if len({len(shape) for shape in input_shapes}) > 1:
+                    raise ValueError(f"Concat of different ranks {input_shapes}.")
+                if attributes["axis"] % len(input_shapes[0]) == 0:
+                    raise ValueError(
+                        "Concatenation along the batch dimension is not supported."
+                    )
+                if len(inputs) != 2:
+                    raise ValueError("hls4ml concatenates exactly two tensors.")
+
+            layer_dict["class_name"] = "Add" if operation == "Add" else "Concatenate"
+            layer_dict["input_shape"] = input_shapes
+
+        elif operation in ["Flatten", "Reshape"]:
+            output_shape = output_tensor["shape"]
+            if (
+                len(output_shape) != 2
+                or output_shape[1] != np.prod(input_shapes[0][1:])
+                or attributes.get("axis", 1) % len(input_shapes[0]) == 0
+            ):
+                raise NotImplementedError(
+                    f"Only {operation} to (batch, features) is supported."
+                )
+
+            layer_dict["class_name"] = "Flatten"
+
+        elif operation == "Dropout":
+            layer_dict["class_name"] = "Dropout"
+
+        else:
+            raise ValueError(f"Unsupported ONNX operation: {operation}")
+
+        _set_hls_settings(layer_dict, hls_config, layer_dict["name"])
+        layers_data.append(layer_dict)
+
     return layers_data
+
+
+def _set_hls_settings(layer_dict, hls_config, name):
+    """Set the reuse factor and weight bits hls4ml gives a parsed layer."""
+
+    reuse_factor = get_reuse_factor(hls_config, layer_dict, name)
+
+    if layer_dict["class_name"] == "Dense":
+        n_in, n_out = layer_dict["input_shape"][-1], layer_dict["output_shape"][-1]
+        reuse_factor = get_closest_reuse_factor(n_in, n_out, reuse_factor)
+    elif layer_dict["class_name"] in ["Conv1D", "Conv2D"]:
+        n_in = layer_dict["channels"] * np.prod(layer_dict["kernel_size"])
+        reuse_factor = get_closest_reuse_factor(
+            n_in, layer_dict["filters"], reuse_factor
+        )
+
+    layer_dict["reuse_factor"] = reuse_factor
+
+    weight_bits = get_weight_bits(hls_config, layer_dict, name)
+    if weight_bits is not None:
+        layer_dict["weight_bits"] = weight_bits

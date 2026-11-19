@@ -25,6 +25,13 @@ uv add "rule4ml[keras]"       # with uv
 pip install "rule4ml[keras]"  # with pip
 ```
 
+ONNX models need the `onnx` extra:
+
+```bash
+uv add "rule4ml[onnx]"       # with uv
+pip install "rule4ml[onnx]"  # with pip
+```
+
 The [data_gen](https://github.com/IMPETUS-UdeS/rule4ml/tree/main/data_gen/) scripts need the `datagen` dependency group, installed from a clone. uv installs the tested versions from `uv.lock`. pip needs version 25.1 or later:
 
 ```bash
@@ -548,7 +555,7 @@ The table shows errors of the default Transformer surrogates in distribution (in
 | Interval max | 2.8% | 111,700 | 0.974 | 46.1% | 296 | 0.662 |
 
 ## Limitations
-The default predictors take Keras, QKeras or PyTorch models and estimate FPGA resources (**BRAM**, **DSP**, **FF**, **LUT**) and latency (minimum and maximum **clock cycles** and **interval**). Inputs outside their training data may give inaccurate predictions. Settings absent from training raise a warning.
+The default predictors take Keras, QKeras, PyTorch or ONNX models and estimate FPGA resources (**BRAM**, **DSP**, **FF**, **LUT**) and latency (minimum and maximum **clock cycles** and **interval**). Inputs outside their training data may give inaccurate predictions. Settings absent from training raise a warning.
 
 - **Layers:** Dense/Linear, Conv1D and Conv2D, max and average pooling, Flatten, BatchNorm, Add, Concatenate, Dropout, and the ReLU, Sigmoid, Tanh and Softmax activations. The `wa-hls4ml` training data has no Add or Concatenate layers and at most 55 layers per model.
 - **Configurations:** the pynq-z2, zcu102, alveo-u200 and alveo-u250 boards (mostly alveo-u250 in training), the Latency and Resource strategies, hls4ml 0.8.1 and 1.1.0, and Vivado 2019.1, 2023.2 and 2024.2. Other versions are accepted with a warning and add no version information.

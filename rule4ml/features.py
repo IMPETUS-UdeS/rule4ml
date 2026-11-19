@@ -5,6 +5,7 @@ import torch
 from rule4ml.parsers.data_parser import get_global_inputs, get_layers_data
 from rule4ml.parsers.network_parser import (
     config_from_keras_model,
+    config_from_onnx_model,
     config_from_torch_model,
 )
 from rule4ml.parsers.utils import (
@@ -20,7 +21,7 @@ DEFAULT_IO_TYPE = "io_parallel"
 
 
 def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
-    """Return the global and per-layer features of a Keras or Torch model.
+    """Return the global and per-layer features of a Keras, Torch or ONNX model.
 
     A Torch model can come as a (model, input_shape) pair, the input shape without
     the batch dimension.
@@ -31,9 +32,12 @@ def model_features(model, hls_config, hls4ml_version=None, vivado_version=None):
         model_config = config_from_torch_model(model, hls_config, input_shape)
     elif "keras" in sys.modules and isinstance(model, sys.modules["keras"].Model):
         model_config = config_from_keras_model(model, hls_config)
+    elif "onnx" in sys.modules and isinstance(model, sys.modules["onnx"].ModelProto):
+        model_config = config_from_onnx_model(model, hls_config)
     else:
         raise TypeError(
-            f"Unsupported model type: {type(model)}. Expected a Keras or Torch model."
+            f"Unsupported model type: {type(model)}. "
+            "Expected a Keras, Torch or ONNX model."
         )
 
     global_inputs = get_global_inputs(

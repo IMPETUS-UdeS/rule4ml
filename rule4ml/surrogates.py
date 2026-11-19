@@ -251,7 +251,7 @@ class BaseSurrogate:
         """Predict every combination of models and settings.
 
         Args:
-            models_to_predict (list): Keras or Torch models, or (torch_model,
+            models_to_predict (list): Keras, Torch or ONNX models, or (torch_model,
                 input_shape) pairs.
             hls_configs (list): HLS config dicts.
             hls4ml_versions (list, optional): hls4ml versions.
@@ -281,7 +281,7 @@ class BaseSurrogate:
         """Predict with MC dropout, as the mean and std over samples.
 
         Args:
-            models_to_predict (list): Keras or Torch models, or (torch_model,
+            models_to_predict (list): Keras, Torch or ONNX models, or (torch_model,
                 input_shape) pairs.
             hls_configs (list): HLS config dicts.
             hls4ml_versions (list, optional): hls4ml versions.

@@ -59,6 +59,33 @@ def test_predict_forward_order(estimator, hls_config):
     np.testing.assert_allclose(reordered[TARGETS], functional[TARGETS], rtol=1e-6)
 
 
+def test_predict_onnx_twin(estimator, hls_config):
+    pytest.importorskip("onnxscript")
+    settings = {
+        "hls_configs": hls_config,
+        "hls4ml_versions": ["0.8.1"],
+        "vivado_versions": ["2023.2"],
+        "round_digits": 10,
+    }
+    model = torch.nn.Sequential(
+        torch.nn.Conv2d(3, 8, 3, padding=1),
+        torch.nn.ReLU(),
+        torch.nn.MaxPool2d(2),
+        torch.nn.BatchNorm2d(8),
+        torch.nn.Flatten(),
+        torch.nn.Linear(8 * 16 * 16, 10),
+        torch.nn.Softmax(dim=1),
+    ).eval()
+
+    onnx_model = torch.onnx.export(model, (torch.zeros(1, 3, 32, 32),))
+    torch_predictions = estimator.predict((model, (3, 32, 32)), **settings)
+    onnx_predictions = estimator.predict(onnx_model.model_proto, **settings)
+
+    np.testing.assert_allclose(
+        onnx_predictions[TARGETS], torch_predictions[TARGETS], rtol=1e-6
+    )
+
+
 def test_predict_unseen_version(estimator, hls_config):
     with pytest.warns(UserWarning, match="2099.1"):
         prediction_df = estimator.predict(

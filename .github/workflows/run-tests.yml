@@ -68,7 +68,7 @@ jobs:
     - name: Install base dependencies
       run: |
         uv venv .venv
-        uv pip install --python .venv/bin/python --torch-backend cpu -e . --group dev
+        uv pip install --python .venv/bin/python --torch-backend cpu -e . --group dev --group onnx-export
     - name: Run tests without Keras
       run: uv run --no-sync pytest tests
 
